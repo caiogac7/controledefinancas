@@ -1220,9 +1220,15 @@ export default async function handler(req, res) {
         normalizedAccounts.forEach(acc => {
             if (acc.type === 'BANK') {
                 let vBal = 0;
-                bankAccountTransactions.forEach(btx => {
-                    if (String(btx.accountId) !== String(acc.id)) return;
-                    if (btx.tx_group !== 'VAULT_TX') return;
+                // Considera o ciclo/mês corrente ativo para evitar resíduos históricos de períodos já esvaziados
+                const activeMonth = nowSp.month; // ex: '2026-11'
+                const activeMonthTxs = bankAccountTransactions.filter(btx => 
+                    String(btx.accountId) === String(acc.id) && 
+                    btx.tx_group === 'VAULT_TX' && 
+                    (btx.month === activeMonth || !btx.month)
+                );
+
+                activeMonthTxs.forEach(btx => {
                     const cleanDesc = normalizeTextForClassification(btx.desc);
                     const isWithdrawal = cleanDesc.includes('retirado') || cleanDesc.includes('resgate') || btx.type === 'income';
                     if (isWithdrawal) vBal -= Number(btx.amount || 0);

@@ -42,7 +42,9 @@
 ### 7. Exibição de Valor Reservado Isolado nos Cards de Contas Bancárias
 - **Saldo Livre em Conta:** O saldo principal do card exibe estritamente o montante disponível para transacionar na conta corrente, sem misturar ou inflar com quantias guardadas.
 - **Badge / Linha de Reservado:** Quando a conta possui dinheiro em cofrinho, caixinha ou reserva (`vaultBalance > 0`), o card exibe uma barra dedicada em âmbar com ícone de cofrinho (`piggy-bank`) e o valor exato reservado (`Reservado: R$ X,XX`).
-- **Origem dos Dados e Edição:** O valor é alimentado automaticamente por movimentações de cofre/reserva (`VAULT_TX`) ou ajustado diretamente no campo "Dinheiro Reservado / Cofrinho (R$)" dentro do modal de edição da conta (`bank-modal`).
+- **Origem dos Dados e Eliminação de Resíduos Passados:**
+  - O cálculo automático apura estritamente as movimentações do ciclo/mês vigente (`VAULT_TX` de depósitos menos retiradas/resgates do período ativo). Isso impede que resíduos cumulativos de cofrinhos já esvaziados no passado inflem o saldo real atual (ex: Nov 2026 computa com precisão os 5 depósitos de R$ 10 = R$ 50,00).
+  - Caso o usuário defina ou ajuste manualmente o valor no modal da conta ("Dinheiro Reservado / Cofrinho"), a preferência manual é preservada e respeitada sobre o cálculo automático.
 
 ### 8. Estabilização de Layout, Bloqueio de Tradução Automática e Eliminação de Layout Shift
 - **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.
