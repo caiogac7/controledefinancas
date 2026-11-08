@@ -38,6 +38,16 @@
         }
         window.sanitizePayloadForDb = sanitizePayloadForDb;
 
+        // Fallback defensivo antecipado de Toast/Alertas (evita ReferenceError em chamadas assíncronas)
+        function showToast(message, type = 'info') {
+            if (typeof showActionToast === 'function') {
+                showActionToast(message, type);
+            } else {
+                console.log(`[Toast ${type}]`, message);
+            }
+        }
+        window.showToast = showToast;
+
         // Sinais de bloqueio contra Race Conditions (execuções simultâneas duplicadas)
         let isSyncing = false;
         let isRendering = false;
@@ -3444,7 +3454,7 @@ function openBankModal() {
                 if (window.lucide) lucide.createIcons();
             }
 
-            showToast('Executando auditoria contábil no PostgreSQL...', 'info');
+            showActionToast('Executando auditoria contábil no PostgreSQL...', 'info');
 
             try {
                 const { data, error } = await supabaseClient.rpc('audit_and_recalculate_system', {
@@ -3453,7 +3463,9 @@ function openBankModal() {
 
                 if (error) {
                     console.error('Erro na auditoria do sistema:', error);
-                    showToast('Erro ao executar auditoria: ' + (error.message || 'Falha no banco'), 'error');
+                    const errorDetails = error.message || error.details || 'Falha na execução da Stored Procedure';
+                    showActionToast('❌ Erro na auditoria: ' + errorDetails, 'error');
+                    alert(`❌ Falha ao executar Auditoria Contábil no PostgreSQL:\n\n${errorDetails}\n\nPor favor, tente novamente.`);
                     return;
                 }
 
@@ -3473,7 +3485,7 @@ function openBankModal() {
                     alert(msg);
                 }
 
-                showToast('Auditoria e recálculo concluídos!', 'success');
+                showActionToast('Auditoria e recálculo concluídos com sucesso!', 'success');
 
                 // Recarrega os dados completos da nuvem para atualizar os cards imediatamente
                 await syncDataFromSupabase();
@@ -3484,7 +3496,9 @@ function openBankModal() {
                 }
             } catch (err) {
                 console.error('Falha inesperada na auditoria:', err);
-                showToast('Erro inesperado: ' + (err.message || err), 'error');
+                const errMsg = err?.message || String(err);
+                showActionToast('❌ Erro inesperado: ' + errMsg, 'error');
+                alert(`❌ Falha inesperada ao executar Auditoria Contábil:\n\n${errMsg}\n\nO erro foi registrado no sistema.`);
             } finally {
                 if (btnEl) {
                     btnEl.disabled = false;
@@ -3618,17 +3632,19 @@ function openBankModal() {
         async function rollbackSystemAuditItem(itemId) {
             if (!confirm(`Deseja realmente reverter este ajuste contábil (#${itemId}) e restaurar os valores anteriores no banco de dados?`)) return;
 
-            showToast('Revertendo ajuste no PostgreSQL...', 'info');
+            showActionToast('Revertendo ajuste no PostgreSQL...', 'info');
             try {
                 const { data, error } = await supabaseClient.rpc('rollback_audit_item', {
                     target_item_id: itemId
                 });
                 if (error) {
                     console.error('Erro ao reverter item de auditoria:', error);
-                    showToast('Erro ao reverter: ' + (error.message || 'Falha no banco'), 'error');
+                    const errMsg = error.message || error.details || 'Falha no banco';
+                    showActionToast('❌ Erro ao reverter: ' + errMsg, 'error');
+                    alert(`❌ Falha ao reverter item no PostgreSQL:\n\n${errMsg}`);
                     return;
                 }
-                showToast('Ajuste revertido com sucesso!', 'success');
+                showActionToast('Ajuste revertido com sucesso!', 'success');
                 await syncDataFromSupabase();
                 renderAll();
                 await renderAuditHistoryContent();
@@ -3637,7 +3653,9 @@ function openBankModal() {
                 }
             } catch (err) {
                 console.error('Erro ao reverter item:', err);
-                showToast('Erro inesperado: ' + (err.message || err), 'error');
+                const errMsg = err?.message || String(err);
+                showActionToast('❌ Erro inesperado: ' + errMsg, 'error');
+                alert(`❌ Falha inesperada ao reverter ajuste:\n\n${errMsg}`);
             }
         }
 
@@ -6229,7 +6247,7 @@ function openBankModal() {
                     const quotaNoticeMsg = itemInfo.quotaNotice ? `\nℹ️ ${itemInfo.quotaNotice}\n` : '';
 
                     if (itemInfo.quotaNotice && !silent) {
-                        showToast(itemInfo.quotaNotice, 'info');
+                        showActionToast(itemInfo.quotaNotice, 'info');
                     }
 
                     if (pluggyTxs.length > 0) {
@@ -9728,11 +9746,15 @@ function openBankModal() {
                 document.body.appendChild(container);
             }
             const toast = document.createElement('div');
-            toast.className = `p-4 rounded-2xl shadow-2xl border text-xs font-bold transition-all duration-300 transform translate-y-4 opacity-0 pointer-events-auto flex items-center gap-2.5 ${
-                type === 'error'
-                    ? 'bg-rose-900/90 border-rose-700 text-rose-100 backdrop-blur-md'
-                    : 'bg-slate-900/95 border-emerald-500/50 text-emerald-200 backdrop-blur-md'
-            }`;
+            let colorClass = 'bg-slate-900/95 border-emerald-500/50 text-emerald-200 backdrop-blur-md';
+            if (type === 'error') {
+                colorClass = 'bg-rose-950/95 border-rose-600 text-rose-100 backdrop-blur-md shadow-rose-950/50';
+            } else if (type === 'warning') {
+                colorClass = 'bg-amber-950/95 border-amber-500 text-amber-100 backdrop-blur-md shadow-amber-950/50';
+            } else if (type === 'info') {
+                colorClass = 'bg-slate-900/95 border-indigo-500/60 text-indigo-200 backdrop-blur-md shadow-indigo-950/50';
+            }
+            toast.className = `p-4 rounded-2xl shadow-2xl border text-xs font-bold transition-all duration-300 transform translate-y-4 opacity-0 pointer-events-auto flex items-center gap-2.5 ${colorClass}`;
             toast.textContent = message;
             container.appendChild(toast);
             requestAnimationFrame(() => {
@@ -9741,9 +9763,10 @@ function openBankModal() {
             setTimeout(() => {
                 toast.classList.add('opacity-0', 'translate-y-2');
                 setTimeout(() => toast.remove(), 300);
-            }, 4000);
+            }, 4500);
         }
         window.showActionToast = showActionToast;
+        window.showToast = showActionToast;
 
         function highlightReconciledItemInList(txId) {
             if (!txId) return;
