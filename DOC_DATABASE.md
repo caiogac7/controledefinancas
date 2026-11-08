@@ -16,4 +16,5 @@
 | 08/11/2026 | `profiles` | Criação da coluna `role TEXT DEFAULT 'user'` com nível `admin` para contas autorizadas. | Implementação de RBAC nativo para auditorias de sistema e controles administrativos seguros. |
 | 08/11/2026 | `audit_and_recalculate_system` | Stored Procedure PL/pgSQL (`SECURITY DEFINER`) para higienização, recálculo e alinhamento contábil (individual e em massa). | Permitir auditoria e correção em milissegundos sem tráfego de rede ou risco de alucinação. |
 | 08/11/2026 | `cron.job` (`pg_cron`) | Agendamento diário da rotina `auto_ajuste_diario_saldos_faturas` às 03:15 da manhã. | Manutenção preventiva e auto-correção contínua da integridade de dados de todos os clientes. |
+| 08/11/2026 | `system_audit_logs` | Criação da tabela de auditoria com RLS e registro de data/hora, executor, total de faturas recalculadas e sintéticas expurgadas. | Rastreabilidade total, auditoria contábil e exibição do status ao vivo no modal de alinhamento. |
 

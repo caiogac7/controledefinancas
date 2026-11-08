@@ -3356,6 +3356,28 @@ function openBankModal() {
             }
         }
 
+        let lastAuditLogInfo = null;
+
+        async function fetchLatestAuditLog() {
+            try {
+                const { data } = await supabaseClient
+                    .from('system_audit_logs')
+                    .select('*')
+                    .order('executed_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+                if (data) {
+                    lastAuditLogInfo = data;
+                    const logEl = document.getElementById('latest-audit-log-badge');
+                    if (logEl) {
+                        const ts = formatSaoPauloDateTimeBR(data.executed_at);
+                        const isOk = data.status === 'SUCCESS';
+                        logEl.innerHTML = `<span class="${isOk ? 'text-emerald-400' : 'text-amber-400'}">✓ Última auditoria no banco: <strong>${escapeHtml(ts)}</strong> (${escapeHtml(data.summary || '100% calibrado')})</span>`;
+                    }
+                }
+            } catch (_) {}
+        }
+
         // =========================================================================
         // MOTOR DE AUDITORIA CONTÁBIL E RECÁLCULO VIA STORED PROCEDURE POSTGRESQL
         // Suporta RBAC: Administrador pode auditar toda a base ou um usuário específico.
@@ -3391,6 +3413,7 @@ function openBankModal() {
 
                 // Recarrega os dados completos da nuvem para atualizar os cards imediatamente
                 await syncDataFromSupabase();
+                await fetchLatestAuditLog();
                 renderAll();
                 if (typeof renderBalanceAlignmentModal === 'function') {
                     renderBalanceAlignmentModal();
@@ -3413,6 +3436,7 @@ function openBankModal() {
             const modal = document.getElementById('balance-align-modal');
             if (!modal) return;
             renderBalanceAlignmentModal();
+            fetchLatestAuditLog();
             modal.classList.remove('hidden');
             modal.classList.add('flex');
             lucide.createIcons();
@@ -3514,6 +3538,9 @@ function openBankModal() {
                     <p class="text-[11px] text-slate-400">
                         Recalcula faturas por extrato, remove inconsistências e valida todos os lançamentos direto no motor PostgreSQL do Supabase.
                     </p>
+                    <div id="latest-audit-log-badge" class="text-[10px] text-slate-400 font-semibold pt-0.5">
+                        ${lastAuditLogInfo ? `<span class="${lastAuditLogInfo.status === 'SUCCESS' ? 'text-emerald-400' : 'text-amber-400'}">✓ Última auditoria no banco: <strong>${escapeHtml(formatSaoPauloDateTimeBR(lastAuditLogInfo.executed_at))}</strong> (${escapeHtml(lastAuditLogInfo.summary || '100% calibrado')})</span>` : 'Carregando histórico de auditoria...'}
+                    </div>
                     <div class="flex items-center gap-2 pt-1 flex-wrap">
                         <button type="button" onclick="triggerSystemAuditAndRecalculate(currentUser?.id)" 
                             class="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-extrabold transition flex items-center gap-1.5">
