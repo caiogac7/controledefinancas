@@ -1468,6 +1468,20 @@
                 </div>
                 <p class="text-[11px] text-slate-400 -mt-1">💡 Ao informar um Saldo Inicial diferente de R$ 0,00, o sistema registra automaticamente um lançamento datado de <strong>"Inclusão de Saldo Inicial"</strong> para manter a contabilidade exata.</p>
 
+                <!-- DINHEIRO RESERVADO / COFRINHO DA CONTA (ISOLADO DO SALDO LIVRE) -->
+                <div class="p-3.5 rounded-2xl bg-amber-500/10 dark:bg-amber-950/20 border border-amber-500/30">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <label class="text-xs font-extrabold text-amber-500 dark:text-amber-400 flex items-center gap-1.5">
+                            <i data-lucide="piggy-bank" class="w-4 h-4 text-amber-400"></i> Dinheiro Reservado / Cofrinho (R$)
+                        </label>
+                        <span class="text-[10px] text-amber-600 dark:text-amber-300 font-bold">Não soma no saldo da conta</span>
+                    </div>
+                    <input type="number" step="0.01" id="bank-vault-balance" value="0.00" placeholder="0,00" class="w-full px-3.5 py-2.5 rounded-xl border border-amber-500/30 bg-white dark:bg-slate-900 text-sm font-black text-amber-600 dark:text-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-500">
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400 mt-1.5">
+                        Valores guardados em reservas ou caixinhas aparecem destacados no card desta conta para acompanhamento visual, sem se misturar com o saldo livre da conta corrente.
+                    </p>
+                </div>
+
                 <!-- OPÇÃO REGISTRADA NA COLUNA include_in_total DA TABELA public.banks -->
                 <!-- OPÇÃO REGISTRADA NA COLUNA include_in_total DA TABELA public.banks -->
                 <div class="p-3.5 rounded-2xl bg-slate-800/70 dark:bg-slate-800/80 border border-rose-900/30/70 dark:border-slate-700">

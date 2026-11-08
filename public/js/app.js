@@ -2600,6 +2600,19 @@
                             }
                         </div>
 
+                        ${(() => {
+                            const bVault = getBankVaultBalance(b);
+                            if (bVault <= 0) return '';
+                            return `
+                                <div class="my-1.5 py-1.5 px-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between">
+                                    <span class="text-[10px] font-extrabold text-amber-400 flex items-center gap-1.5">
+                                        <i data-lucide="piggy-bank" class="w-3.5 h-3.5 text-amber-400"></i> Reservado
+                                    </span>
+                                    <strong class="text-xs font-black text-amber-300 tracking-tight">${formatBRL(bVault)}</strong>
+                                </div>
+                            `;
+                        })()}
+
                         <div class="flex items-center justify-between gap-1 pt-1.5 border-t border-white/10 mt-1">
                             <span class="text-[10px] text-slate-400 truncate">${metrics.carryIn !== 0 ? `Ant.: ${formatBRL(metrics.carryIn)}` : `Pendente: ${formatBRL(metrics.pendingExpenseMonth)}`}</span>
                             ${statusTag}
@@ -2767,6 +2780,19 @@
                                 <p class="font-extrabold text-rose-400 mt-0.5">${formatBRL(metrics.projectedBalance)}</p>
                             </div>
                         </div>
+
+                        ${(() => {
+                            const bVault = getBankVaultBalance(b);
+                            if (bVault <= 0) return '';
+                            return `
+                                <div class="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between text-xs">
+                                    <span class="font-extrabold text-amber-400 flex items-center gap-1.5">
+                                        <i data-lucide="piggy-bank" class="w-4 h-4 text-amber-400"></i> Dinheiro Reservado / Cofrinho (Isolado)
+                                    </span>
+                                    <strong class="text-sm font-black text-amber-300">${formatBRL(bVault)}</strong>
+                                </div>
+                            `;
+                        })()}
 
                         <div class="flex items-center justify-between pt-1 text-xs">
                             <span class="text-slate-500">Saldo Realizado no Mês: <strong class="text-sm ${currentBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}">${formatBRL(currentBalance)}</strong></span>
@@ -3063,6 +3089,14 @@ function openBankModal() {
             }
 
             document.getElementById('bank-include-total').checked = isBankIncludedInTotal(b);
+
+            // Popula o saldo reservado da conta (cofrinho / caixinha)
+            const bankVault = getBankVaultBalance(b);
+            const vaultInput = document.getElementById('bank-vault-balance');
+            if (vaultInput) {
+                vaultInput.value = bankVault > 0 ? bankVault.toFixed(2) : '0.00';
+            }
+
             const cycleCfg = getCardCycleConfig(b);
             const cardObj = savedCards.find(c =>
                 String(c.bankId) === String(b.id) ||
@@ -3107,6 +3141,8 @@ function openBankModal() {
                              isCreditCardBank({ id: bankId, name: bankName, type: document.getElementById('bank-type').value }) ||
                              (existingId && banks.some(x => String(x.id) === String(existingId) && isCreditCardBank(x)));
 
+            const vaultBal = roundCurrency(parseFloat(document.getElementById('bank-vault-balance')?.value || 0));
+
             const payload = {
                 id: bankId,
                 name: bankName,
@@ -3114,7 +3150,9 @@ function openBankModal() {
                 type: isCredit ? 'Cartão de Crédito' : document.getElementById('bank-type').value,
                 preset: document.getElementById('bank-preset')?.value || 'outro',
                 initialBalance: 0, // O saldo inicial é controlado via transação datada ("Inclusão de Saldo Inicial")
-                includeInTotal: isCredit ? false : document.getElementById('bank-include-total').checked
+                includeInTotal: isCredit ? false : document.getElementById('bank-include-total').checked,
+                vaultBalance: isCredit ? 0 : vaultBal,
+                vault_balance: isCredit ? 0 : vaultBal
             };
 
             // Sincroniza o Cartão de Crédito deste Banco (Data de Virada Oficial closingDay e Vencimento dueDay)
@@ -4223,6 +4261,74 @@ function openBankModal() {
             // Leitura passiva do saldo fixo do cofre persistido nas contas bancárias (vault_balance)
             const persistedVault = (Array.isArray(banks) ? banks : []).reduce((acc, b) => acc + Number(b?.vaultBalance ?? b?.vault_balance ?? 0), 0);
             return Number(Math.max(0, persistedVault).toFixed(2));
+        }
+
+        /**
+         * Retorna o saldo reservado (cofrinho / caixinha) específico de uma conta bancária.
+         * Não se mistura com o saldo livre da conta corrente.
+         */
+        function getBankVaultBalance(b) {
+            if (!b) return 0;
+            const explicit = Number(b.vaultBalance ?? b.vault_balance ?? b.reservedBalance ?? 0);
+            if (explicit > 0) return roundCurrency(explicit);
+
+            const bId = String(b.id || '');
+            const bName = String(b.name || '');
+            let balance = 0;
+            let foundTx = false;
+            const seenFits = new Set();
+            const allItems = [
+                ...(Array.isArray(bankStatements) ? bankStatements : []),
+                ...(Array.isArray(transactions) ? transactions : []).filter(t => !t.isInitialBalance && !t.isBalanceAdjustment)
+            ];
+
+            allItems.forEach(item => {
+                if (!item) return;
+                const iBankId = String(item.bankId || item.accountId || '');
+                const iBank = String(item.bank || '');
+                const matchBank = (iBankId && iBankId === bId) ||
+                                  (b.pluggyAccountId && String(item.accountId || '') === String(b.pluggyAccountId)) ||
+                                  (bName && iBank && iBank.toLowerCase() === bName.toLowerCase());
+                if (!matchBank) return;
+
+                const fit = String(item.fitid || item.id || '');
+                if (fit && seenFits.has(fit)) return;
+                if (fit) seenFits.add(fit);
+
+                const clean = normalizeTextForMatch(item.desc || item.description || '');
+                const isVault = item.tx_group === 'VAULT_TX' ||
+                                clean.includes('reserva por gasto') ||
+                                clean.includes('reserva programada') ||
+                                clean.includes('dinheiro guardado') ||
+                                clean.includes('dinheiro reservado') ||
+                                clean.includes('reserva autom') ||
+                                clean.includes('cofrinho') ||
+                                clean.includes('dinheiro retirado') ||
+                                clean.includes('resgate');
+
+                if (!isVault) return;
+                foundTx = true;
+
+                const isDeposit = clean.includes('reserva por gasto') ||
+                                  clean.includes('reserva programada') ||
+                                  clean.includes('dinheiro guardado') ||
+                                  clean.includes('dinheiro reservado') ||
+                                  clean.includes('reserva autom') ||
+                                  clean.includes('cofrinho') ||
+                                  (item.type === 'expense');
+
+                const isWithdrawal = clean.includes('dinheiro retirado') ||
+                                     clean.includes('resgate') ||
+                                     (item.type === 'income');
+
+                if (isDeposit) balance += Number(item.amount || 0);
+                else if (isWithdrawal) balance -= Number(item.amount || 0);
+            });
+
+            if (foundTx && balance > 0) {
+                return roundCurrency(Math.max(0, balance));
+            }
+            return roundCurrency(Math.max(0, explicit));
         }
 
         /**
