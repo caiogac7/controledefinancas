@@ -879,13 +879,24 @@ function createPluggyRestClient(apiKey) {
     return {
         apiKey,
         async updateItem(itemId) {
-            const res = await fetch(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, {
-                method: 'PATCH',
-                headers,
-                body: JSON.stringify({})
-            });
-            if (!res.ok) return null;
-            return await res.json().catch(() => null);
+            try {
+                const res = await fetch(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, {
+                    method: 'PATCH',
+                    headers,
+                    body: JSON.stringify({})
+                });
+                if (!res.ok) {
+                    const errTxt = await res.text().catch(() => '');
+                    let errJson = null;
+                    try { errJson = JSON.parse(errTxt); } catch (_) {}
+                    const errMsg = errJson?.message || errTxt || `HTTP ${res.status}`;
+                    return { ok: false, status: res.status, message: errMsg };
+                }
+                const data = await res.json().catch(() => ({}));
+                return { ok: true, status: res.status, data };
+            } catch (netErr) {
+                return { ok: false, status: 0, message: netErr?.message || String(netErr) };
+            }
         },
         async fetchItem(itemId) {
             const res = await fetch(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, { headers });
@@ -912,6 +923,37 @@ function createPluggyRestClient(apiKey) {
             return acc?.bankData || acc || null;
         }
     };
+}
+
+/**
+ * Aguarda o conector da Pluggy concluir a extração no banco (status UPDATING -> UPDATED)
+ * Limite de segurança de 20s para proteger contra timeout na Serverless Function da Vercel.
+ */
+async function waitForItemSync(pluggyClient, itemId, maxWaitMs = 20000) {
+    const startTime = Date.now();
+    const pollInterval = 2500;
+    let lastItem = null;
+
+    while (Date.now() - startTime < maxWaitMs) {
+        await sleep(pollInterval);
+        lastItem = await pluggyClient.fetchItem(String(itemId));
+        if (!lastItem) continue;
+
+        const st = String(lastItem.status || '').toUpperCase();
+        if (st === 'UPDATED') {
+            console.log(`[Pluggy Polling] Item ${itemId} atualizado com sucesso no banco (${Date.now() - startTime}ms)!`);
+            return { success: true, item: lastItem };
+        }
+
+        // Se o banco reportar que precisa de intervenção do usuário, erro de login ou desatualizado, sai do polling
+        if (st === 'LOGIN_ERROR' || st === 'WAITING_USER_INPUT' || st === 'OUTDATED') {
+            console.warn(`[Pluggy Polling] Item ${itemId} parou em status ${st}. Prosseguindo com os dados disponíveis.`);
+            return { success: false, status: st, item: lastItem };
+        }
+    }
+
+    console.warn(`[Pluggy Polling] Limite de ${maxWaitMs / 1000}s atingido aguardando item ${itemId}. Prosseguindo.`);
+    return { success: false, timeout: true, item: lastItem };
 }
 
 /**
@@ -1106,18 +1148,7 @@ async function handler(req, res) {
 
         const pluggyClient = createPluggyRestClient(pluggyApiKey);
 
-        // Se solicitado, dispara atualização oficial na Pluggy
-        if (triggerUpdate) {
-            currentStep = 'pluggy_trigger_update';
-            try {
-                await pluggyClient.updateItem(String(itemId));
-                await sleep(1000);
-            } catch (upErr) {
-                console.warn(`Aviso ao chamar updateItem(${itemId}):`, upErr?.message || upErr);
-            }
-        }
-
-        // 1. Busca Metadados da Conexão (Item)
+        // 1. Busca Metadados Iniciais da Conexão (Item)
         currentStep = 'pluggy_fetch_item';
         let itemData = await pluggyClient.fetchItem(String(itemId));
         if (!itemData) {
@@ -1132,7 +1163,41 @@ async function handler(req, res) {
             return res.status(403).json({ ok: false, step: currentStep, error: 'Acesso negado a esta conexão bancária', erro: 'Acesso negado a esta conexão bancária' });
         }
 
-        // 2. Busca todas as Contas (Corrente e Cartões de Crédito)
+        // 2. Trava Inteligente Anti-Quota e Disparo do Refresh no Banco Real (PATCH /items/{id})
+        let bankRefreshed = false;
+        let quotaNotice = null;
+        const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+        const lastUpdatedTs = itemData.lastUpdatedAt ? new Date(itemData.lastUpdatedAt).getTime() : 0;
+        const isRecentEnough = lastUpdatedTs > 0 && (Date.now() - lastUpdatedTs < FIFTEEN_MINUTES_MS) && String(itemData.status || '').toUpperCase() === 'UPDATED';
+        const shouldTriggerPatch = Boolean(triggerUpdate || forceRefresh);
+
+        if (shouldTriggerPatch) {
+            if (isRecentEnough && !forceRefresh) {
+                console.log(`[Pluggy] Item ${itemId} já atualizado no banco há menos de 15 minutos (${new Date(itemData.lastUpdatedAt).toLocaleTimeString('pt-BR')}). Pulando PATCH para economizar cota.`);
+                quotaNotice = 'O banco já estava na versão mais recente da Pluggy; extratos e saldos sincronizados com sucesso.';
+            } else {
+                currentStep = 'pluggy_trigger_update';
+                console.log(`[Pluggy] Disparando PATCH /items/${itemId} para buscar novidades no banco real...`);
+                const patchRes = await pluggyClient.updateItem(String(itemId));
+
+                if (patchRes.ok) {
+                    console.log(`[Pluggy] PATCH aceito para item ${itemId}. Aguardando banco responder via polling...`);
+                    const pollRes = await waitForItemSync(pluggyClient, String(itemId), 20000);
+                    if (pollRes.item) itemData = pollRes.item;
+                    bankRefreshed = Boolean(pollRes.success);
+                } else {
+                    const msg = String(patchRes.message || patchRes.error || '');
+                    if (msg.toLowerCase().includes('quota') || patchRes.status === 429) {
+                        console.warn(`[Pluggy] Cota de refresh direto no banco atingida para ${itemId}. Prosseguindo com os dados mais recentes salvos na Pluggy sem erro.`);
+                        quotaNotice = 'Cota temporária de atualização direta do banco já utilizada recentemente. Sincronizando com a última versão disponível na Pluggy.';
+                    } else {
+                        console.warn(`[Pluggy] Aviso ao atualizar item ${itemId}:`, msg);
+                    }
+                }
+            }
+        }
+
+        // 3. Busca todas as Contas (Corrente e Cartões de Crédito)
         currentStep = 'pluggy_fetch_accounts';
         let accounts = [];
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -1735,7 +1800,10 @@ async function handler(req, res) {
                 id: String(itemData.id),
                 status: String(itemData.status || 'UPDATED'),
                 connectorName: String(itemData.connector?.name || 'Instituição Open Finance'),
-                primaryColor: String(itemData.connector?.primaryColor || '4f46e5')
+                primaryColor: String(itemData.connector?.primaryColor || '4f46e5'),
+                lastUpdatedAt: itemData.lastUpdatedAt || spTimestamp,
+                bankRefreshed: Boolean(bankRefreshed),
+                quotaNotice: quotaNotice || null
             },
             accounts: normalizedAccounts,
             creditBills: finalNormalizedBills,

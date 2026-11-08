@@ -56,6 +56,13 @@
 - **Execução Sequencial com Intervalo:** Execução estritamente em fila com intervalo de respiro de 2 segundos entre conexões bancárias, impedindo bombardeamento simultâneo na API da Pluggy.
 - **Proteção do LocalStorage (DOMException / QuotaExceededError):** Encapsulamento seguro via `safeLocalStorageSet` e eliminação definitiva do armazenamento de JSONs brutos de debug (`pluggy_card_raw_debug.json`) no armazenamento local do celular, mantendo o consumo de memória mobile estritamente abaixo do limite de 5MB.
 
+### 10. Atualização Direta com a Instituição Bancária (Fluxo Oficial PATCH /items/{id})
+- **Comportamento Equivalente ao Portal Meu Pluggy:** O botão "🔄 Atualizar com o Banco (Open Finance)" dispara internamente `PATCH /items/{itemId}` com corpo vazio `{}` para que a Pluggy consulte ativamente o banco emissor (Itaú, Mercado Pago, InfinitePay) e capture lançamentos e saldos em tempo real.
+- **Trava Inteligente Anti-Quota (15 Minutos):** O backend verifica `item.lastUpdatedAt`. Se o banco já tiver respondido há menos de 15 minutos, pula a chamada de `PATCH` e busca direto as contas/transações mais recentes, economizando a cota da API.
+- **Tratamento Gracioso de Cota:** Caso o limite de `PATCH` por hora da instituição seja atingido (HTTP 429 ou `"The quota has been exceeded"`), o backend não quebra com erro; ele prossegue com os dados mais recentes salvos na Pluggy e devolve `quotaNotice` informativo para o usuário.
+- **Polling Assíncrono com Limite Vercel (20s):** Função `waitForItemSync` monitora o status `UPDATING -> UPDATED` a cada 2,5s por até 20 segundos antes de buscar `GET /accounts` e `GET /v2/transactions`, garantindo que os novos saldos e compras do dia sejam gravados com desduplicação (`uniqueStatementsMap`) no Supabase.
+
+
 - **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.
 - **Nomenclatura Oficial Restaurada:**
   - Sistema / Logo: `Controle de Finanças`

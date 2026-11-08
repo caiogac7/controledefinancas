@@ -5420,10 +5420,10 @@ function openBankModal() {
                         </div>
                         ${accSummaryHtml}
                         <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
-                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza os últimos 7 dias e atualiza o saldo da conta">
-                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Sincronizar (7 Dias)
+                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Conecta ao banco via Open Finance para atualizar saldos e extratos de hoje">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Atualizar com o Banco
                             </button>
-                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
+                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
                                 <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Histórico Completo
                             </button>
                             <button type="button" onclick="openPluggyConnect('${escapeHtml(item.id)}')" class="px-2.5 py-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition" title="Atualizar credenciais">
@@ -5533,7 +5533,7 @@ function openBankModal() {
                         await new Promise(r => setTimeout(r, 2000));
                     }
 
-                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false, fullSync, isBatch: true });
+                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: true, fullSync, isBatch: true });
                     if (!res || res.ok === false) {
                         failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
                     } else {
@@ -5748,7 +5748,9 @@ function openBankModal() {
                 btn.style.pointerEvents = 'none';
                 btn.style.opacity = '0.5';
                 btn.style.cursor = 'not-allowed';
-                btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
+                btn.innerHTML = triggerUpdate
+                    ? '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Conectando ao banco via Pluggy, aguarde ~15s...'
+                    : '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
                 if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
             }
 
@@ -6239,10 +6241,22 @@ function openBankModal() {
 
                 if (!silent || (options.fromAutoPoll && addedMonthlyCount > 0)) {
                     const summaryBalances = accounts.map(a => `• ${a.type === 'CREDIT' ? '💳' : '🏦'} ${a.name}: ${formatBRL(a.balance)}`).join('\n');
+                    const lastUpdatedStr = itemInfo.lastUpdatedAt ? formatSaoPauloDateTimeBR(itemInfo.lastUpdatedAt) : 'Agora';
+                    const bankStatusMsg = itemInfo.bankRefreshed
+                        ? `✓ Dados atualizados diretamente na instituição financeira (${lastUpdatedStr})!`
+                        : `• Última versão disponível no banco: ${lastUpdatedStr}`;
+                    const quotaNoticeMsg = itemInfo.quotaNotice ? `\nℹ️ ${itemInfo.quotaNotice}\n` : '';
+
+                    if (itemInfo.quotaNotice && !silent) {
+                        showToast(itemInfo.quotaNotice, 'info');
+                    }
+
                     if (pluggyTxs.length > 0) {
                         alert(
                             `✅ Sincronização Open Finance concluída (${updatedEntry.connectorName})!\n\n` +
-                            `${summaryBalances ? summaryBalances + '\n\n' : ''}` +
+                            `${bankStatusMsg}\n` +
+                            `${quotaNoticeMsg}` +
+                            `${summaryBalances ? '\n' + summaryBalances + '\n\n' : '\n'}` +
                             `• ${pluggyTxs.length} transações localizadas na Pluggy\n` +
                             `• ${addedMonthlyCount} novos lançamentos importados na Visão Mensal\n` +
                             (expandedInstallments > 0 ? `• ${expandedInstallments} parcelas futuras geradas automaticamente\n` : '') +
@@ -6251,9 +6265,11 @@ function openBankModal() {
                     } else if (!options.fromAutoPoll) {
                         alert(
                             `⏳ Conexão registrada com ${updatedEntry.connectorName}!\n\n` +
-                            `${summaryBalances ? summaryBalances + '\n\n' : ''}` +
+                            `${bankStatusMsg}\n` +
+                            `${quotaNoticeMsg}` +
+                            `${summaryBalances ? '\n' + summaryBalances + '\n\n' : '\n'}` +
                             `• Status atual na Pluggy: ${updatedEntry.status}\n` +
-                            `• O aplicativo continuará verificando automaticamente em segundo plano pelos próximos 90 segundos caso o banco ainda esteja processando o extrato.`
+                            `• O aplicativo continuará verificando automaticamente em segundo plano caso o banco ainda esteja processando o extrato.`
                         );
                     }
                 }
