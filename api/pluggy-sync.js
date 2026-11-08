@@ -942,19 +942,23 @@ async function fetchAllTransactionsV2(pluggyClientOrApiKey, accountId, { dateFro
     if (apiKey) headers['X-API-KEY'] = apiKey;
 
     async function runCursorLoop(useDateFilter) {
-        let nextCursor = null;
-        let nextParamName = 'cursor';
+        let nextUrl = null;
         let pageCount = 0;
 
         do {
-            const url = new URL('https://api.pluggy.ai/v2/transactions');
-            url.searchParams.set('accountId', String(accountId));
-            url.searchParams.set('pageSize', '500');
-            if (useDateFilter && dateFrom) url.searchParams.set('from', String(dateFrom).slice(0, 10));
-            if (useDateFilter && dateTo) url.searchParams.set('to', String(dateTo).slice(0, 10));
-            if (nextCursor) url.searchParams.set(nextParamName, String(nextCursor));
+            let fetchUrl;
+            if (nextUrl) {
+                fetchUrl = nextUrl.startsWith('http') ? nextUrl : `https://api.pluggy.ai${nextUrl.startsWith('/') ? '' : '/v2/transactions'}${nextUrl}`;
+            } else {
+                const url = new URL('https://api.pluggy.ai/v2/transactions');
+                url.searchParams.set('accountId', String(accountId));
+                // NOTA: Na API V2 da Pluggy NÃO passar pageSize (retorna erro HTTP 400)
+                if (useDateFilter && dateFrom) url.searchParams.set('from', String(dateFrom).slice(0, 10));
+                if (useDateFilter && dateTo) url.searchParams.set('to', String(dateTo).slice(0, 10));
+                fetchUrl = url.toString();
+            }
 
-            const res = await fetch(url.toString(), { headers });
+            const res = await fetch(fetchUrl, { headers });
             if (!res.ok) {
                 if (pageCount === 0 && useDateFilter && (dateFrom || dateTo)) {
                     return false; // Sinaliza para tentar sem filtro de data
@@ -972,29 +976,17 @@ async function fetchAllTransactionsV2(pluggyClientOrApiKey, accountId, { dateFro
                 }
             }
 
-            nextCursor = null;
-            if (data?.nextPageCursor) {
-                nextCursor = data.nextPageCursor;
-                nextParamName = 'cursor';
-            } else if (data?.cursor) {
-                nextCursor = data.cursor;
-                nextParamName = 'cursor';
-            } else if (data?.next) {
-                try {
-                    const nextUrlObj = new URL(data.next, 'https://api.pluggy.ai');
-                    const cParam = nextUrlObj.searchParams.get('cursor');
-                    const aParam = nextUrlObj.searchParams.get('after');
-                    if (cParam) {
-                        nextCursor = cParam;
-                        nextParamName = 'cursor';
-                    } else if (aParam) {
-                        nextCursor = aParam;
-                        nextParamName = 'after';
-                    }
-                } catch (_) {}
+            nextUrl = null;
+            if (data?.next) {
+                nextUrl = String(data.next);
+            } else if (data?.nextPageCursor) {
+                const u = new URL('https://api.pluggy.ai/v2/transactions');
+                u.searchParams.set('accountId', String(accountId));
+                u.searchParams.set('after', String(data.nextPageCursor));
+                nextUrl = u.toString();
             }
             pageCount++;
-        } while (nextCursor && pageCount < 50);
+        } while (nextUrl && pageCount < 20);
 
         return true;
     }
