@@ -934,29 +934,52 @@ function createPluggyRestClient(apiKey) {
 
 /**
  * Aguarda o conector da Pluggy concluir a extração no banco (status UPDATING -> UPDATED)
- * Limite de segurança de 20s para proteger contra timeout na Serverless Function da Vercel.
+ * com verificação estrita de novo snapshot (mudança de lastUpdatedAt ou passagem comprovada por UPDATING).
+ * Limite de segurança de 25s para proteger contra timeout na Serverless Function da Vercel.
  */
-async function waitForItemSync(pluggyClient, itemId, maxWaitMs = 20000) {
+async function waitForItemSync(pluggyClient, itemId, { previousUpdatedAt = null, maxWaitMs = 25000, initialDelayMs = 4000 } = {}) {
     const startTime = Date.now();
-    const pollInterval = 2500;
+    const pollInterval = 3000;
+    let jaViuStatusUpdating = false;
     let lastItem = null;
 
+    // 2. DELAY INICIAL OBRIGATÓRIO (4 segundos) ANTES DA PRIMEIRA CHECAGEM
+    // Permite que a Pluggy receba o comando PATCH, inicie o conector do banco e mude status para 'UPDATING'
+    if (initialDelayMs > 0) {
+        console.log(`[Pluggy Polling] Aguardando delay inicial obrigatório de ${initialDelayMs / 1000}s para transição de status na Pluggy...`);
+        await sleep(initialDelayMs);
+    }
+
     while (Date.now() - startTime < maxWaitMs) {
-        await sleep(pollInterval);
         lastItem = await pluggyClient.fetchItem(String(itemId));
-        if (!lastItem) continue;
+        if (lastItem) {
+            const st = String(lastItem.status || '').toUpperCase();
+            const currentUpdatedAt = lastItem.lastUpdatedAt || lastItem.updatedAt || null;
 
-        const st = String(lastItem.status || '').toUpperCase();
-        if (st === 'UPDATED') {
-            console.log(`[Pluggy Polling] Item ${itemId} atualizado com sucesso no banco (${Date.now() - startTime}ms)!`);
-            return { success: true, item: lastItem };
+            if (st === 'UPDATING' || st === 'WAITING_USER_INPUT') {
+                jaViuStatusUpdating = true;
+                console.log(`[Pluggy Polling] Item ${itemId} confirmado em execução no banco (status: ${st})...`);
+            }
+
+            // 3. CONDIÇÃO REAL DE PARADA DO POLLING:
+            // Só considera a atualização concluída quando:
+            // status === 'UPDATED' E (lastUpdatedAt mudou OU comprovadamente passou por status intermediário UPDATING)
+            const hasNewTimestamp = Boolean(currentUpdatedAt && previousUpdatedAt && currentUpdatedAt !== previousUpdatedAt);
+            if (st === 'UPDATED' && (hasNewTimestamp || jaViuStatusUpdating)) {
+                console.log(`[Pluggy Polling] Item ${itemId} atualizado com novo snapshot do banco (${Date.now() - startTime}ms)! Anterior: ${previousUpdatedAt} -> Atual: ${currentUpdatedAt} (viuUpdating: ${jaViuStatusUpdating})`);
+                return { success: true, item: lastItem, newSnapshot: true };
+            }
+
+            // Se o banco reportar falha de login ou desatualizado, interrompe
+            if (st === 'LOGIN_ERROR' || st === 'OUTDATED') {
+                console.warn(`[Pluggy Polling] Item ${itemId} encerrou com status ${st}. Prosseguindo com dados disponíveis.`);
+                return { success: false, status: st, item: lastItem };
+            }
+
+            console.log(`[Pluggy Polling] Verificação em ${Date.now() - startTime}ms: status=${st}, lastUpdatedAt=${currentUpdatedAt}, anterior=${previousUpdatedAt}, viuUpdating=${jaViuStatusUpdating}`);
         }
 
-        // Se o banco reportar que precisa de intervenção do usuário, erro de login ou desatualizado, sai do polling
-        if (st === 'LOGIN_ERROR' || st === 'WAITING_USER_INPUT' || st === 'OUTDATED') {
-            console.warn(`[Pluggy Polling] Item ${itemId} parou em status ${st}. Prosseguindo com os dados disponíveis.`);
-            return { success: false, status: st, item: lastItem };
-        }
+        await sleep(pollInterval);
     }
 
     console.warn(`[Pluggy Polling] Limite de ${maxWaitMs / 1000}s atingido aguardando item ${itemId}. Prosseguindo.`);
@@ -1170,6 +1193,10 @@ async function handler(req, res) {
             return res.status(403).json({ ok: false, step: currentStep, error: 'Acesso negado a esta conexão bancária', erro: 'Acesso negado a esta conexão bancária' });
         }
 
+        // 1. CAPTURAR O lastUpdatedAt ANTES DO PATCH
+        const previousUpdatedAt = itemData.lastUpdatedAt || itemData.updatedAt || null;
+        let patchTriggered = false;
+
         // 2. Trava Inteligente Anti-Quota e Disparo do Refresh no Banco Real (PATCH /items/{id})
         let bankRefreshed = false;
         let quotaNotice = null;
@@ -1184,12 +1211,17 @@ async function handler(req, res) {
                 quotaNotice = 'O banco já estava na versão mais recente da Pluggy; extratos e saldos sincronizados com sucesso.';
             } else {
                 currentStep = 'pluggy_trigger_update';
-                console.log(`[Pluggy] Disparando PATCH /items/${itemId} para buscar novidades no banco real...`);
+                console.log(`[Pluggy] Disparando PATCH /items/${itemId} para buscar novidades no banco real... (snapshot anterior: ${previousUpdatedAt})`);
                 const patchRes = await pluggyClient.updateItem(String(itemId));
 
                 if (patchRes.ok) {
-                    console.log(`[Pluggy] PATCH aceito para item ${itemId}. Aguardando banco responder via polling...`);
-                    const pollRes = await waitForItemSync(pluggyClient, String(itemId), 20000);
+                    patchTriggered = true;
+                    console.log(`[Pluggy] PATCH aceito para item ${itemId}. Iniciando espera de 4s e polling seguro...`);
+                    const pollRes = await waitForItemSync(pluggyClient, String(itemId), {
+                        previousUpdatedAt,
+                        maxWaitMs: 25000,
+                        initialDelayMs: 4000
+                    });
                     if (pollRes.item) itemData = pollRes.item;
                     bankRefreshed = Boolean(pollRes.success);
                 } else {
@@ -1823,7 +1855,10 @@ async function handler(req, res) {
                 status: String(itemData.status || 'UPDATED'),
                 connectorName: String(itemData.connector?.name || 'Instituição Open Finance'),
                 primaryColor: String(itemData.connector?.primaryColor || '4f46e5'),
-                lastUpdatedAt: itemData.lastUpdatedAt || spTimestamp,
+                lastUpdatedAt: itemData.lastUpdatedAt || itemData.updatedAt || spTimestamp,
+                updatedAt: itemData.updatedAt || itemData.lastUpdatedAt || spTimestamp,
+                executionStatus: itemData.executionStatus || itemData.status || 'UPDATED',
+                patchTriggered: Boolean(patchTriggered),
                 bankRefreshed: Boolean(bankRefreshed),
                 quotaNotice: quotaNotice || null
             },

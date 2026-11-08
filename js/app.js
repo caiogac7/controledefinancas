@@ -5829,6 +5829,7 @@ function openBankModal() {
                 }
 
                 const itemInfo = data.item || {};
+                console.log('📌 [Pluggy Conexão] Dados atualizados do item recebido:', itemInfo);
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 const pluggyTxs = Array.isArray(data.transactions) ? data.transactions : [];
                 if (data.rawDebugPayload) {
@@ -5844,6 +5845,11 @@ function openBankModal() {
                     connectorName: itemInfo.connectorName || 'Banco Open Finance',
                     status: itemInfo.status || 'UPDATED',
                     lastSyncLabel: nowLabel,
+                    lastUpdatedAt: itemInfo.lastUpdatedAt || null,
+                    updatedAt: itemInfo.updatedAt || null,
+                    executionStatus: itemInfo.executionStatus || itemInfo.status || 'UPDATED',
+                    patchTriggered: Boolean(itemInfo.patchTriggered),
+                    bankRefreshed: Boolean(itemInfo.bankRefreshed),
                     accountsSummary: accounts.map(a => ({
                         id: a.id,
                         name: a.name,

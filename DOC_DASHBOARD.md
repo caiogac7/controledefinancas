@@ -60,7 +60,11 @@
 - **Comportamento Equivalente ao Portal Meu Pluggy:** O botão "🔄 Atualizar com o Banco (Open Finance)" dispara internamente `PATCH /items/{itemId}` com corpo vazio `{}` para que a Pluggy consulte ativamente o banco emissor (Itaú, Mercado Pago, InfinitePay) e capture lançamentos e saldos em tempo real.
 - **Trava Inteligente Anti-Quota (15 Minutos):** O backend verifica `item.lastUpdatedAt`. Se o banco já tiver respondido há menos de 15 minutos, pula a chamada de `PATCH` e busca direto as contas/transações mais recentes, economizando a cota da API.
 - **Tratamento Gracioso de Cota:** Caso o limite de `PATCH` por hora da instituição seja atingido (HTTP 429 ou `"The quota has been exceeded"`), o backend não quebra com erro; ele prossegue com os dados mais recentes salvos na Pluggy e devolve `quotaNotice` informativo para o usuário.
-- **Polling Assíncrono com Limite Vercel (20s):** Função `waitForItemSync` monitora o status `UPDATING -> UPDATED` a cada 2,5s por até 20 segundos antes de buscar `GET /accounts` e `GET /v2/transactions`, garantindo que os novos saldos e compras do dia sejam gravados com desduplicação (`uniqueStatementsMap`) no Supabase.
+- **Polling Assíncrono Seguro com Delay Inicial de 4s & Validação Estrita de Novo Snapshot:**
+  - Antes de disparar o `PATCH`, o backend registra `previousUpdatedAt = itemAntes.lastUpdatedAt || itemAntes.updatedAt`.
+  - Após aceitação do `PATCH`, aguarda `4000ms` (delay inicial obrigatório) para dar tempo à Pluggy de mudar o status para `UPDATING`.
+  - O polling consulta a cada 3s (até 25s) e só encerra com sucesso quando: `status === 'UPDATED'` E `(lastUpdatedAt !== previousUpdatedAt || jaViuStatusUpdating === true)`.
+  - O payload da resposta inclui `lastUpdatedAt`, `updatedAt`, `executionStatus` e `patchTriggered` para auditoria visual e transparente no Console do cliente.
 
 ### 11. Modos Especializados de Sincronização Open Finance e Blindagem Anti-Quota
 - **⚡ Novidades (48h) [Modo Delta Incremental - Padrão Ultra Rápido]:**
