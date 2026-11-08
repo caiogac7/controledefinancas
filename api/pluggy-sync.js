@@ -1046,7 +1046,7 @@ async function handler(req, res) {
         }
 
         currentStep = 'validate_body';
-        const { itemId, from, to, triggerUpdate } = req.body || {};
+        const { itemId, from, to, triggerUpdate, fullSync } = req.body || {};
         if (!itemId || !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
             return res.status(400).json({ ok: false, step: currentStep, error: 'Identificador de conexão (itemId) inválido', erro: 'Identificador de conexão (itemId) inválido' });
         }
@@ -1262,9 +1262,11 @@ async function handler(req, res) {
                 dueDay: cardCycleConfig.dueDay
             });
 
-            // REGRA 3: Coleta exaustiva de transações via V2 com cursor pagination (/v2/transactions)
-            // Busca o maior período histórico disponível retornado pela instituição na Pluggy
-            const dateFrom = from ? String(from).slice(0, 10) : undefined;
+            // REGRA 3: Coleta de transações via V2 com cursor pagination (/v2/transactions)
+            // Se fullSync for true: busca absolutamente todo o histórico disponível na instituição sem limite
+            // Sincronização padrão (fullSync false e sem from): filtra os últimos 7 dias para atualização instantânea
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            const dateFrom = fullSync ? undefined : (from ? String(from).slice(0, 10) : sevenDaysAgo);
             const dateTo = to ? String(to).slice(0, 10) : undefined;
 
             try {

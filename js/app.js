@@ -5096,9 +5096,12 @@ function openBankModal() {
                             ${statusBadge}
                         </div>
                         ${accSummaryHtml}
-                        <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
-                            <button type="button" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false })" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold transition">
-                                🔄 Sincronizar Extrato & Saldo
+                        <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
+                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, buttonEl: this })" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm" title="Sincroniza os últimos 7 dias e atualiza o saldo da conta">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Sincronizar (7 Dias)
+                            </button>
+                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, buttonEl: this })" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
+                                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Histórico Completo
                             </button>
                             <button type="button" onclick="openPluggyConnect('${escapeHtml(item.id)}')" class="px-2.5 py-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition" title="Atualizar credenciais">
                                 Reconectar
@@ -5148,7 +5151,7 @@ function openBankModal() {
 
         let isSyncingAllPluggyInProgress = false;
 
-        async function syncAllPluggyItems() {
+        async function syncAllPluggyItems(fullSync = false) {
             if (isSyncingAllPluggyInProgress) return;
 
             if (!Array.isArray(pluggyItems) || pluggyItems.length === 0) {
@@ -5157,7 +5160,7 @@ function openBankModal() {
             }
 
             isSyncingAllPluggyInProgress = true;
-            const btn = document.getElementById('btn-sync-all-pluggy');
+            const btn = fullSync ? document.getElementById('btn-sync-all-pluggy-total') : document.getElementById('btn-sync-all-pluggy');
             const origHtml = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
@@ -5170,8 +5173,7 @@ function openBankModal() {
             const failedErrors = [];
             try {
                 for (const item of pluggyItems) {
-                    // triggerUpdate: false garante que a requisição apenas busque os dados já existentes na Pluggy (sem mandar atualizar no banco parceiro)
-                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false });
+                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false, fullSync });
                     if (!res || res.ok === false) {
                         failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
                     } else {
@@ -5183,12 +5185,13 @@ function openBankModal() {
                 cleanupStatementAndCreditNoise();
                 renderAll();
                 renderPluggyConnections();
+                const syncTypeLabel = fullSync ? 'Histórico Completo' : 'Últimos 7 Dias';
                 if (failedErrors.length > 0 && successCount === 0) {
-                    alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões):\n• ${failedErrors.join('\n• ')}`);
+                    alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões) (${syncTypeLabel}):\n• ${failedErrors.join('\n• ')}`);
                 } else if (failedErrors.length > 0) {
-                    alert(`⚠️ Sincronização parcial (${successCount} sucesso, ${failedErrors.length} falha):\n• ${totalImported} novo(s) registro(s) sincronizado(s).\n\nMotivo:\n• ${failedErrors.join('\n• ')}`);
+                    alert(`⚠️ Sincronização parcial (${successCount} sucesso, ${failedErrors.length} falha) - ${syncTypeLabel}:\n• ${totalImported} novo(s) registro(s) sincronizado(s).\n\nMotivo:\n• ${failedErrors.join('\n• ')}`);
                 } else {
-                    alert(`✅ Sincronização de ${successCount} conexão(ões) concluída com sucesso!\n• ${totalImported} novo(s) registro(s) sincronizado(s).`);
+                    alert(`✅ Sincronização de ${successCount} conexão(ões) concluída com sucesso (${syncTypeLabel})!\n• ${totalImported} novo(s) registro(s) sincronizado(s).`);
                 }
             } catch (err) {
                 console.error("Erro ao sincronizar conexões:", err);
@@ -5197,7 +5200,7 @@ function openBankModal() {
                 isSyncingAllPluggyInProgress = false;
                 if (btn) {
                     btn.disabled = false;
-                    btn.innerHTML = origHtml || '<i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Sincronizar Todas';
+                    btn.innerHTML = origHtml;
                     if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
                 }
             }
@@ -5358,14 +5361,22 @@ function openBankModal() {
 
         async function syncPluggyItem(itemId, options = {}) {
             if (!itemId) return null;
-            const { silent = false, triggerUpdate = false, fromAutoPoll = false } = options;
+            const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false } = options;
+
+            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemId}`) || document.getElementById(`btn-sync-total-${itemId}`);
+            const origHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
+                if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+            }
 
             try {
                 const headers = await getAuthHeaders(true);
                 const resp = await fetch('/api/pluggy-sync', {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ itemId, triggerUpdate })
+                    body: JSON.stringify({ itemId, triggerUpdate, fullSync })
                 });
 
                 if (!resp.ok) {
@@ -5874,6 +5885,12 @@ function openBankModal() {
                     alert(errMsg);
                 }
                 return { ok: false, error: errMsg };
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = origHtml;
+                    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+                }
             }
         }
 
