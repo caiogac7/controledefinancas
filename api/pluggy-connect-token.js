@@ -1,69 +1,92 @@
-const { createClient } = require('@supabase/supabase-js');
-const { PluggyClient } = require('pluggy-sdk');
-
-const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
-
 /**
  * POST /api/pluggy-connect-token
- * Autentica o usuário via JWT do Supabase e gera um Connect Token oficial na Pluggy
- * usando o SDK oficial `pluggy-sdk` (PluggyClient) sem expor CLIENT_ID/CLIENT_SECRET.
+ * Gera o Connect Token na Pluggy via REST nativo (CommonJS)
  */
 module.exports = async function handler(req, res) {
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+  // Configuração de cabeçalhos CORS
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Método não permitido', erro: 'Método não permitido' });
+  }
+
+  try {
+    const clientId = process.env.PLUGGY_CLIENT_ID;
+    const clientSecret = process.env.PLUGGY_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({
+        error: 'Variáveis PLUGGY_CLIENT_ID ou PLUGGY_CLIENT_SECRET não definidas na Vercel.',
+        erro: 'Variáveis PLUGGY_CLIENT_ID ou PLUGGY_CLIENT_SECRET não definidas na Vercel.'
+      });
     }
-    if (req.method !== 'POST') {
-        return res.status(405).json({ erro: 'Método não permitido' });
+
+    // Obter API Key da Pluggy via autenticação
+    const authResponse = await fetch('https://api.pluggy.ai/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, clientSecret })
+    });
+
+    if (!authResponse.ok) {
+      const authErr = await authResponse.text();
+      console.error('[Pluggy Auth Error]:', authErr);
+      return res.status(authResponse.status).json({
+        error: 'Falha na autenticação da Pluggy',
+        erro: 'Falha na autenticação da Pluggy',
+        details: authErr
+      });
     }
 
-    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
-    const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
-    const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
+    const { apiKey } = await authResponse.json();
 
-    if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
-        return res.status(500).json({
-            erro: 'Credenciais da Pluggy ausentes no servidor. Configure PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET nas variáveis de ambiente da Vercel.'
-        });
+    // Prepara payload de criação do Connect Token
+    const bodyPayload = (req.body && typeof req.body === 'object') ? { ...req.body } : {};
+
+    // Criar o connect token
+    const tokenResponse = await fetch('https://api.pluggy.ai/connect_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-KEY': apiKey
+      },
+      body: JSON.stringify(bodyPayload)
+    });
+
+    if (!tokenResponse.ok) {
+      const tokenErr = await tokenResponse.text();
+      console.error('[Pluggy Token Error]:', tokenErr);
+      return res.status(tokenResponse.status).json({
+        error: 'Falha ao gerar Connect Token na Pluggy',
+        erro: 'Falha ao gerar Connect Token na Pluggy',
+        details: tokenErr
+      });
     }
 
-    // Validação JWT do Supabase (OWASP A01 / A07)
-    const authHeader = req.headers.authorization || '';
-    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-    if (!jwt || !SUPABASE_KEY) {
-        return res.status(401).json({ erro: 'Token de autenticação ausente' });
-    }
+    const tokenData = await tokenResponse.json();
+    const finalToken = tokenData.accessToken || tokenData.connectToken;
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    return res.status(200).json({
+      ...tokenData,
+      accessToken: finalToken,
+      connectToken: finalToken
+    });
 
-    try {
-        const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
-        if (authError || !authData?.user) {
-            return res.status(401).json({ erro: 'Sessão inválida ou expirada' });
-        }
-
-        const user = authData.user;
-        const { itemId } = req.body || {};
-
-        if (itemId && !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
-            return res.status(400).json({ erro: 'itemId inválido' });
-        }
-
-        const pluggyClient = new PluggyClient({
-            clientId: PLUGGY_CLIENT_ID,
-            clientSecret: PLUGGY_CLIENT_SECRET
-        });
-
-        const tokenData = await pluggyClient.createConnectToken(
-            itemId ? String(itemId) : undefined,
-            { clientUserId: String(user.id) }
-        );
-
-        return res.status(200).json({
-            connectToken: tokenData.accessToken
-        });
-    } catch (error) {
-        console.error('Erro em /api/pluggy-connect-token:', error);
-        return res.status(500).json({ erro: 'Erro ao gerar Connect Token na Pluggy: ' + (error?.message || 'Erro interno') });
-    }
+  } catch (error) {
+    console.error('[pluggy-connect-token crash]:', error.message);
+    return res.status(500).json({
+      error: error.message || 'Erro interno do servidor',
+      erro: error.message || 'Erro interno do servidor'
+    });
+  }
 };

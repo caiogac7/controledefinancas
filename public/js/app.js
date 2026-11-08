@@ -5268,13 +5268,26 @@ function openBankModal() {
                     body: JSON.stringify(updateItemId ? { itemId: updateItemId } : {})
                 });
 
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    let friendlyMsg = 'Não foi possível obter o Connect Token da Pluggy.';
+                    try {
+                        const parsed = JSON.parse(errText);
+                        friendlyMsg = parsed.error || parsed.erro || friendlyMsg;
+                    } catch (_) {
+                        if (errText) friendlyMsg = `Erro no servidor (${resp.status}): ${errText.slice(0, 140)}`;
+                    }
+                    throw new Error(friendlyMsg);
+                }
+
                 const data = await resp.json();
-                if (!resp.ok || !data.connectToken) {
-                    throw new Error(data.erro || 'Não foi possível obter o Connect Token da Pluggy.');
+                const connectToken = data.connectToken || data.accessToken;
+                if (!connectToken) {
+                    throw new Error(data.error || data.erro || 'Não foi possível obter o Connect Token da Pluggy.');
                 }
 
                 const pluggyConnect = new PluggyConnect({
-                    connectToken: data.connectToken,
+                    connectToken,
                     updateItem: updateItemId || undefined,
                     includeSandbox: true,
                     onSuccess: async (itemData) => {
@@ -5333,10 +5346,19 @@ function openBankModal() {
                     body: JSON.stringify({ itemId, triggerUpdate })
                 });
 
-                const data = await resp.json();
                 if (!resp.ok) {
-                    throw new Error(data.erro || 'Erro ao sincronizar dados da Pluggy.');
+                    const errText = await resp.text();
+                    let friendlyMsg = 'Erro ao sincronizar dados da Pluggy.';
+                    try {
+                        const parsed = JSON.parse(errText);
+                        friendlyMsg = parsed.error || parsed.erro || friendlyMsg;
+                    } catch (_) {
+                        if (errText) friendlyMsg = `Erro no servidor (${resp.status}): ${errText.slice(0, 140)}`;
+                    }
+                    throw new Error(friendlyMsg);
                 }
+
+                const data = await resp.json();
 
                 const itemInfo = data.item || {};
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
