@@ -25,11 +25,11 @@ module.exports = async function handler(req, res) {
     const userKeyHeader = req.headers['x-gemini-key'] || req.headers['X-Gemini-Key'];
     const apiKey = (userKeyHeader && typeof userKeyHeader === 'string') ? userKeyHeader.trim() : '';
 
-    if (!apiKey || !apiKey.startsWith('AIza')) {
+    if (!apiKey) {
       return res.status(400).json({
         ok: false,
-        code: 'API_KEY_INVALID_FORMAT',
-        error: 'Chave de API do Gemini ausente ou inválida no seu perfil. Acesse Configurações da Chave e informe uma chave válida da Google AI Studio iniciada em "AIza".'
+        code: 'API_KEY_MISSING',
+        error: 'Chave de API do Gemini ausente no seu perfil. Acesse Configurações da Chave e informe sua chave de API.'
       });
     }
 

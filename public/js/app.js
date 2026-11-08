@@ -1773,7 +1773,7 @@
                     paidToBottomMode: Boolean(paidToBottomMode),
                     geminiApiKey: (() => {
                         const k = String((typeof getStoredAiKey === 'function' ? getStoredAiKey() : '') || profileData?.settings_json?.geminiApiKey || '').trim();
-                        return k.startsWith('AIza') ? k : '';
+                        return k;
                     })(),
                     ...(existingTerms ? { termsAcceptance: existingTerms } : {})
                 };
@@ -6916,13 +6916,10 @@ function openBankModal() {
                 localStorage.removeItem('gemini_api_key');
                 localStorage.removeItem('google_ai_key');
                 const dbGeminiKey = String(remoteSettings.geminiApiKey || '').trim();
-                if (dbGeminiKey && dbGeminiKey.startsWith('AIza')) {
+                if (dbGeminiKey) {
                     localStorage.setItem(`gemini_api_key_${profile.id}`, dbGeminiKey);
                 } else {
                     localStorage.removeItem(`gemini_api_key_${profile.id}`);
-                    if (remoteSettings.geminiApiKey) {
-                        delete remoteSettings.geminiApiKey;
-                    }
                 }
             } catch (_) {}
 
@@ -11959,7 +11956,7 @@ function getStoredAiKey() {
     try {
         // 1. Prioridade absoluta: registro do usuário autenticado em memória (vindo do banco de dados)
         const profileKey = String(currentUser?.settings_json?.geminiApiKey || '').trim();
-        if (profileKey && profileKey.startsWith('AIza')) {
+        if (profileKey) {
             if (currentUser?.id) {
                 localStorage.setItem(`gemini_api_key_${currentUser.id}`, profileKey);
             }
@@ -11968,7 +11965,7 @@ function getStoredAiKey() {
         // 2. Cache secundário estritamente isolado pelo ID do usuário logado
         if (currentUser?.id) {
             const scopedKey = String(localStorage.getItem(`gemini_api_key_${currentUser.id}`) || '').trim();
-            if (scopedKey && scopedKey.startsWith('AIza')) {
+            if (scopedKey) {
                 return scopedKey;
             }
         }
@@ -11982,7 +11979,7 @@ async function fetchUserGeminiApiKey() {
     try {
         // 1. Tenta obter da memória do perfil já carregado
         let key = String(currentUser?.settings_json?.geminiApiKey || '').trim();
-        if (key && key.startsWith('AIza')) {
+        if (key) {
             return key;
         }
 
@@ -11999,7 +11996,7 @@ async function fetchUserGeminiApiKey() {
                     currentUser.settings_json = {};
                 }
                 const dbKey = String(data.settings_json.geminiApiKey || '').trim();
-                if (dbKey && dbKey.startsWith('AIza')) {
+                if (dbKey) {
                     currentUser.settings_json.geminiApiKey = dbKey;
                     localStorage.setItem(`gemini_api_key_${currentUser.id}`, dbKey);
                     return dbKey;
@@ -12010,7 +12007,7 @@ async function fetchUserGeminiApiKey() {
         // 3. Fallback para o cache local escopado do usuário
         if (currentUser?.id) {
             const cached = String(localStorage.getItem(`gemini_api_key_${currentUser.id}`) || '').trim();
-            if (cached && cached.startsWith('AIza')) {
+            if (cached) {
                 return cached;
             }
         }
@@ -12049,13 +12046,6 @@ async function saveAiKeySettings() {
         localStorage.removeItem('google_ai_key');
 
         if (keyVal) {
-            if (!keyVal.startsWith('AIza')) {
-                if (typeof showSystemAlert === 'function') {
-                    showSystemAlert('Chave inválida! As chaves oficiais da Google AI Studio começam obrigatoriamente com "AIza". Verifique se o navegador não preencheu sua senha por engano e cole uma chave válida.', 'warning');
-                }
-                return;
-            }
-
             if (currentUser?.id) {
                 localStorage.setItem(`gemini_api_key_${currentUser.id}`, keyVal);
                 if (!currentUser.settings_json || typeof currentUser.settings_json !== 'object') {
@@ -12069,7 +12059,7 @@ async function saveAiKeySettings() {
             }
             window.lastGeminiError = null;
             if (typeof showSystemAlert === 'function') {
-                showSystemAlert('Chave de API do Gemini validada e salva com sucesso no seu perfil!', 'success');
+                showSystemAlert('Chave de API do Gemini salva com sucesso no seu perfil!', 'success');
             }
         } else {
             if (currentUser?.id) {
@@ -12707,12 +12697,12 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
     lastAiPromptPayload = `=== SYSTEM INSTRUCTION ===\n${systemInstruction}\n\n=== USER PROMPT ===\n${userPromptText}`;
     window.lastGeminiError = null;
 
-    // 2. Validação estrita do formato oficial do Google AI Studio ("AIza...") antes de disparar qualquer fetch
-    if (!userApiKey || !userApiKey.startsWith('AIza')) {
-        const missingMsg = 'Chave de API do Google Gemini não configurada ou em formato inválido. Acesse "Configurar Chave" e insira uma chave válida do Google AI Studio (iniciada em "AIza").';
+    // 2. Validação de existência da chave antes de disparar qualquer fetch
+    if (!userApiKey) {
+        const missingMsg = 'Chave de API do Google Gemini não configurada. Acesse "Configurar Chave" e insira sua chave de API.';
         window.lastGeminiError = {
             status: 400,
-            code: 'API_KEY_MISSING_OR_INVALID_FORMAT',
+            code: 'API_KEY_MISSING',
             message: missingMsg,
             model: 'gemini-2.5-flash'
         };
