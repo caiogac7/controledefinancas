@@ -100,4 +100,16 @@
   2. **📦 Sincronização Geral (`syncMode: 'total'`):** Varredura completa de todo o histórico disponível na instituição bancária.
 - **Limpeza Visual nos Cards de Conexão:** Cada instituição conectada exibe apenas os botões essenciais: `7 Dias`, `Geral`, `Reconectar` e `×` (Desvincular).
 - **Tratamento no Backend (`/api/pluggy-sync`):** Mantido o tratamento inteligente que detecta conexões `MeuPluggy` e ignora o `PATCH /items/{id}` (bloqueado pelo provedor), garantindo que tanto a consulta de 7 dias quanto a geral sejam concluídas em poucos segundos sem falhas ou erros 400.
-- **Versionamento de Cache:** `bootstrap.js` atualizado para `20261108_clean_sync_v3`.
+### 11. Refatoração UI/UX Mobile-First de Containers de Topo (Headers & Hero Sections)
+- **Compactação de Altura e Paddings:**
+  - Redução de padding vertical dos blocos hero de `p-5` / `p-6` para `p-3.5 sm:p-5 md:p-6` com bordas arredondadas adaptativas (`rounded-2xl md:rounded-3xl`), liberando espaço vertical essencial no celular.
+  - Títulos principais redimensionados para `text-base sm:text-lg md:text-xl font-extrabold` com truncamento defensivo no mobile.
+  - Parágrafos descritivos secundários configurados com `hidden sm:block`, mantendo a tela do smartphone focada estritamente nas métricas e ações sem empurrar os dados para baixo da dobra.
+- **Agrupamento Inteligente de Ações (Fim da Poluição Visual):**
+  - **Cabeçalho de Bancos & Conciliação:** O botão de maior prioridade (`Conectar Open Finance (Pluggy)`) recebe largura total ou destaque superior com gradiente âmbar/laranja; os outros 4 botões secundários (`Novo Banco`, `Importar OFX`, `Alinhar Saldos`, `Limpar`) organizam-se em uma grade 2x2 simétrica no mobile (`grid grid-cols-2 sm:flex sm:flex-wrap gap-2`).
+  - **Painel de Conexões Automáticas:** Sincronização dividida em botões principais (`7 Dias` e `Geral`) em grade de 2 colunas, com botões utilitários compactos (`Manual`, `JSON`, `Conectar`) em linha de 3 colunas no celular.
+  - **Compras Parceladas:** Ações organizadas em grade de 2 colunas (`Nova Compra` e `Conta Fixa`).
+  - **Relatórios:** Exportação organizada em grade de 3 colunas compactas (`PDF`, `Mês`, `Geral`).
+- **Alinhamento Flexível Responsivo (Column to Row):**
+  - Containers configurados com `flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4`, garantindo empilhamento limpo do título sobre os botões no mobile e alinhamento horizontal elegante no desktop.
+- **Versionamento de Cache:** `bootstrap.js` atualizado para `20261108_mobile_header_compact_v4`.

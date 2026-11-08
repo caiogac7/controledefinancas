@@ -467,59 +467,80 @@
                 <!-- ABA 2: BANCOS & EXTRATOS OFX/CSV (SEPARADO DA VISÃO GERAL) -->
                 <!-- ========================================================= -->
                 <section id="view-banks" class="hidden space-y-5">
-                    <div class="bg-gradient-to-r from-[#12131C] via-[#171825] to-[#12131C] border border-rose-500/20 text-white p-5 rounded-3xl shadow-xl relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-400">Open Finance Pluggy & Extratos Isolados</span>
-                            <h3 class="text-lg font-extrabold mt-0.5">Meus Bancos, Open Finance & Conciliação</h3>
-                            <p class="text-xs text-slate-300 mt-1">Conecte seus bancos automaticamente via Open Finance (Pluggy) ou importe arquivos OFX/CSV.</p>
+                    <!-- Cabeçalho de Bancos & Open Finance -->
+                    <div class="bg-gradient-to-r from-[#12131C] via-[#171825] to-[#12131C] border border-rose-500/20 text-white p-3.5 sm:p-5 md:p-6 rounded-2xl md:rounded-3xl shadow-xl relative overflow-hidden flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4">
+                        <div class="min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-rose-400">Open Finance & Extratos</span>
+                            <h3 class="text-base sm:text-lg md:text-xl font-extrabold mt-0.5 tracking-tight truncate sm:whitespace-normal">Meus Bancos, Open Finance & Conciliação</h3>
+                            <p class="hidden sm:block text-xs text-slate-300 mt-1 max-w-xl">Conecte seus bancos automaticamente via Open Finance (Pluggy) ou importe arquivos OFX/CSV.</p>
                         </div>
-                        <div class="flex flex-wrap gap-2">
-                            <button id="btn-pluggy-connect" onclick="openPluggyConnect()" class="px-4 py-2.5 bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-slate-950 rounded-xl text-xs font-extrabold shadow-lg flex items-center gap-1.5 transition">
-                                <i data-lucide="zap" class="w-4 h-4"></i> Conectar Open Finance (Pluggy)
+                        <div class="flex flex-col sm:flex-row sm:items-center gap-2 w-full md:w-auto">
+                            <!-- Ação Principal em Destaque -->
+                            <button id="btn-pluggy-connect" onclick="openPluggyConnect()" class="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-slate-950 rounded-xl text-xs font-black shadow-lg flex items-center justify-center gap-1.5 transition active:scale-[0.98]">
+                                <i data-lucide="zap" class="w-4 h-4"></i>
+                                <span>Conectar Open Finance (Pluggy)</span>
                             </button>
-                            <button type="button" onclick="resetAllOpenFinanceAndBanks()" class="px-4 py-2.5 bg-rose-500/25 hover:bg-rose-500/40 border border-rose-500/40 text-rose-200 hover:text-white rounded-xl text-xs font-extrabold shadow flex items-center gap-1.5 transition cursor-pointer" title="Excluir todas as contas do Open Finance e resetar bancos">
-                                <i data-lucide="trash-2" class="w-4 h-4 text-rose-400"></i> Limpar Open Finance & Bancos
-                            </button>
-                            <button onclick="openBalanceAlignmentModal()" class="px-4 py-2.5 bg-white/10 hover:bg-white/15 border border-white/10 text-white rounded-xl text-xs font-extrabold shadow flex items-center gap-1.5 transition">
-                                <i data-lucide="scale" class="w-4 h-4"></i> Alinhar Saldos
-                            </button>
-                            <button onclick="openBankModal()" class="px-4 py-2.5 bg-white text-rose-950 hover:bg-slate-800 rounded-xl text-xs font-extrabold shadow flex items-center gap-1.5">
-                                <i data-lucide="plus" class="w-4 h-4"></i> Novo Banco
-                            </button>
-                            <button onclick="openOfxModal()" class="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-extrabold shadow flex items-center gap-1.5">
-                                <i data-lucide="upload-cloud" class="w-4 h-4"></i> Importar Extrato OFX / CSV
-                            </button>
+                            <!-- Ações Secundárias em Grid 2x2 no Mobile / Flex no Desktop -->
+                            <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 w-full sm:w-auto">
+                                <button onclick="openBankModal()" class="px-3 py-2 bg-white text-slate-950 hover:bg-slate-200 rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                                    <span>Novo Banco</span>
+                                </button>
+                                <button onclick="openOfxModal()" class="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                    <i data-lucide="upload-cloud" class="w-3.5 h-3.5"></i>
+                                    <span>Importar OFX</span>
+                                </button>
+                                <button onclick="openBalanceAlignmentModal()" class="px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/10 text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                    <i data-lucide="scale" class="w-3.5 h-3.5"></i>
+                                    <span>Alinhar Saldos</span>
+                                </button>
+                                <button type="button" onclick="resetAllOpenFinanceAndBanks()" class="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 text-rose-200 hover:text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer" title="Excluir todas as contas do Open Finance e resetar bancos">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5 text-rose-400"></i>
+                                    <span>Limpar</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
                     <!-- PAINEL DE CONEXÕES OPEN FINANCE (PLUGGY) -->
-                    <div id="pluggy-connections-card" class="pluggy-card bg-white dark:bg-[#0f121a] p-5 rounded-2xl border border-slate-200/80 dark:border-white/5 shadow-sm space-y-3">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <div class="flex items-center gap-2.5">
-                                <div class="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400 flex items-center justify-center">
-                                    <i data-lucide="link-2" class="w-5 h-5"></i>
+                    <div id="pluggy-connections-card" class="pluggy-card bg-white dark:bg-[#0f121a] p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-white/5 shadow-sm space-y-3">
+                        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                            <div class="flex items-center gap-2.5 min-w-0">
+                                <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-amber-100 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0">
+                                    <i data-lucide="link-2" class="w-4 h-4 sm:w-5 sm:h-5"></i>
                                 </div>
-                                <div>
-                                    <h4 class="text-sm font-extrabold text-slate-800 dark:text-white">Conexões Automáticas Open Finance (Pluggy)</h4>
-                                    <p class="text-[11px] text-slate-500 dark:text-slate-400">Sincroniza saldos bancários, faturas de cartão e importa transações e parcelas automaticamente.</p>
+                                <div class="min-w-0">
+                                    <h4 class="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-white truncate">Conexões Automáticas Open Finance (Pluggy)</h4>
+                                    <p class="hidden sm:block text-[11px] text-slate-500 dark:text-slate-400">Sincroniza saldos bancários, faturas de cartão e parcelas automaticamente.</p>
                                 </div>
                             </div>
-                            <div class="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-                                <button type="button" onclick="openPluggyGuideModal()" class="px-3.5 py-2 bg-rose-950/20 dark:bg-rose-950/40 hover:bg-rose-950/30 dark:hover:bg-rose-950/50/60 text-rose-300 dark:text-rose-300 border border-rose-900/30/80 dark:border-rose-900/40 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition" title="Guia com o passo a passo para conectar seus bancos pelo MeuPluggy">
-                                    <i data-lucide="help-circle" class="w-3.5 h-3.5 text-rose-400"></i> Como Conectar (Manual)
-                                </button>
-                                <button id="btn-download-pluggy-json" onclick="downloadPluggyDebugJson()" class="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5" title="Baixar arquivo JSON com os dados brutos de cartão e contas recebidos da API Pluggy">
-                                    <i data-lucide="download" class="w-3.5 h-3.5 text-rose-400"></i> JSON Bruto API
-                                </button>
-                                <button id="btn-sync-all-pluggy-7d" onclick="syncAllPluggyItems('7d')" style="touch-action: manipulation;" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza as movimentações dos últimos 7 dias">
-                                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 🔄 Últimos 7 Dias
-                                </button>
-                                <button id="btn-sync-all-pluggy-total" onclick="syncAllPluggyItems('total')" style="touch-action: manipulation;" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível de todas as instituições">
-                                    <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-200"></i> 📦 Sincronização Geral
-                                </button>
-                                <button onclick="openPluggyConnect()" class="px-3.5 py-2 bg-[#FF2E4D] hover:bg-[#E61937] text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-lg shadow-rose-950/40 transition">
-                                    <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-amber-300"></i> Conectar Instituição
-                                </button>
+                            <div class="flex flex-col sm:flex-row sm:items-center gap-2 w-full md:w-auto">
+                                <!-- Botões Principais de Sincronização em Grid 2 Colunas no Mobile -->
+                                <div class="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
+                                    <button id="btn-sync-all-pluggy-7d" onclick="syncAllPluggyItems('7d')" style="touch-action: manipulation;" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza as movimentações dos últimos 7 dias">
+                                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                                        <span>7 Dias</span>
+                                    </button>
+                                    <button id="btn-sync-all-pluggy-total" onclick="syncAllPluggyItems('total')" style="touch-action: manipulation;" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível de todas as instituições">
+                                        <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-200"></i>
+                                        <span>Geral</span>
+                                    </button>
+                                </div>
+                                <!-- Botões Utilitários Compactos -->
+                                <div class="grid grid-cols-3 sm:flex sm:items-center gap-1.5 w-full sm:w-auto">
+                                    <button type="button" onclick="openPluggyGuideModal()" class="px-2.5 py-1.5 bg-rose-950/20 dark:bg-rose-950/40 hover:bg-rose-950/30 text-rose-300 border border-rose-900/30 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1 transition" title="Guia com o passo a passo para conectar seus bancos pelo MeuPluggy">
+                                        <i data-lucide="help-circle" class="w-3.5 h-3.5 text-rose-400"></i>
+                                        <span>Manual</span>
+                                    </button>
+                                    <button id="btn-download-pluggy-json" onclick="downloadPluggyDebugJson()" class="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1" title="Baixar arquivo JSON com os dados brutos de cartão e contas recebidos da API Pluggy">
+                                        <i data-lucide="download" class="w-3.5 h-3.5 text-rose-400"></i>
+                                        <span>JSON</span>
+                                    </button>
+                                    <button onclick="openPluggyConnect()" class="px-2.5 py-1.5 bg-[#FF2E4D] hover:bg-[#E61937] text-white rounded-xl text-[11px] font-black flex items-center justify-center gap-1 shadow-sm transition">
+                                        <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-amber-300"></i>
+                                        <span>Conectar</span>
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -528,16 +549,16 @@
 
                     <div id="banks-grid-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
 
-                    <div class="pluggy-card bg-white dark:bg-[#0f121a] p-5 rounded-2xl border border-slate-200/80 dark:border-white/5 shadow-sm space-y-4">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div class="pluggy-card bg-white dark:bg-[#0f121a] p-3.5 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-white/5 shadow-sm space-y-3">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                             <div>
-                                <h4 class="text-sm font-extrabold text-slate-800 dark:text-white">Extrato Bancário Importado (OFX / CSV) — <span id="bank-stmt-month-label" class="text-rose-400"></span></h4>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">Estes itens compõem o saldo do banco selecionado, mas ficam ocultos da sua Visão Mensal de contas.</p>
+                                <h4 class="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-white">Extrato Bancário Importado (OFX / CSV) — <span id="bank-stmt-month-label" class="text-rose-400"></span></h4>
+                                <p class="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Estes itens compõem o saldo do banco selecionado, mas ficam ocultos da sua Visão Mensal de contas.</p>
                             </div>
-                            <div class="flex items-center gap-2">
-                                <select id="bank-stmt-filter" onchange="renderBanksView()" class="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"></select>
-                                <button onclick="clearBankStatementsMonth()" class="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 text-xs font-bold hover:bg-rose-100">
-                                    Limpar Extrato do Mês
+                            <div class="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
+                                <select id="bank-stmt-filter" onchange="renderBanksView()" class="w-full sm:w-auto px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"></select>
+                                <button onclick="clearBankStatementsMonth()" class="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 text-xs font-bold hover:bg-rose-100 flex items-center justify-center gap-1">
+                                    Limpar Mês
                                 </button>
                             </div>
                         </div>
@@ -550,55 +571,57 @@
                 <!-- ========================================================= -->
                 <section id="view-installments" class="hidden space-y-5">
                     <!-- Cabeçalho de Planejamento & Parcelas -->
-                    <div class="bg-gradient-to-r from-[#12131C] via-[#171825] to-[#12131C] border border-rose-500/20 text-white p-5 rounded-3xl shadow-xl relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-400">Controle de Longo Prazo</span>
-                            <h3 class="text-lg font-extrabold mt-0.5"><span class="notranslate" translate="no">Compras Parceladas</span> — <span id="inst-month-title" class="text-emerald-300">Nov 2026</span></h3>
-                            <p class="text-xs text-slate-300 mt-1">Gerencie compras parceladas, acompanhe quando cada dívida termina e projete seu saldo nos próximos meses.</p>
+                    <div class="bg-gradient-to-r from-[#12131C] via-[#171825] to-[#12131C] border border-rose-500/20 text-white p-3.5 sm:p-5 md:p-6 rounded-2xl md:rounded-3xl shadow-xl relative overflow-hidden flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4">
+                        <div class="min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-rose-400">Controle de Longo Prazo</span>
+                            <h3 class="text-base sm:text-lg md:text-xl font-extrabold mt-0.5 tracking-tight truncate sm:whitespace-normal"><span class="notranslate" translate="no">Compras Parceladas</span> — <span id="inst-month-title" class="text-emerald-300">Nov 2026</span></h3>
+                            <p class="hidden sm:block text-xs text-slate-300 mt-1 max-w-xl">Gerencie compras parceladas, acompanhe quando cada dívida termina e projete seu saldo nos próximos meses.</p>
                         </div>
-                        <div class="flex flex-wrap gap-2">
-                            <button onclick="openNewInstallmentModal()" class="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-extrabold shadow-lg flex items-center gap-1.5 transition">
-                                <i data-lucide="plus-circle" class="w-4 h-4"></i> Nova Compra Parcelada
+                        <div class="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full md:w-auto">
+                            <button onclick="openNewInstallmentModal()" class="px-3.5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-lg flex items-center justify-center gap-1.5 transition active:scale-95">
+                                <i data-lucide="plus-circle" class="w-4 h-4 text-emerald-100"></i>
+                                <span>Nova Compra</span>
                             </button>
-                            <button onclick="openTransactionModal()" class="px-3.5 py-2.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
-                                <i data-lucide="repeat" class="w-4 h-4"></i> Conta Fixa / Recorrente
+                            <button onclick="openTransactionModal()" class="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 border border-white/10 text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                <i data-lucide="repeat" class="w-4 h-4 text-rose-400"></i>
+                                <span>Conta Fixa</span>
                             </button>
                         </div>
                     </div>
 
                     <!-- KPIs de Planejamento & Comprometimento Futuro -->
                     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 perspective-container">
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-[#FF2E4D]">Parcelas no Mês</span>
-                            <p id="plan-kpi-month-inst" class="text-lg md:text-xl font-extrabold mt-1 text-white">R$ 0,00</p>
-                            <p id="plan-kpi-month-inst-sub" class="text-[11px] text-slate-400 mt-1">0 parcelamentos ativos</p>
+                        <div class="pluggy-card p-3.5 sm:p-4 rounded-2xl border border-white/5 shadow-sm">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#FF2E4D]">Parcelas no Mês</span>
+                            <p id="plan-kpi-month-inst" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-white">R$ 0,00</p>
+                            <p id="plan-kpi-month-inst-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">0 parcelamentos ativos</p>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-500">Saldo Devedor Futuro</span>
-                            <p id="plan-kpi-future-debt" class="text-lg md:text-xl font-extrabold mt-1 text-rose-400">R$ 0,00</p>
-                            <p id="plan-kpi-future-debt-sub" class="text-[11px] text-slate-400 mt-1">Restante após este mês</p>
+                        <div class="pluggy-card p-3.5 sm:p-4 rounded-2xl border border-white/5 shadow-sm">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-rose-500">Saldo Devedor Futuro</span>
+                            <p id="plan-kpi-future-debt" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-rose-400">R$ 0,00</p>
+                            <p id="plan-kpi-future-debt-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">Restante após este mês</p>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-amber-500">Custo Fixo Mensal</span>
-                            <p id="plan-kpi-fixed-cost" class="text-lg md:text-xl font-extrabold mt-1 text-amber-400">R$ 0,00</p>
-                            <p id="plan-kpi-fixed-cost-sub" class="text-[11px] text-slate-400 mt-1">Contas fixas recorrentes</p>
+                        <div class="pluggy-card p-3.5 sm:p-4 rounded-2xl border border-white/5 shadow-sm">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-amber-500">Custo Fixo Mensal</span>
+                            <p id="plan-kpi-fixed-cost" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-amber-400">R$ 0,00</p>
+                            <p id="plan-kpi-fixed-cost-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">Contas fixas recorrentes</p>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-500">Próximo Alívio Mensal</span>
-                            <p id="plan-kpi-relief" class="text-lg md:text-xl font-extrabold mt-1 text-emerald-400">R$ 0,00</p>
-                            <p id="plan-kpi-relief-sub" class="text-[11px] text-slate-400 mt-1">Parcelas que encerram neste mês</p>
+                        <div class="pluggy-card p-3.5 sm:p-4 rounded-2xl border border-white/5 shadow-sm">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-emerald-500">Próximo Alívio</span>
+                            <p id="plan-kpi-relief" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-emerald-400">R$ 0,00</p>
+                            <p id="plan-kpi-relief-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">Encerram neste mês</p>
                         </div>
                     </div>
 
                     <!-- Lista de Contratos / Compras Parceladas -->
-                    <div class="pluggy-card p-5 rounded-2xl border border-white/5 shadow-sm">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                    <div class="pluggy-card p-3.5 sm:p-5 rounded-2xl border border-white/5 shadow-sm">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3 sm:mb-4">
                             <div>
-                                <h3 class="text-sm font-extrabold text-slate-800 dark:text-white">Contratos & Compras Parceladas Ativas no Mês</h3>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">Clique em qualquer parcelamento para editar valor, banco ou número de parcelas, ou dê baixa direta na parcela do mês.</p>
+                                <h3 class="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-white">Contratos & Compras Parceladas Ativas no Mês</h3>
+                                <p class="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Clique em qualquer parcelamento para editar valor, banco ou número de parcelas, ou dê baixa direta na parcela do mês.</p>
                             </div>
-                            <div class="flex items-center gap-2">
-                                <button type="button" onclick="openBatchChangeInstallmentsBankModal()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-extrabold text-xs flex items-center gap-1.5 transition border border-white/10 shadow-sm whitespace-nowrap active:scale-[0.98]">
+                            <div class="flex items-center gap-2 w-full sm:w-auto">
+                                <button type="button" onclick="openBatchChangeInstallmentsBankModal()" class="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition border border-white/10 shadow-sm whitespace-nowrap active:scale-[0.98]">
                                     <i data-lucide="layers" class="w-3.5 h-3.5 text-[#FF2E4D]"></i>
                                     <span>Mudar Carteira em Massa</span>
                                 </button>
@@ -893,21 +916,24 @@
 
 <section id="view-reports" class="hidden space-y-5">
                     <!-- Cabeçalho de Análise Financeira -->
-                    <div class="bg-gradient-to-r from-[#141522] via-[#1A1C28] to-[#201524] border border-rose-500/20 text-white p-5 rounded-3xl shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div>
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-200">Inteligência & Diagnóstico</span>
-                            <h3 class="text-lg font-extrabold mt-0.5">Relatórios & Análise Financeira — <span id="rep-month-title" class="text-emerald-300">Nov 2026</span></h3>
-                            <p class="text-xs text-slate-200 mt-1">Indicadores de comprometimento de renda, divisão de custos fixos vs. parcelados, ranking de gastos e evolução anual.</p>
+                    <div class="bg-gradient-to-r from-[#141522] via-[#1A1C28] to-[#201524] border border-rose-500/20 text-white p-3.5 sm:p-5 md:p-6 rounded-2xl md:rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4">
+                        <div class="min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-rose-200">Inteligência & Diagnóstico</span>
+                            <h3 class="text-base sm:text-lg md:text-xl font-extrabold mt-0.5 tracking-tight">Relatórios & Análise Financeira — <span id="rep-month-title" class="text-emerald-300">Nov 2026</span></h3>
+                            <p class="hidden sm:block text-xs text-slate-200 mt-1 max-w-xl">Indicadores de comprometimento de renda, divisão de custos fixos vs. parcelados, ranking de gastos e evolução anual.</p>
                         </div>
-                        <div class="flex flex-wrap gap-2 no-print">
-                            <button onclick="window.print()" class="px-4 py-2.5 bg-white text-slate-900 hover:bg-slate-800 rounded-xl text-xs font-extrabold shadow flex items-center gap-1.5">
-                                <i data-lucide="printer" class="w-4 h-4"></i> Imprimir / Salvar PDF
+                        <div class="grid grid-cols-3 sm:flex sm:items-center gap-2 w-full md:w-auto no-print">
+                            <button onclick="window.print()" class="px-3 py-2 bg-white text-slate-900 hover:bg-slate-200 rounded-xl text-xs font-extrabold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+                                <span>PDF</span>
                             </button>
-                            <button onclick="exportCSV(false)" class="px-3.5 py-2.5 bg-[#FF2E4D] hover:bg-[#E61937] text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5 border border-white/20">
-                                <i data-lucide="download" class="w-4 h-4"></i> CSV do Mês
+                            <button onclick="exportCSV(false)" class="px-3 py-2 bg-[#FF2E4D] hover:bg-[#E61937] text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 border border-white/20 transition active:scale-95">
+                                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                                <span>Mês</span>
                             </button>
-                            <button onclick="exportCSV(true)" class="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow flex items-center gap-1.5">
-                                <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> CSV Completo
+                            <button onclick="exportCSV(true)" class="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow flex items-center justify-center gap-1.5 transition active:scale-95">
+                                <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i>
+                                <span>Geral</span>
                             </button>
                         </div>
                     </div>
