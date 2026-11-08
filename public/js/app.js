@@ -1985,6 +1985,13 @@
                             const txGrp = String(t.tx_group || t.txGroup || (isBill ? 'CONSOLIDATED_BILL' : 'MANUAL_PLANNED'));
                             const showHome = typeof t.show_on_home === 'boolean' ? t.show_on_home : (typeof t.showOnHome === 'boolean' ? t.showOnHome : true);
 
+                            let matchedStmt = null;
+                            if (t.reconciledFitid || t.fitid) {
+                                const targetFit = t.reconciledFitid || t.fitid;
+                                matchedStmt = Array.isArray(bankStatements) ? bankStatements.find(s => s && s.fitid === targetFit) : null;
+                            }
+                            const txTransferredAt = t.transferred_at || matchedStmt?.transferred_at || matchedStmt?.purchase_date || t.purchase_date || paidAtIso || null;
+
                             const baseRow = {
                                 id: rowId,
                                 user_id: userId,
@@ -2006,7 +2013,7 @@
                             richTxRows.push({
                                 ...baseRow,
                                 transaction_date: txDateIso,
-                                transferred_at: t.transferred_at || t.purchase_date || paidAtIso || null,
+                                transferred_at: txTransferredAt,
                                 paid_at: paidAtIso,
                                 series_id: sId,
                                 entry_kind: eKind,

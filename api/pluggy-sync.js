@@ -1263,8 +1263,8 @@ async function handler(req, res) {
             });
 
             // REGRA 3: Coleta exaustiva de transações via V2 com cursor pagination (/v2/transactions)
-            const safeOneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-            const dateFrom = from ? String(from).slice(0, 10) : (isCredit ? safeOneYearAgo : undefined);
+            // Busca o maior período histórico disponível retornado pela instituição na Pluggy
+            const dateFrom = from ? String(from).slice(0, 10) : undefined;
             const dateTo = to ? String(to).slice(0, 10) : undefined;
 
             try {
@@ -1392,6 +1392,7 @@ async function handler(req, res) {
                     raw_data: t,
                     raw_description: t.descriptionRaw || t.description || null,
                     purchase_date: ccMeta?.purchaseDate || t.date || null,
+                    transferred_at: t.date || ccMeta?.purchaseDate || null,
                     installment_number: ccMeta?.installmentNumber ? Number(ccMeta.installmentNumber) : (totalInst > 1 ? curInst : null),
                     total_installments: totalInst > 1 ? totalInst : null,
                     bill_id: ccMeta?.billId || null,
