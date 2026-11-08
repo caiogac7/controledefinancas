@@ -15363,22 +15363,33 @@ function buildDetailedTransactionsSummaryForAi(curMonthKey) {
                     remainingInst: Math.max(0, tot - cur),
                     monthKey: t.month,
                     paid: Boolean(t.paid),
-                    category: t.cat || 'Geral'
+                    category: t.cat || 'Geral',
+                    sampleTx: t
                 });
             }
         }
     });
 
-    // Enriquecimento com término e saldo restante
+    // Enriquecimento com término e saldo restante usando valores reais das parcelas futuras
     const installmentList = Array.from(installmentMap.values()).map(item => {
+        let realRemaining = 0;
+        let futureAmount = item.amount;
+        if (typeof computeInstallmentSeriesMetrics === 'function' && item.sampleTx) {
+            const m = computeInstallmentSeriesMetrics(item.sampleTx, curMonthKey);
+            realRemaining = m.remaining;
+            futureAmount = m.nextMonthAmount ?? item.amount;
+        } else {
+            realRemaining = item.amount * item.remainingInst;
+        }
+
         const remainingMonths = item.remainingInst;
         const endMonthKey = (typeof addMonthsToKey === 'function') ? addMonthsToKey(curMonthKey, remainingMonths) : curMonthKey;
         const endMonthObj = (Array.isArray(MONTHS) ? MONTHS.find(m => m.key === endMonthKey) : null) || { label: endMonthKey };
-        const totalRemaining = item.amount * item.remainingInst;
         return {
             ...item,
             endMonthLabel: endMonthObj.label,
-            totalRemaining
+            totalRemaining: realRemaining,
+            futureAmount: futureAmount
         };
     });
 
@@ -15472,7 +15483,11 @@ function buildConsultantInstallmentsText(ctx, auditData) {
         const libera = (p.remainingInst >= 0 && typeof addMonthsToKey === 'function')
             ? consultantMonthLabel(addMonthsToKey(ctx.curMonthKey, p.remainingInst + 1))
             : '-';
-        return `• "${p.name}": parcela ${p.currentInst}/${p.totalInst} de ${formatSimMoney(p.amount)}. Faltam ${p.remainingInst}. Última parcela em ${p.endMonthLabel}; libera ${formatSimMoney(p.amount)}/mês a partir de ${libera}.`;
+        const hasDiffFuture = p.futureAmount && Math.abs(p.futureAmount - p.amount) >= 0.01;
+        const valText = hasDiffFuture
+            ? `${formatSimMoney(p.amount)} neste mês (próximas parcelas: ${formatSimMoney(p.futureAmount)}/mês)`
+            : `${formatSimMoney(p.amount)}/mês`;
+        return `• "${p.name}": parcela ${p.currentInst}/${p.totalInst} (${valText}). Faltam ${p.remainingInst} parcela(s) (total restante: ${formatSimMoney(p.totalRemaining)}). Última parcela em ${p.endMonthLabel}; libera ${formatSimMoney(p.futureAmount || p.amount)}/mês a partir de ${libera}.`;
     }).join('\n');
 }
 
@@ -15597,9 +15612,13 @@ async function handleSendAiChatMessage(event) {
     const auditData = buildDetailedTransactionsSummaryForAi(ctx.curMonthKey);
 
     const parcelasTexto = auditData.installmentList.length > 0
-        ? auditData.installmentList.map(p =>
-            `• "${p.name}": Parcela ${p.currentInst}/${p.totalInst} (R$ ${p.amount.toFixed(2)}/mês). Faltam ${p.remainingInst}x. Término: ${p.endMonthLabel}.`
-          ).join('\n')
+        ? auditData.installmentList.map(p => {
+            const hasDiffFuture = p.futureAmount && Math.abs(p.futureAmount - p.amount) >= 0.01;
+            const valText = hasDiffFuture
+                ? `R$ ${p.amount.toFixed(2)} neste mês / R$ ${p.futureAmount.toFixed(2)} próximas`
+                : `R$ ${p.amount.toFixed(2)}/mês`;
+            return `• "${p.name}": Parcela ${p.currentInst}/${p.totalInst} (${valText}). Faltam ${p.remainingInst}x (restante: ${formatSimMoney(p.totalRemaining)}). Término: ${p.endMonthLabel}.`;
+          }).join('\n')
         : 'Nenhuma compra parcelada em andamento registrada.';
 
     const despesasTexto = auditData.currentMonthExpenses.length > 0
