@@ -4589,29 +4589,7 @@ function openBankModal() {
         window.classifyTransaction5Dimensions = classifyTransaction5Dimensions;
 
         function computeVaultBalance() {
-            let balance = 0;
-            const seenFits = new Set();
-            const curMonthKey = MONTHS[currentMonthIndex]?.key || '2026-11';
-            const allItems = [...bankStatements, ...transactions.filter(t => !t.isInitialBalance && !t.isBalanceAdjustment)];
-            allItems.forEach(item => {
-                if (!item) return;
-                const iMonth = normalizeMonthKey(item.month, '2026-11');
-                if (iMonth !== curMonthKey) return; // Filtra estritamente pelo mês ativo para não herdar resíduos passados de cofrinhos já esvaziados
-
-                const fit = String(item.fitid || '');
-                if (fit && seenFits.has(fit)) return;
-                if (fit) seenFits.add(fit);
-
-                const clean = normalizeTextForMatch(item.desc || '');
-                const isDeposit = clean.includes('reserva por gasto') || clean.includes('reserva programada') || clean.includes('dinheiro guardado') || (item.tx_group === 'VAULT_TX' && item.type === 'expense');
-                const isWithdrawal = clean.includes('dinheiro retirado') || (item.tx_group === 'VAULT_TX' && item.type === 'income');
-                if (isDeposit) balance += Number(item.amount || 0);
-                else if (isWithdrawal) balance -= Number(item.amount || 0);
-            });
-            const computed = Number(Math.max(0, balance).toFixed(2));
-            if (computed > 0) return computed;
-
-            // Leitura passiva do saldo fixo do cofre persistido nas contas bancárias (vault_balance)
+            // Soma apenas os saldos reservados configurados manualmente pelo usuário nos bancos
             const persistedVault = (Array.isArray(banks) ? banks : []).reduce((acc, b) => {
                 const bVault = getBankVaultBalance(b);
                 return acc + Number(bVault || 0);
@@ -4621,85 +4599,18 @@ function openBankModal() {
 
         /**
          * Retorna o saldo reservado (cofrinho / caixinha) específico de uma conta bancária.
-         * Não se mistura com o saldo livre da conta corrente.
+         * O saldo reservado é EXCLUSIVAMENTE configurado manualmente pelo usuário no modal do banco.
+         * NUNCA converte saldo em conta corrente nem aplicação automática em reserva.
          */
         function getBankVaultBalance(b) {
             if (!b) return 0;
-            // 1. Se o usuário personalizou manualmente no modal da conta, respeita a escolha manual
-            if (b.hasCustomVaultBalance && typeof b.vaultBalance === 'number') {
-                return roundCurrency(Math.max(0, b.vaultBalance));
+            // Saldo reservado é estritamente manual: só existe se o usuário configurou no modal
+            if (b.hasCustomVaultBalance && typeof b.vaultBalance === 'number' && b.vaultBalance > 0) {
+                return roundCurrency(b.vaultBalance);
             }
-
-            // 2. Se a conta possui saldo oficial reservado/bloqueado pela Pluggy (Open Finance) ou persistido
-            const explicit = Number(b.vaultBalance ?? b.vault_balance ?? b.reservedBalance ?? 0);
-            if (explicit > 0) {
-                return roundCurrency(explicit);
+            if (b.hasCustomVaultBalance && typeof b.customVaultBalanceValue === 'number' && b.customVaultBalanceValue > 0) {
+                return roundCurrency(b.customVaultBalanceValue);
             }
-
-            const bId = String(b.id || '');
-            const bName = String(b.name || '');
-            const curMonthKey = MONTHS[currentMonthIndex]?.key || '2026-11';
-            let balance = 0;
-            let foundTx = false;
-            const seenFits = new Set();
-            const allItems = [
-                ...(Array.isArray(bankStatements) ? bankStatements : []),
-                ...(Array.isArray(transactions) ? transactions : []).filter(t => !t.isInitialBalance && !t.isBalanceAdjustment)
-            ];
-
-            allItems.forEach(item => {
-                if (!item) return;
-                const iMonth = normalizeMonthKey(item.month, '2026-11');
-                if (iMonth !== curMonthKey) return; // Limita rigorosamente ao mês ativo (ex: Nov 2026)
-
-                const iBankId = String(item.bankId || item.accountId || '');
-                const iBank = String(item.bank || '');
-                const matchBank = (iBankId && iBankId === bId) ||
-                                  (b.pluggyAccountId && String(item.accountId || '') === String(b.pluggyAccountId)) ||
-                                  (bName && iBank && iBank.toLowerCase() === bName.toLowerCase());
-                if (!matchBank) return;
-
-                const fit = String(item.fitid || item.id || '');
-                if (fit && seenFits.has(fit)) return;
-                if (fit) seenFits.add(fit);
-
-                const clean = normalizeTextForMatch(item.desc || item.description || '');
-                const isVault = item.tx_group === 'VAULT_TX' ||
-                                clean.includes('reserva por gasto') ||
-                                clean.includes('reserva programada') ||
-                                clean.includes('dinheiro guardado') ||
-                                clean.includes('dinheiro reservado') ||
-                                clean.includes('reserva autom') ||
-                                clean.includes('cofrinho') ||
-                                clean.includes('dinheiro retirado') ||
-                                clean.includes('resgate');
-
-                if (!isVault) return;
-                foundTx = true;
-
-                const isWithdrawal = clean.includes('dinheiro retirado') ||
-                                     clean.includes('resgate') ||
-                                     (item.type === 'income');
-
-                const isDeposit = clean.includes('reserva por gasto') ||
-                                  clean.includes('reserva programada') ||
-                                  clean.includes('dinheiro guardado') ||
-                                  clean.includes('dinheiro reservado') ||
-                                  clean.includes('reserva autom') ||
-                                  clean.includes('cofrinho') ||
-                                  (!isWithdrawal && item.type === 'expense');
-
-                if (isDeposit) balance += Number(item.amount || 0);
-                else if (isWithdrawal) balance -= Number(item.amount || 0);
-            });
-
-            if (foundTx) {
-                const computed = roundCurrency(Math.max(0, balance));
-                b.vaultBalance = computed;
-                b.vault_balance = computed;
-                return computed;
-            }
-
             return 0;
         }
 
@@ -5902,7 +5813,7 @@ function openBankModal() {
 
                         // Contas de Cartão de Crédito NUNCA devem somar no saldo de contas correntes!
                         const shouldInclude = !isCredit && Math.abs(rawBal) < 10000000;
-                        const vaultBal = isCredit ? 0 : (bankEntry?.hasCustomVaultBalance ? Number(bankEntry.customVaultBalanceValue || 0) : Number(Number(acc.vaultBalance ?? acc.vault_balance ?? 0).toFixed(2)));
+                        const vaultBal = isCredit ? 0 : (bankEntry?.hasCustomVaultBalance ? Number(bankEntry.customVaultBalanceValue || bankEntry.vaultBalance || 0) : 0);
 
                         if (!bankEntry) {
                             bankEntry = {
@@ -7423,7 +7334,9 @@ function openBankModal() {
                         pluggyItemId: sb.pluggyItemId || undefined,
                         pluggyAccountId: sb.pluggyAccountId || undefined,
                         pluggyDirectBalance: isCredit ? undefined : (typeof sb.pluggyDirectBalance === 'number' ? sb.pluggyDirectBalance : (typeof rel?.pluggy_direct_balance === 'number' ? Number(rel.pluggy_direct_balance) : undefined)),
-                        vaultBalance: isCredit ? 0 : Number(sb.vaultBalance ?? sb.vault_balance ?? rel?.vault_balance ?? 0),
+                        vaultBalance: isCredit ? 0 : (sb.hasCustomVaultBalance ? Number(sb.customVaultBalanceValue || sb.vaultBalance || 0) : 0),
+                        hasCustomVaultBalance: Boolean(sb.hasCustomVaultBalance),
+                        customVaultBalanceValue: Number(sb.customVaultBalanceValue || sb.vaultBalance || 0),
                         includeInTotal: isCredit ? false : (typeof sb.includeInTotal === 'boolean' ? sb.includeInTotal : (typeof rel?.include_in_total === 'boolean' ? rel.include_in_total : true)),
                         hasCard: Boolean(sb.hasCard ?? rel?.has_card ?? isCredit),
                         cardName: sb.cardName || rel?.card_name || undefined,
@@ -7443,7 +7356,8 @@ function openBankModal() {
                     type: b.type || 'Conta Corrente',
                     initialBalance: Number(b.initial_balance || 0),
                     pluggyDirectBalance: typeof b.pluggy_direct_balance === 'number' ? Number(b.pluggy_direct_balance) : undefined,
-                    vaultBalance: Number(b.vault_balance || 0),
+                    vaultBalance: 0,
+                    hasCustomVaultBalance: false,
                     includeInTotal: typeof b.include_in_total === 'boolean' ? b.include_in_total : b.type !== 'Cartão de Crédito',
                     hasCard: Boolean(b.has_card || b.type === 'Cartão de Crédito'),
                     cardName: b.card_name || undefined,

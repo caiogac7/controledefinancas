@@ -65,7 +65,7 @@
 
     // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
     const script = document.createElement('script');
-    const APP_CACHE_VERSION = '20261108_simulador_ia_v2_1';
+    const APP_CACHE_VERSION = '20261108_no_auto_vault';
     script.src = `js/app.js?v=${APP_CACHE_VERSION}`;
     script.defer = true;
     document.body.appendChild(script);

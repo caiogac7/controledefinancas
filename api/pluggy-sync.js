@@ -1327,48 +1327,9 @@ async function handler(req, res) {
                 rawAvailableLimit = Math.max(0, Number((rawCreditLimit - rawCreditUsed).toFixed(2)));
             }
 
-            // 1. Extração Oficial e Nativa da Pluggy do Saldo Reservado (Cofrinho / Caixinha / Bloqueado)
-            let nativeReserved = 0;
-            if (acc.bankData?.reservedBalances && Array.isArray(acc.bankData.reservedBalances)) {
-                acc.bankData.reservedBalances.forEach(rb => {
-                    if (Array.isArray(rb.availableAmounts)) {
-                        rb.availableAmounts.forEach(aa => {
-                            const val = Number(aa?.amount ?? aa?.value ?? aa?.balance ?? 0);
-                            if (val > 0) nativeReserved += val;
-                        });
-                    }
-                    const rbDirect = Number(rb?.amount ?? rb?.value ?? rb?.balance ?? rb?.total ?? 0);
-                    if (rbDirect > 0 && !Array.isArray(rb.availableAmounts)) {
-                        nativeReserved += rbDirect;
-                    }
-                });
-            }
-            if (nativeReserved <= 0 && typeof acc.bankData?.automaticallyInvestedBalance === 'number' && acc.bankData.automaticallyInvestedBalance > 0) {
-                nativeReserved = acc.bankData.automaticallyInvestedBalance;
-            }
-            if (nativeReserved <= 0 && typeof acc.bankData?.blockedBalance === 'number' && acc.bankData.blockedBalance > 0) {
-                nativeReserved = acc.bankData.blockedBalance;
-            }
-
-            // Se ainda não encontrou e for conta bancária, consulta fetchAccountBalance nativo da Pluggy
-            if (!isCredit && nativeReserved <= 0 && typeof pluggyClient?.fetchAccountBalance === 'function') {
-                try {
-                    const accBal = await pluggyClient.fetchAccountBalance(String(acc.id));
-                    if (Array.isArray(accBal?.reservedBalances)) {
-                        accBal.reservedBalances.forEach(rb => {
-                            const rbVal = Number(rb?.amount ?? rb?.value ?? rb?.balance ?? 0);
-                            if (rbVal > 0) nativeReserved += rbVal;
-                        });
-                    }
-                    if (nativeReserved <= 0 && typeof accBal?.reservedBalance === 'number' && accBal.reservedBalance > 0) {
-                        nativeReserved = accBal.reservedBalance;
-                    } else if (nativeReserved <= 0 && typeof accBal?.blockedBalance === 'number' && accBal.blockedBalance > 0) {
-                        nativeReserved = accBal.blockedBalance;
-                    } else if (nativeReserved <= 0 && typeof accBal?.automaticallyInvestedBalance === 'number' && accBal.automaticallyInvestedBalance > 0) {
-                        nativeReserved = accBal.automaticallyInvestedBalance;
-                    }
-                } catch (_) {}
-            }
+            // Saldo Reservado (Cofrinho / Caixinha): O controle de reserva é EXCLUSIVAMENTE manual pelo usuário
+            // no painel de Bancos. NUNCA captura automaticallyInvestedBalance ou saldos da conta corrente como reserva.
+            const nativeReserved = 0;
 
             normalizedAccounts.push({
                 id: String(acc.id),
@@ -1613,35 +1574,10 @@ async function handler(req, res) {
         // 1. Saldo fixo do Cofre/Reservas (GRUPO 4 - VAULT_TX) por conta bancária
         // 2. Conciliação de Faturas por Ciclo (Compras + Parcelas - Estornos - Antecipações / Pagamentos Pós-Virada)
         // =========================================================================
+        // Saldo Reservado (Cofrinho / Caixinha): Gerenciado EXCLUSIVAMENTE pelo usuário na UI, sem inventar valores
         normalizedAccounts.forEach(acc => {
-            if (acc.type === 'BANK') {
-                // 1. Se o saldo oficial reservado da Pluggy já foi detectado nativamente em bankData / fetchAccountBalance, mantém como fonte da verdade!
-                if (typeof acc.vaultBalance === 'number' && acc.vaultBalance > 0) {
-                    acc.vault_balance = acc.vaultBalance;
-                    return;
-                }
-
-                let vBal = 0;
-                // 2. Fallback: Considera o ciclo/mês corrente ativo para evitar resíduos históricos de períodos já esvaziados
-                const activeMonth = nowSp.month; // ex: '2026-11'
-                const activeMonthTxs = bankAccountTransactions.filter(btx => 
-                    String(btx.accountId) === String(acc.id) && 
-                    btx.tx_group === 'VAULT_TX' && 
-                    (btx.month === activeMonth || !btx.month)
-                );
-
-                activeMonthTxs.forEach(btx => {
-                    const cleanDesc = normalizeTextForClassification(btx.desc);
-                    const isWithdrawal = cleanDesc.includes('retirado') || cleanDesc.includes('resgate') || btx.type === 'income';
-                    if (isWithdrawal) vBal -= Number(btx.amount || 0);
-                    else vBal += Number(btx.amount || 0);
-                });
-                acc.vaultBalance = Number(Math.max(0, vBal).toFixed(2));
-                acc.vault_balance = acc.vaultBalance;
-            } else {
-                acc.vaultBalance = 0;
-                acc.vault_balance = 0;
-            }
+            acc.vaultBalance = 0;
+            acc.vault_balance = 0;
         });
 
         // Para cada conta de cartão (CREDIT), executa o motor homologado `calculateHomologatedCardBills`
@@ -1834,7 +1770,6 @@ async function handler(req, res) {
                     .from('banks')
                     .update({
                         pluggy_direct_balance: isCredit ? 0 : Number(acc.balance || 0),
-                        vault_balance: acc.vaultBalance || 0,
                         updated_at: spTimestamp
                     })
                     .eq('user_id', user.id)
