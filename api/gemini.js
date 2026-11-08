@@ -35,46 +35,42 @@ module.exports = async function handler(req, res) {
 
     const { systemInstruction, userPrompt, contents, generationConfig } = req.body || {};
 
-    if (!userPrompt && (!contents || contents.length === 0)) {
-      return res.status(400).json({ ok: false, error: 'Prompt não fornecido.' });
-    }
-
-    // Modelos oficiais suportados pela API v1beta
+    // Modelos oficiais suportados pela API Google AI (v1beta)
     const candidateModels = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-2.5-pro',
-      'gemini-1.5-flash'
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash-exp'
     ];
 
-    const standardPayload = {
-      systemInstruction: systemInstruction ? {
-        parts: [{ text: String(systemInstruction) }]
-      } : undefined,
-      contents: contents || [
-        {
-          role: 'user',
-          parts: [{ text: String(userPrompt) }]
+    let outgoingPayload;
+    if (Array.isArray(contents) && contents.length > 0) {
+      outgoingPayload = {
+        systemInstruction: systemInstruction ? {
+          parts: [{ text: String(systemInstruction) }]
+        } : undefined,
+        contents,
+        generationConfig: generationConfig || {
+          temperature: 0.2,
+          maxOutputTokens: 2048
         }
-      ],
-      generationConfig: generationConfig || {
-        temperature: 0.2,
-        maxOutputTokens: 2048
-      }
-    };
-
-    const combinedPayload = {
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${systemInstruction || ''}\n\n---\nCONSULTA DO USUÁRIO:\n${userPrompt || ''}` }]
+      };
+    } else {
+      outgoingPayload = {
+        systemInstruction: systemInstruction ? {
+          parts: [{ text: String(systemInstruction) }]
+        } : undefined,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: String(userPrompt || '') }]
+          }
+        ],
+        generationConfig: generationConfig || {
+          temperature: 0.2,
+          maxOutputTokens: 2048
         }
-      ],
-      generationConfig: generationConfig || {
-        temperature: 0.2,
-        maxOutputTokens: 2048
-      }
-    };
+      };
+    }
 
     let lastError = null;
 
@@ -82,30 +78,21 @@ module.exports = async function handler(req, res) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
       try {
-        let resp = await fetch(url, {
+        const resp = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(standardPayload)
+          body: JSON.stringify(outgoingPayload)
         });
-
-        if (!resp.ok && (resp.status === 400 || resp.status === 422)) {
-          resp = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(combinedPayload)
-          });
-        }
 
         if (resp.ok) {
           const data = await resp.json();
           const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply && reply.trim()) {
-            return res.status(200).json({
-              ok: true,
-              model,
-              text: reply.trim()
-            });
-          }
+          return res.status(200).json({
+            ok: true,
+            model,
+            text: reply ? reply.trim() : '',
+            candidates: data.candidates || []
+          });
         } else {
           const errData = await resp.json().catch(() => ({}));
           lastError = errData?.error?.message || `HTTP ${resp.status}`;
@@ -126,4 +113,3 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ ok: false, error: error.message });
   }
 };
-

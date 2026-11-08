@@ -1,4 +1,21 @@
-        const supabaseClient = window.__supabaseClient;
+        // Inicialização resiliente com Proxy contra race condition de scripts
+        const supabaseClient = new Proxy({}, {
+            get(target, prop) {
+                const client = window.__supabaseClient;
+                if (!client) {
+                    console.warn(`[Supabase Guard] Tentativa de acesso a '${String(prop)}' antes do bootstrap.js finalizar.`);
+                    return () => ({
+                        select: () => ({ eq: () => Promise.resolve({ data: [], error: null }), order: () => ({ limit: () => Promise.resolve({ data: [] }) }) }),
+                        upsert: () => Promise.resolve({ error: null }),
+                        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+                        delete: () => ({ eq: () => Promise.resolve({ error: null }), in: () => Promise.resolve({ error: null }) }),
+                        auth: { getUser: () => Promise.resolve({ data: null, error: null }) }
+                    });
+                }
+                const val = client[prop];
+                return typeof val === 'function' ? val.bind(client) : val;
+            }
+        });
         const mp = window.__mp;
 
         // Sanitização contra XSS (OWASP A03 - Injection)
@@ -5359,8 +5376,17 @@ function openBankModal() {
             }
         }
 
+        const syncingItemsLock = new Set();
+
         async function syncPluggyItem(itemId, options = {}) {
             if (!itemId) return null;
+            const cleanItemId = String(itemId).trim();
+            if (syncingItemsLock.has(cleanItemId)) {
+                console.warn(`[Sync Guard] Sincronização já em andamento para o item ${cleanItemId}. Ignorando chamada duplicada.`);
+                return null;
+            }
+            syncingItemsLock.add(cleanItemId);
+
             const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false } = options;
 
             const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemId}`) || document.getElementById(`btn-sync-total-${itemId}`);
@@ -5886,6 +5912,7 @@ function openBankModal() {
                 }
                 return { ok: false, error: errMsg };
             } finally {
+                syncingItemsLock.delete(cleanItemId);
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = origHtml;
@@ -12602,17 +12629,16 @@ Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
 
 // Lista ordenada de modelos oficiais do Google Gemini com fallback automático contra 404
 const GEMINI_CANDIDATE_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-2.5-pro',
-    'gemini-1.5-flash'
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+    'gemini-2.0-flash-exp'
 ];
 
 async function resolveGeminiModel(apiKey) {
     if (cachedGeminiConfig && cachedGeminiConfig.model) {
         return cachedGeminiConfig.model;
     }
-    return 'gemini-2.5-flash';
+    return 'gemini-1.5-flash';
 }
 
 async function queryGeminiApi(systemInstruction, userPromptText) {
@@ -12662,10 +12688,9 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
     if (!apiKey) return null;
 
     const baseCandidateList = [
-        { model: 'gemini-2.5-flash', version: 'v1beta' },
-        { model: 'gemini-2.0-flash', version: 'v1beta' },
-        { model: 'gemini-2.5-pro', version: 'v1beta' },
-        { model: 'gemini-1.5-flash', version: 'v1beta' }
+        { model: 'gemini-1.5-flash', version: 'v1beta' },
+        { model: 'gemini-1.5-pro', version: 'v1beta' },
+        { model: 'gemini-2.0-flash-exp', version: 'v1beta' }
     ];
 
     const standardPayload = {
