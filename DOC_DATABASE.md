@@ -11,4 +11,6 @@
 | 08/11/2026 | `credit_bills` | Criação do índice `idx_credit_bills_user_month (user_id, month)`. | Aceleração de consultas e leitura de faturas mensais persistidas. |
 | 08/11/2026 | `bank_statements` | Criação do índice `idx_bank_statements_user_bank (user_id, bank_id)`. | Otimização de busca e reconciliação bancária por instituição. |
 | 08/11/2026 | `banks` / `profiles` | Atualização do `vault_balance` da conta Mercado Pago (`2350304a`) para R$ 25,00 exatos e padronização CommonJS de endpoints serverless. | Refletir o saldo reservado real reportado pela Pluggy no Open Finance após a retirada recente e destravar sync na Vercel. |
+| 08/11/2026 | `bank_statements` | Remoção de 5.685 parcelas sintéticas duplicadas e alinhamento do `onConflict` para `(user_id, bank_id, fitid)` com desduplicação em memória (`Map`) em lotes de 100. | Eliminar erro PostgreSQL `21000: ON CONFLICT DO UPDATE command cannot affect row a second time` e falha de constraint única. |
+| 08/11/2026 | `credit_bills` / `transactions` | Recálculo das faturas futuras do Itaú Extra Mastercard Gold (Dez/2026 normalizada de R$ 14.162,71 para R$ 3.417,21) e sincronização do `settings_json`. | Restaurar integridade contábil das faturas e parcelamentos da Elisangela sem duplicações fantasmas. |
 

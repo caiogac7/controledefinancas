@@ -820,7 +820,7 @@
                 .normalize('NFD')
                 .replace(/[\u0300-\u036f]/g, '')
                 .replace(/\(••••\s*\d+\)/g, '')
-                .replace(/\(\d+\/\d+\)/g, '')
+                .replace(/(?:\(|\b)\d{1,2}\s*\/\s*\d{1,2}(?:\)|\b)/g, '')
                 .replace(/#\w+/g, '')
                 .replace(/[^A-Z0-9]/g, '');
 
@@ -2077,10 +2077,18 @@
                             });
                         });
 
-                        // Upsert por lotes de 100 respeitando a constraint uq_bank_statements_user_fitid
-                        for (let i = 0; i < richStmtRows.length; i += 100) {
-                            const chunk = richStmtRows.slice(i, i + 100);
-                            await supabaseClient.from('bank_statements').upsert(chunk, { onConflict: 'user_id,fitid' });
+                        // 1. Desduplicação em memória antes do upsert (evita erro 21000)
+                        const uniqueStatementsMap = new Map();
+                        for (const stmt of richStmtRows) {
+                            const compositeKey = `${stmt.user_id}_${stmt.bank_id}_${stmt.fitid}`;
+                            uniqueStatementsMap.set(compositeKey, stmt);
+                        }
+                        const safeStatementsArray = Array.from(uniqueStatementsMap.values());
+
+                        // 2. Upsert por lotes de 100 alinhado com a constraint bank_statements_account_tx_unique
+                        for (let i = 0; i < safeStatementsArray.length; i += 100) {
+                            const chunk = safeStatementsArray.slice(i, i + 100);
+                            await supabaseClient.from('bank_statements').upsert(chunk, { onConflict: 'user_id,bank_id,fitid' });
                         }
                     }
                 } catch (e) { console.warn('Erro ao gravar tabela bank_statements:', e); }

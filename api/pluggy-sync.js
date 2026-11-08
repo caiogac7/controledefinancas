@@ -339,7 +339,7 @@ function getCleanMerchantSignature(desc) {
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .replace(/\(••••\s*\d+\)/g, '')
-        .replace(/\(\d+\/\d+\)/g, '')
+        .replace(/(?:\(|\b)\d{1,2}\s*\/\s*\d{1,2}(?:\)|\b)/g, '')
         .replace(/#\w+/g, '')
         .replace(/[^A-Z0-9]/g, '');
 
@@ -1653,14 +1653,31 @@ async function handler(req, res) {
                     pluggy_status: s.pluggy_status || 'POSTED'
                 }));
 
-                // Inserção em lotes de 100 para alta performance e segurança
-                for (let i = 0; i < stmtRows.length; i += 100) {
-                    const chunk = stmtRows.slice(i, i + 100);
+                // 1. DESDUPLICAÇÃO EM MEMÓRIA ANTES DO UPSERT (Evita erro 21000)
+                const uniqueStatementsMap = new Map();
+                for (const stmt of stmtRows) {
+                    // Chave composta exatamente igual à constraint do banco (user_id, bank_id, fitid)
+                    const compositeKey = `${stmt.user_id}_${stmt.bank_id}_${stmt.fitid}`;
+                    // Mantém a última versão encontrada no payload
+                    uniqueStatementsMap.set(compositeKey, stmt);
+                }
+                const safeStatementsArray = Array.from(uniqueStatementsMap.values());
+
+                // 2. LOG DE SANITIZAÇÃO
+                console.log(`[PluggySync] Total recebido: ${stmtRows.length} | Desduplicados para envio: ${safeStatementsArray.length}`);
+
+                // 3. Inserção em lotes de 100 com onConflict alinhado com a constraint bank_statements_account_tx_unique
+                const CHUNK_SIZE = 100;
+                for (let i = 0; i < safeStatementsArray.length; i += CHUNK_SIZE) {
+                    const chunk = safeStatementsArray.slice(i, i + CHUNK_SIZE);
                     const { error: upsertErr } = await supabase
                         .from('bank_statements')
-                        .upsert(chunk, { onConflict: 'user_id,fitid' });
+                        .upsert(chunk, {
+                            onConflict: 'user_id,bank_id,fitid',
+                            ignoreDuplicates: false
+                        });
                     if (upsertErr) {
-                        console.warn('Aviso no upsert de bank_statements chunk:', upsertErr.message || upsertErr);
+                        console.error(`[PluggySync] Erro no chunk ${Math.floor(i / CHUNK_SIZE) + 1}:`, upsertErr.message || upsertErr);
                     }
                 }
             } catch (bsErr) {
