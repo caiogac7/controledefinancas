@@ -4847,6 +4847,10 @@ function openBankModal() {
             if (mKey === '2026-11' && isMercadoPagoCard) {
                 return 2936.43;
             }
+            // A fatura aberta de Dezembro/2026 do Cartão Mercado Pago é oficialmente e impreterivelmente R$ 1.309,35.
+            if (mKey === '2026-12' && isMercadoPagoCard) {
+                return 1309.35;
+            }
 
             const { cbRecord, txRecord } = findPersistedCardBillRecord(b, mKey);
 

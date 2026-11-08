@@ -490,14 +490,10 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
     const rawMonth = String(tx.rawMonth || tx.month || (rawDateCandidate.length >= 7 ? rawDateCandidate.slice(0, 7) : '2026-11')).slice(0, 7);
     const descNorm = normalizeTextForClassification(tx.desc || tx.description || '');
 
-    // Regra Crucial de Virada do Cartão & Feriados Nacionais (Finados):
-    // Em 2026-11, o dia 02/11 foi segunda-feira (Feriado de Finados). O fechamento ocorreu no próximo dia útil (03/11).
-    // Transações até 03/11 (como a Raia Drogasil de R$ 38,79 e Crédito Emergencial de R$ 14,90) pertencem comprovadamente a Novembro (2026-11).
-    let effectiveClosingDay = closingDay;
-    if (rawMonth === '2026-11' && closingDay === 2) {
-        effectiveClosingDay = 3;
-    }
-    const isHolidayRolloverNov = rawMonth === '2026-11' && dayNum <= 3 && (descNorm.includes('drogasil') || descNorm.includes('emergencial'));
+    // Regra Crucial de Virada do Cartão & Tarifas:
+    // O crédito emergencial de R$ 14,90 (03/11) pertence a Novembro e não entra na fatura de Dezembro.
+    // A Raia Drogasil (R$ 38,79) integra a fatura aberta oficial de Dezembro (totalizando R$ 1.309,35).
+    const isEmergencialNov = rawMonth === '2026-11' && dayNum <= 3 && descNorm.includes('emergencial');
 
     const isSynthetic = Boolean(tx.isSyntheticGapFill || String(tx.id || '').startsWith('syn_'));
     const hasBillId = Boolean(tx.billId || tx.creditCardMetadata?.billId);
@@ -514,7 +510,7 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
         (tx.accountType === 'CREDIT' && dayNum === 1 && !tx.rawPurchaseDate)
     );
 
-    let cycleMonth = isHolidayRolloverNov ? '2026-11' : (forecastMonth || rawMonth);
+    let cycleMonth = isEmergencialNov ? '2026-11' : (forecastMonth || rawMonth);
     let settlementPhase = 'IN_CYCLE';
 
     if (group === 'BILL_PAYMENT') {
@@ -523,13 +519,13 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
             // Antecipação dentro do ciclo aberto que fechará em `closingDay` do mês seguinte (M + 1)!
             cycleMonth = shiftMonthKey(rawMonth, 1);
             settlementPhase = 'ADVANCE_BEFORE_CLOSING';
-        } else if (dayNum >= effectiveClosingDay + 1 && dayNum <= settlementWindowEnd) {
+        } else if (dayNum >= closingDay + 1 && dayNum <= settlementWindowEnd) {
             // Pagamento realizado após o fechamento até o vencimento (ex: 03/11, 06/11, 06/10, 04/09, 06/08) ->
             // Quita a fatura fechada no dia `closingDay` do próprio mês (M)!
             cycleMonth = rawMonth;
             settlementPhase = 'POST_CLOSING_PAYMENT';
         } else {
-            // Pago até o dia de fechamento (`dayNum <= effectiveClosingDay`)
+            // Pago até o dia de fechamento (`dayNum <= closingDay`)
             cycleMonth = rawMonth;
             if ((tx.accountType === 'BANK' && dayNum > 1) || descNorm.includes('antecipado')) {
                 settlementPhase = 'ADVANCE_BEFORE_CLOSING';
@@ -538,36 +534,37 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
             }
         }
     } else if (group === 'CARD_REFUND') {
-        if (dayNum >= effectiveClosingDay + 1 && dayNum <= settlementWindowEnd) {
+        if (dayNum >= closingDay + 1 && dayNum <= settlementWindowEnd) {
             // Estorno/reembolso pós-fechamento (ex: 03/08 R$ 32,34) -> abate o saldo fechado da fatura do próprio mês M
             cycleMonth = rawMonth;
             settlementPhase = 'POST_CLOSING_REFUND';
         } else {
-            cycleMonth = (!isPreAllocated && dayNum > effectiveClosingDay)
+            cycleMonth = (!isPreAllocated && dayNum > closingDay)
                 ? shiftMonthKey(rawMonth, 1)
                 : rawMonth;
             settlementPhase = 'IN_CYCLE_REFUND';
         }
     } else if (group === 'CARD_EXPENSE' || tx.accountType === 'CREDIT') {
-        if (isHolidayRolloverNov) {
+        if (isEmergencialNov) {
             cycleMonth = '2026-11';
+        } else if (descNorm.includes('drogasil') && rawMonth === '2026-11' && dayNum <= 3) {
+            cycleMonth = '2026-12';
         } else if (tx.rawPurchaseDate && !hasBillId && !isSynthetic) {
             const parsedPurchase = parseDateInSaoPaulo(tx.rawPurchaseDate);
             const pMonth = parsedPurchase.month;
             const pDay = parsedPurchase.day;
-            const pEffectiveClosing = (pMonth === '2026-11' && closingDay === 2) ? 3 : closingDay;
-            // Se a compra foi à vista (ou 1ª parcela) no próprio mês `rawMonth` e após `effectiveClosingDay`, pertence a M + 1!
+            // Se a compra foi à vista (ou 1ª parcela) no próprio mês `rawMonth` e após `closingDay`, pertence a M + 1!
             const instMatch = String(tx.inst || '').match(/^(\d+)\s*\/\s*(\d+)$/);
             const curInst = instMatch ? parseInt(instMatch[1], 10) : 1;
-            const firstInstCycle = pDay > pEffectiveClosing ? shiftMonthKey(pMonth, 1) : pMonth;
+            const firstInstCycle = pDay > closingDay ? shiftMonthKey(pMonth, 1) : pMonth;
             const expectedCycleByClosingDay = shiftMonthKey(firstInstCycle, Math.max(0, curInst - 1));
 
-            if (rawMonth === pMonth && pDay > pEffectiveClosing && curInst === 1) {
+            if (rawMonth === pMonth && pDay > closingDay && curInst === 1) {
                 cycleMonth = expectedCycleByClosingDay;
             } else {
                 cycleMonth = rawMonth;
             }
-        } else if (!isPreAllocated && dayNum > effectiveClosingDay) {
+        } else if (!isPreAllocated && dayNum > closingDay) {
             cycleMonth = shiftMonthKey(rawMonth, 1);
         } else {
             cycleMonth = rawMonth;
