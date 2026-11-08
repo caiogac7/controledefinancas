@@ -8388,62 +8388,60 @@ function openBankModal() {
             ` : '';
 
             return `
-                <div id="tx-row-${Number(t.id)}" class="pluggy-tx-row flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 border ${isSelected ? 'border-[#FF2E4D]/60 bg-[#FF2E4D]/10' : 'border-slate-100 dark:border-slate-800'} transition-all duration-300 ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'opacity-85 bg-slate-50/40 dark:bg-slate-900/40' : ''}">
-                    <div class="flex items-center gap-2 sm:gap-3 min-w-0 ${isSharedItem ? '' : 'cursor-pointer'} flex-1" ${clickHandler}>
+                <div id="tx-row-${Number(t.id)}" class="pluggy-tx-row flex items-center justify-between gap-3 p-3 w-full rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 border ${isSelected ? 'border-[#FF2E4D]/60 bg-[#FF2E4D]/10' : 'border-slate-100 dark:border-slate-800'} transition-all duration-300 ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'opacity-85 bg-slate-50/40 dark:bg-slate-900/40' : ''}">
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1 ${isSharedItem ? '' : 'cursor-pointer'}" ${clickHandler}>
                         ${selectCheckboxHtml}
                         <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isInc ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300' : (isConsolidatedBill ? 'bg-rose-950/40 text-rose-300 border border-rose-800/30' : 'bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300')} text-base">
                             ${isConsolidatedBill ? '💳' : (emoji || (isInc ? '+' : '-'))}
                         </div>
-                        <div class="min-w-0">
-                            <div class="flex items-center gap-1.5 flex-wrap">
-                                <p class="text-xs sm:text-sm font-bold ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'line-through decoration-slate-400/60 text-slate-600 dark:text-slate-300' : 'text-slate-900 dark:text-white'} truncate">
+                        <div class="min-w-0 flex-1 truncate">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="text-xs sm:text-sm font-bold ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'line-through decoration-slate-400/60 text-slate-600 dark:text-slate-300' : 'text-slate-900 dark:text-white'} truncate block">
                                     ${baseDesc}
                                     ${isConsolidatedBill ? '<span class="text-[10px] bg-rose-950/40 text-rose-300 border border-rose-800/30 px-2 py-0.5 rounded-full font-bold ml-1">Fatura Consolidada</span>' : ''}
                                     ${t.inst && t.inst.includes('/') && !isConsolidatedBill ? `<span class="text-rose-400 font-bold ml-1">(${escapeHtml(t.inst)})</span>` : ''}
                                     ${t.reconciledWithStatement ? '<span class="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold ml-1 inline-flex items-center gap-1">🔗 Conciliado</span>' : ''}
-                                </p>
+                                </span>
                                 ${ownerBadge}
-                                ${bank ? `<span class="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full font-bold whitespace-nowrap">${escapeHtml(bank.emoji || '🏦')} ${escapeHtml(bank.name)}</span>` : ''}
-                                ${card ? `<span class="text-[10px] text-white px-2 py-0.5 rounded-full font-bold whitespace-nowrap shadow-xs" style="background-color: ${escapeHtml(card.color || '#4f46e5')}">💳 ${escapeHtml(card.name || card.alias)}</span>` : ''}
                             </div>
-                            <p class="text-[11px] text-slate-400">
-                                Dia ${String(Number(t.day) || 1).padStart(2, '0')} • ${formatCategoryWithEmoji(t.cat)} • ${escapeHtml(t.inst || 'Fixa')}
-                                ${isConsolidatedBill ? ` • Total: <strong class="text-slate-700 dark:text-slate-200">${formatBRL(billTotalAmount)}</strong>${billPaidAmount > 0 ? ` • Pago: <strong class="text-emerald-600 dark:text-emerald-400">${formatBRL(billPaidAmount)}</strong>` : ''} • A Pagar: <strong class="${billPendingAmount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}">${formatBRL(billPendingAmount)}</strong>` : ''}
-                                ${t.paid && t.paidAt ? `<span class="ml-1 text-emerald-600 dark:text-emerald-400 font-semibold">• ${isInc ? 'Recebido' : 'Pago'} em ${escapeHtml(formatDateBRFromISO(t.paidAt))}</span>` : ''}
-                            </p>
+                            <span class="truncate block text-xs text-slate-400 mt-0.5">
+                                Dia ${String(Number(t.day) || 1).padStart(2, '0')}${bank ? ` • ${escapeHtml(bank.name)}` : ''}${card ? ` (${escapeHtml(card.alias || card.name)})` : ''} • ${formatCategoryWithEmoji(t.cat)}${t.inst && !isConsolidatedBill ? ` • ${escapeHtml(t.inst)}` : ''}
+                                ${isConsolidatedBill ? ` • Total: ${formatBRL(billTotalAmount)}${billPendingAmount > 0 ? ` (Falta: ${formatBRL(billPendingAmount)})` : ''}` : ''}
+                                ${t.paid && t.paidAt ? ` • Pago em ${escapeHtml(formatDateBRFromISO(t.paidAt))}` : ''}
+                            </span>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2.5 ml-2">
-                        <div class="text-right">
-                            <span class="text-xs sm:text-sm font-extrabold ${isInc ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'} whitespace-nowrap block">
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <div class="text-right flex-shrink-0 min-w-[70px]">
+                            <span class="text-xs sm:text-sm font-semibold ${isInc ? 'text-emerald-500' : 'text-rose-500'} whitespace-nowrap block text-right notranslate" translate="no">
                                 ${isConsolidatedBill ? formatBRL(billTotalAmount) : formatBRL(t.amount)}
                             </span>
                             ${isConsolidatedBill && billPaidAmount > 0 && billPendingAmount > 0.009 ? `
-                                <span class="text-[10px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap block">
+                                <span class="text-[10px] font-bold text-amber-500 whitespace-nowrap block text-right notranslate" translate="no">
                                     Falta: ${formatBRL(billPendingAmount)}
                                 </span>
                             ` : ''}
                         </div>
                         ${isSharedItem ? `
-                            <span class="px-2.5 py-1 rounded-lg text-[10px] font-extrabold ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'}">
+                            <span class="px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 notranslate ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'}" translate="no">
                                 ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'Quitada' : 'Pendente'}
                             </span>
                         ` : (isConsolidatedBill ? `
                             <button onclick="switchView('banks')" title="Ver Fatura Consolidada detalhada em Bancos/Cartões"
-                                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${billPendingAmount <= 0.009 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-[#FF2E4D] hover:bg-[#E61937] text-white shadow-md shadow-rose-950/40 font-extrabold'}">
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition cursor-pointer notranslate ${billPendingAmount <= 0.009 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-[#FF2E4D] hover:bg-[#E61937] text-white shadow-md shadow-rose-950/40'}" translate="no">
                                 <i data-lucide="credit-card" class="w-3.5 h-3.5"></i>
                                 <span>${billPendingAmount <= 0.009 ? 'Quitada' : 'Fatura'}</span>
                             </button>
                         ` : (t.paid ? `
                             <button onclick="togglePaidStatus(${Number(t.id)})" title="Conta já baixada. Toque caso deseje reabrir (tornar pendente)"
-                                class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 cursor-pointer">
-                                <i data-lucide="check-check" class="w-3 h-3"></i>
+                                class="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 cursor-pointer notranslate" translate="no">
+                                <i data-lucide="check-check" class="w-3.5 h-3.5"></i>
                                 <span>Quitada</span>
                             </button>
                         ` : `
                             <button onclick="togglePaidStatus(${Number(t.id)})" title="Clique para pagar/baixar esta conta"
-                                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition shadow-sm active:scale-95 cursor-pointer ${isInc ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'}">
-                                <i data-lucide="${isInc ? 'arrow-down-left' : 'check'}" class="w-3.5 h-3.5 stroke-[3]"></i>
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition shadow-sm active:scale-95 cursor-pointer notranslate ${isInc ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'}" translate="no">
+                                <i data-lucide="${isInc ? 'arrow-down-left' : 'check'}" class="w-3.5 h-3.5 stroke-[2.5]"></i>
                                 <span>${isInc ? 'Receber' : 'Pagar'}</span>
                             </button>
                         `))}

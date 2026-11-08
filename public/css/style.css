@@ -400,3 +400,50 @@ html, body {
 button, [role="button"], a {
     touch-action: manipulation;
 }
+
+/* ==========================================================================
+   RESPONSIVIDADE MOBILE: LINHAS DE TRANSAÇÕES SEM SOBREPOSIÇÃO NEM ESMAGAMENTO
+   ========================================================================== */
+.pluggy-tx-row {
+    min-width: 0;
+}
+
+.pluggy-tx-row .min-w-\[70px\] {
+    min-width: 70px;
+}
+
+@media (max-width: 400px) {
+    .pluggy-tx-row {
+        padding: 0.625rem !important;
+        gap: 0.5rem !important;
+    }
+    .pluggy-tx-row .min-w-\[70px\] {
+        min-width: 62px !important;
+    }
+}
+
+@media (max-width: 360px) {
+    .pluggy-tx-row {
+        padding: 0.5rem !important;
+        gap: 0.375rem !important;
+    }
+    .pluggy-tx-row .w-9.h-9 {
+        width: 2rem !important;
+        height: 2rem !important;
+        font-size: 0.875rem !important;
+    }
+    .pluggy-tx-row .min-w-\[70px\] {
+        min-width: 58px !important;
+    }
+    .pluggy-tx-row .min-w-\[70px\] span {
+        font-size: 0.75rem !important;
+    }
+    .pluggy-tx-row button, 
+    .pluggy-tx-row span.rounded-lg {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        padding-top: 0.35rem !important;
+        padding-bottom: 0.35rem !important;
+        font-size: 0.7rem !important;
+    }
+}

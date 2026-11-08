@@ -54,3 +54,11 @@
   - O intervalo de polling de contas integradas/família foi elevado de 8s para 60s, com verificação de visibilidade (`!document.hidden`) e comparação por impressão digital (fingerprint) para evitar `renderAll()` redundante sem mudanças de dados.
   - Remoção de event listeners contínuos de `mousemove` que aplicavam rotação 3D (`perspective`, `rotateX`, `rotateY`, `scale`) nos cards a cada pixel movido, eliminando trepidação e distorção de fontes.
   - Proteção de CSS contra injeção de barras de tradução com `body { top: 0px !important; }` e `.skiptranslate { display: none !important; }`.
+
+### 9. Responsividade Mobile: Linhas de Transações e Eliminação de Sobreposição
+- **Distribuição Flexbox Segregada:**
+  - Container principal: `flex items-center justify-between gap-3 p-3 w-full`.
+  - Lado esquerdo flexível: `<div class="flex items-center gap-2.5 min-w-0 flex-1">` com container de textos truncáveis (`min-w-0 flex-1 truncate block`) para título e subtítulo de conta/categoria, impedindo colisão com o valor.
+  - Lado direito blindado: `<div class="flex items-center gap-2 flex-shrink-0">` com bloco numérico de largura mínima (`min-w-[70px] whitespace-nowrap text-right`) e botão de ação compacto (`px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0`).
+- **Telas Ultracompactas (< 360px):**
+  - Regras de CSS adaptam padding, ícones e tipografia sem quebras de linha ou sobreposição de botões.
