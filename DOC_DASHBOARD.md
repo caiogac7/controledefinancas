@@ -43,3 +43,14 @@
 - **Saldo Livre em Conta:** O saldo principal do card exibe estritamente o montante disponível para transacionar na conta corrente, sem misturar ou inflar com quantias guardadas.
 - **Badge / Linha de Reservado:** Quando a conta possui dinheiro em cofrinho, caixinha ou reserva (`vaultBalance > 0`), o card exibe uma barra dedicada em âmbar com ícone de cofrinho (`piggy-bank`) e o valor exato reservado (`Reservado: R$ X,XX`).
 - **Origem dos Dados e Edição:** O valor é alimentado automaticamente por movimentações de cofre/reserva (`VAULT_TX`) ou ajustado diretamente no campo "Dinheiro Reservado / Cofrinho (R$)" dentro do modal de edição da conta (`bank-modal`).
+
+### 8. Estabilização de Layout, Bloqueio de Tradução Automática e Eliminação de Layout Shift
+- **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.
+- **Nomenclatura Oficial Restaurada:**
+  - Sistema / Logo: `Controle de Finanças`
+  - Aba de parcelamentos: `Compras Parceladas` (Desktop) / `Parcelas` (Mobile)
+  - Botões de ação em cards: `Editar / Ajustar Parcelas` e `Pagar Parcela` / `✓ Parcela Paga`
+- **Eliminação de Loops de Renderização e Jitter:**
+  - O intervalo de polling de contas integradas/família foi elevado de 8s para 60s, com verificação de visibilidade (`!document.hidden`) e comparação por impressão digital (fingerprint) para evitar `renderAll()` redundante sem mudanças de dados.
+  - Remoção de event listeners contínuos de `mousemove` que aplicavam rotação 3D (`perspective`, `rotateX`, `rotateY`, `scale`) nos cards a cada pixel movido, eliminando trepidação e distorção de fontes.
+  - Proteção de CSS contra injeção de barras de tradução com `body { top: 0px !important; }` e `.skiptranslate { display: none !important; }`.

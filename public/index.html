@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html lang="pt-BR" class="dark">
+<html lang="pt-BR" class="dark notranslate" translate="no">
 <head>
     <meta charset="UTF-8">
+    <meta name="google" content="notranslate" />
     <title>Controle de Finanças</title>
 
     <!-- Suporte a PWA Standalone no iOS (Safari) -->
@@ -44,7 +45,7 @@
     <link rel="stylesheet" href="css/style.css">
 
 </head>
-<body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 min-h-[100dvh] w-full max-w-full overflow-x-hidden antialiased selection:bg-[#7c3aed] selection:text-white transition-colors duration-200">
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 min-h-[100dvh] w-full max-w-full overflow-x-hidden antialiased selection:bg-[#FF2E4D] selection:text-white transition-colors duration-200 notranslate" translate="no">
 
     <!-- ========================================== -->
     <!-- TELA DE LOGIN / CADASTRO                   -->
@@ -55,7 +56,7 @@
                 <div class="w-14 h-14 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-inner">
                     <i data-lucide="wallet" class="w-7 h-7 text-white"></i>
                 </div>
-                <h1 class="text-2xl font-extrabold tracking-tight">Controle de Finanças</h1>
+                <h1 class="text-2xl font-extrabold tracking-tight notranslate" translate="no">Controle de Finanças</h1>
                 <p class="text-rose-100 text-xs mt-1">Planejamento Mensal & Controle de Contas</p>
             </div>
 
@@ -179,7 +180,7 @@
                     <i data-lucide="wallet" class="w-4 h-4 text-white"></i>
                 </div>
                 <div class="min-w-0">
-                    <h2 class="font-bold text-[15px] leading-snug tracking-normal text-slate-900 dark:text-white truncate">Controle de Finanças</h2>
+                    <h2 class="font-bold text-[15px] leading-snug tracking-normal text-slate-900 dark:text-white truncate notranslate" translate="no">Controle de Finanças</h2>
                     <span class="text-[11px] text-slate-400 font-medium block">Planejamento Pessoal</span>
                 </div>
             </div>
@@ -213,9 +214,9 @@
                     <i data-lucide="layout-dashboard" class="w-4 h-4 flex-shrink-0"></i>
                     <span class="truncate">Visão Mensal</span>
                 </button>
-                <button onclick="switchView('installments')" id="nav-desk-installments" class="w-full flex items-center justify-start gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-left whitespace-nowrap text-slate-300 hover:bg-slate-800/70 hover:text-white transition-all">
+                <button onclick="switchView('installments')" id="nav-desk-installments" class="w-full flex items-center justify-start gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-left whitespace-nowrap text-slate-300 hover:bg-slate-800/70 hover:text-white transition-all notranslate" translate="no">
                     <i data-lucide="calendar-clock" class="w-4 h-4 flex-shrink-0"></i>
-                    <span class="truncate">Planejamento & Parcelas</span>
+                    <span class="truncate">Compras Parceladas</span>
                 </button>
                 <button onclick="switchView('banks')" id="nav-desk-banks" class="w-full flex items-center justify-start gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-left whitespace-nowrap text-slate-300 hover:bg-slate-800/70 hover:text-white transition-all">
                     <i data-lucide="landmark" class="w-4 h-4 flex-shrink-0"></i>
@@ -258,7 +259,7 @@
                             </div>
                         </button>
                         <div class="truncate">
-                            <p id="header-user-name" class="md:hidden text-sm font-extrabold truncate leading-tight">Controle de Finanças</p>
+                            <p id="header-user-name" class="md:hidden text-sm font-extrabold truncate leading-tight notranslate" translate="no">Controle de Finanças</p>
                             <p class="hidden md:flex items-center gap-2 text-sm font-bold text-slate-200">
                                 <span class="w-2 h-2 rounded-full bg-[#FF2E4D] shadow-[0_0_8px_#FF2E4D]"></span> Visão Geral do Planejamento
                             </p>
@@ -549,7 +550,7 @@
                     <div class="bg-gradient-to-r from-[#12131C] via-[#171825] to-[#12131C] border border-rose-500/20 text-white p-5 rounded-3xl shadow-xl relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div>
                             <span class="text-[11px] font-bold uppercase tracking-wider text-rose-400">Controle de Longo Prazo</span>
-                            <h3 class="text-lg font-extrabold mt-0.5">Planejamento & Parcelas — <span id="inst-month-title" class="text-emerald-300">Nov 2026</span></h3>
+                            <h3 class="text-lg font-extrabold mt-0.5"><span class="notranslate" translate="no">Compras Parceladas</span> — <span id="inst-month-title" class="text-emerald-300">Nov 2026</span></h3>
                             <p class="text-xs text-slate-300 mt-1">Gerencie compras parceladas, acompanhe quando cada dívida termina e projete seu saldo nos próximos meses.</p>
                         </div>
                         <div class="flex flex-wrap gap-2">
@@ -1296,7 +1297,7 @@
         <!-- BARRA INFERIOR MOBILE -->
         <nav class="md:hidden fixed bottom-0 inset-x-0 bg-white/95 dark:bg-[#0f121a]/95 backdrop-blur-md border-t border-slate-200 dark:border-white/5 z-40 px-1 py-1.5 pb-[calc(0.4rem+env(safe-area-inset-bottom,0px))] flex items-center justify-around">
             <button onclick="switchView('dashboard')" id="nav-mob-dashboard" class="flex flex-col items-center py-1 px-1.5 text-rose-400 font-bold"><i data-lucide="layout-dashboard" class="w-5 h-5"></i><span class="text-[10px] mt-0.5">Mensal</span></button>
-            <button onclick="switchView('installments')" id="nav-mob-installments" class="flex flex-col items-center py-1 px-1.5 text-slate-400 font-semibold"><i data-lucide="calendar-clock" class="w-5 h-5"></i><span class="text-[10px] mt-0.5">Planejar</span></button>
+            <button onclick="switchView('installments')" id="nav-mob-installments" class="flex flex-col items-center py-1 px-1.5 text-slate-400 font-semibold notranslate" translate="no"><i data-lucide="calendar-clock" class="w-5 h-5"></i><span class="text-[10px] mt-0.5">Parcelas</span></button>
             <button onclick="switchView('banks')" id="nav-mob-banks" class="flex flex-col items-center py-1 px-1.5 text-slate-400 font-semibold"><i data-lucide="landmark" class="w-5 h-5"></i><span class="text-[10px] mt-0.5">Bancos</span></button>
             <button onclick="openTransactionModal()" class="w-11 h-11 -mt-5 rounded-full bg-gradient-to-tr from-[#FF2E4D] to-[#E61937] text-white shadow-lg shadow-rose-950/50 flex items-center justify-center active:scale-95 transition flex-shrink-0"><i data-lucide="plus" class="w-5 h-5"></i></button>
             <button onclick="switchView('advisor')" id="nav-mob-advisor" class="flex flex-col items-center py-1 px-1 text-slate-400 font-semibold"><i data-lucide="sparkles" class="w-5 h-5 text-amber-400"></i><span class="text-[10px] mt-0.5">IA</span></button>

@@ -5081,6 +5081,7 @@ function openBankModal() {
             let attempts = 0;
 
             pluggyPollTimers[itemId] = setInterval(async () => {
+                if (document.hidden) return;
                 attempts++;
                 if (attempts > maxAttempts) {
                     clearInterval(pluggyPollTimers[itemId]);
@@ -8710,12 +8711,12 @@ function openBankModal() {
                                 </div>
                             </div>
                             <div class="flex items-center justify-between pt-2 border-t border-slate-200/60 dark:border-slate-800 text-[11px]">
-                                <button type="button" onclick="openEditTransaction(${Number(t.id)})" class="font-bold text-rose-400 hover:text-rose-300 font-bold hover:underline flex items-center gap-1">
+                                <button type="button" onclick="openEditTransaction(${Number(t.id)})" class="font-bold text-rose-400 hover:text-rose-300 font-bold hover:underline flex items-center gap-1 notranslate" translate="no">
                                     Editar / Ajustar Parcelas
                                 </button>
-                                <button type="button" onclick="togglePaidStatus(${Number(t.id)})" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition ${t.paid ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'}">
+                                <button type="button" onclick="togglePaidStatus(${Number(t.id)})" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition notranslate ${t.paid ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'}" translate="no">
                                     <i data-lucide="${t.paid ? 'check-check' : 'check'}" class="w-3 h-3"></i>
-                                    <span>${t.paid ? (t.reconciledWithStatement ? '✓ Conciliada' : '✓ Parcela Paga') : 'Pagar Parcela'}</span>
+                                    <span class="notranslate" translate="no">${t.paid ? (t.reconciledWithStatement ? '✓ Conciliada' : '✓ Parcela Paga') : 'Pagar Parcela'}</span>
                                 </button>
                             </div>
                         </div>
@@ -11034,7 +11035,16 @@ function openBankModal() {
 
             isSyncingFamilyLinks = false;
             renderFamilyAccountUI();
-            renderAll();
+            if (!silent) {
+                renderAll();
+            } else {
+                // Em background (silent), só dispara renderAll se houver alteração real nos dados
+                const newFingerprint = JSON.stringify(familyMemberProfiles);
+                if (window.__lastFamilyFingerprint !== newFingerprint) {
+                    window.__lastFamilyFingerprint = newFingerprint;
+                    renderAll();
+                }
+            }
         }
 
         async function toggleFamilySharingEnabled(enabled) {
@@ -11763,12 +11773,12 @@ function openBankModal() {
             }
         });
 
-        // Polling silencioso inteligente a cada 8 segundos para atualizar sem F5
+        // Polling silencioso inteligente a cada 60 segundos com verificação de foco
         setInterval(() => {
             if (!document.hidden && currentUser && familySharingEnabled && !isSyncingFamilyLinks) {
                 loadFamilyAccountLinks(true).catch(() => {});
             }
-        }, 8000);
+        }, 60000);
 
 
 // ==========================================================
@@ -14419,29 +14429,14 @@ window.updateAiChatStatusPill = updateAiChatStatusPill;
             }
         };
 
-        // Microinterações 3D Suaves com Perspective nos Cards (Estilo meu.pluggy.ai)
+        // Estabilização dos Cards: Remove transformações 3D e mousemove para evitar blur e layout shifts
         function initPluggy3DTilt() {
-            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-            if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) return;
             const cards = document.querySelectorAll('.pluggy-card, .pluggy-bank-card');
             cards.forEach(card => {
                 if (card.__tiltInitialized) return;
                 card.__tiltInitialized = true;
-
-                card.addEventListener('mousemove', (e) => {
-                    const rect = card.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
-                    const centerX = rect.width / 2;
-                    const centerY = rect.height / 2;
-                    const rotateX = ((y - centerY) / centerY) * -3.5;
-                    const rotateY = ((x - centerX) / centerX) * 4;
-                    card.style.transform = `translateY(-4px) perspective(1000px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale(1.01)`;
-                });
-
-                card.addEventListener('mouseleave', () => {
-                    card.style.transform = '';
-                });
+                card.style.transform = '';
+                card.style.transformStyle = 'flat';
             });
         }
         window.initPluggy3DTilt = initPluggy3DTilt;

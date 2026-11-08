@@ -28,6 +28,23 @@ body {
     -webkit-tap-highlight-color: transparent;
     transition: background-color 0.3s ease, color 0.3s ease;
     padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    top: 0px !important;
+    position: static !important;
+}
+
+/* ==========================================================================
+   BLOQUEIO DE TRADUÇÃO E PROTEÇÃO CONTRA LAYOUT SHIFTS DO NAVEGADOR
+   ========================================================================== */
+.notranslate {
+    translate: no !important;
+}
+
+.skiptranslate,
+#goog-gt-,
+.goog-te-banner-frame,
+.VIpgJd-ZVi9od-OR9Mb-OxfBSc {
+    display: none !important;
+    visibility: hidden !important;
 }
 
 /* ==========================================================================
