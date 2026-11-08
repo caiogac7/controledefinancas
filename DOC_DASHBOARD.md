@@ -78,8 +78,10 @@
   - Varre todas as páginas de transações disponíveis na instituição sem limite de data.
 - **Blindagem Completa Anti-Quota (Backend & Frontend):**
   - Caso a Pluggy ou o Banco reportem `The quota has been exceeded` ou `HTTP 429`, o backend responde HTTP 200 com os dados já salvos e o frontend exibe aviso informativo suave sem travar ou emitir erro fatal.
-  - O `bootstrap.js` implementa versionamento anti-cache (`js/app.js?v=20261108_delta48h`), garantindo que o celular receba a versão mais atualizada imediatamente.
+  - O `bootstrap.js` implementa versionamento anti-cache (`js/app.js?v=20261108_patch_meta_fix`), garantindo que o celular receba a versão mais atualizada imediatamente.
   - `safeLocalStorageSet` purga dados antigos e pesados de debug caso o navegador mobile atinja o teto de 5MB de armazenamento.
+  - **Otimização de Salvamento em Lote:** O `CloudDB.saveUserData` é invocado uma única vez ao término da fila de sincronização (em vez de concorrente a cada banco), e o payload de extratos em `profiles.settings_json` foi limitado com proteção `try/catch` para evitar erros 500 no Supabase.
+  - **Auditoria de PATCH no Objeto de Conexão:** Retorno de `patchStatus` e `patchMessage` no payload do item para rastrear exatamente se e por que o conector bancário aceitou ou rejeitou a consulta.
 
 
 - **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.

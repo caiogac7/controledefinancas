@@ -1197,6 +1197,7 @@ async function handler(req, res) {
         // 1. CAPTURAR O lastUpdatedAt ANTES DO PATCH
         const previousUpdatedAt = itemData.lastUpdatedAt || itemData.updatedAt || null;
         let patchTriggered = false;
+        let patchRes = null;
 
         // 2. Trava Inteligente Anti-Quota e Disparo do Refresh no Banco Real (PATCH /items/{id})
         let bankRefreshed = false;
@@ -1213,7 +1214,7 @@ async function handler(req, res) {
             } else {
                 currentStep = 'pluggy_trigger_update';
                 console.log(`[Pluggy] Disparando PATCH /items/${itemId} para buscar novidades no banco real... (snapshot anterior: ${previousUpdatedAt})`);
-                const patchRes = await pluggyClient.updateItem(String(itemId));
+                patchRes = await pluggyClient.updateItem(String(itemId));
 
                 if (patchRes.ok) {
                     patchTriggered = true;
@@ -1227,6 +1228,7 @@ async function handler(req, res) {
                     bankRefreshed = Boolean(pollRes.success);
                 } else {
                     const msg = String(patchRes.message || patchRes.error || '');
+                    console.warn(`[Pluggy] PATCH /items/${itemId} retornou status ${patchRes.status}:`, msg);
                     if (msg.toLowerCase().includes('quota') || patchRes.status === 429) {
                         console.warn(`[Pluggy] Cota de refresh direto no banco atingida para ${itemId}. Prosseguindo com os dados mais recentes salvos na Pluggy sem erro.`);
                         quotaNotice = 'Cota temporária de atualização direta do banco já utilizada recentemente. Sincronizando com a última versão disponível na Pluggy.';
@@ -1859,6 +1861,8 @@ async function handler(req, res) {
                 updatedAt: itemData.updatedAt || itemData.lastUpdatedAt || spTimestamp,
                 executionStatus: itemData.executionStatus || itemData.status || 'UPDATED',
                 patchTriggered: Boolean(patchTriggered),
+                patchStatus: patchRes ? patchRes.status : null,
+                patchMessage: patchRes ? patchRes.message : null,
                 bankRefreshed: Boolean(bankRefreshed),
                 quotaNotice: quotaNotice || null
             },

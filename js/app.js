@@ -1802,7 +1802,7 @@
                     cards: savedCards,
                     categories: categories,
                     customEmojis: customEmojis,
-                    bankStatements: bankStatements,
+                    bankStatements: Array.isArray(bankStatements) ? bankStatements.slice(-150) : [],
                     creditBills: creditBills,
                     pluggyItems: pluggyItems,
                     balanceAudits: balanceAudits.slice(0, 30),
@@ -1825,17 +1825,24 @@
                     currentUser.transactions_json = transactionsArray || [];
                 }
 
-                // 1. Grava na tabela public.profiles
-                await supabaseClient.from('profiles').upsert({
-                    id: userId,
-                    name: profileData.name,
-                    email: profileData.email,
-                    phone: profileData.phone || '',
-                    photo: profileData.photo || '',
-                    transactions_json: transactionsArray || [],
-                    settings_json: settingsPayload,
-                    updated_at: getSaoPauloTimestamp()
-                });
+                // 1. Grava na tabela public.profiles com proteção anti-crash
+                try {
+                    const { error: profErr } = await supabaseClient.from('profiles').upsert({
+                        id: userId,
+                        name: profileData.name,
+                        email: profileData.email,
+                        phone: profileData.phone || '',
+                        photo: profileData.photo || '',
+                        transactions_json: transactionsArray || [],
+                        settings_json: settingsPayload,
+                        updated_at: getSaoPauloTimestamp()
+                    });
+                    if (profErr) {
+                        console.warn('[CloudDB] Aviso ao gravar profiles no Supabase:', profErr?.message || profErr);
+                    }
+                } catch (profEx) {
+                    console.warn('[CloudDB] Exceção ao salvar profiles:', profEx?.message || profEx);
+                }
 
                 // 2. Grava na tabela relacional public.banks via UPSERT direto (SEM deletar a tabela inteira e sem violar FKs)
                 try {
@@ -5576,6 +5583,14 @@ function openBankModal() {
                 renderAll();
                 renderPluggyConnections();
 
+                if (currentUser) {
+                    try {
+                        await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                    } catch (batchSaveErr) {
+                        console.warn('[CloudDB] Aviso ao consolidar lote:', batchSaveErr);
+                    }
+                }
+
                 const syncTypeLabel = isTotal ? 'Histórico Completo' : (mode === '7d' ? 'Últimos 7 Dias' : 'Novidades (48h)');
                 if (failedErrors.length > 0 && successCount === 0) {
                     const allQuota = failedErrors.every(e => e.includes('Cota'));
@@ -5830,6 +5845,9 @@ function openBankModal() {
 
                 const itemInfo = data.item || {};
                 console.log('📌 [Pluggy Conexão] Dados atualizados do item recebido:', itemInfo);
+                if (itemInfo.patchStatus && !itemInfo.patchTriggered) {
+                    console.warn(`[Pluggy PATCH] Item ${itemId} não atualizou direto no banco (HTTP ${itemInfo.patchStatus}): ${itemInfo.patchMessage}`);
+                }
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 const pluggyTxs = Array.isArray(data.transactions) ? data.transactions : [];
                 if (data.rawDebugPayload) {
@@ -5849,6 +5867,8 @@ function openBankModal() {
                     updatedAt: itemInfo.updatedAt || null,
                     executionStatus: itemInfo.executionStatus || itemInfo.status || 'UPDATED',
                     patchTriggered: Boolean(itemInfo.patchTriggered),
+                    patchStatus: itemInfo.patchStatus || null,
+                    patchMessage: itemInfo.patchMessage || null,
                     bankRefreshed: Boolean(itemInfo.bankRefreshed),
                     accountsSummary: accounts.map(a => ({
                         id: a.id,
@@ -6289,7 +6309,13 @@ function openBankModal() {
 
                 populateBankSelectors();
                 renderAll();
-                if (currentUser) await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                if (currentUser && !options.isBatch) {
+                    try {
+                        await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                    } catch (saveErr) {
+                        console.warn('[CloudDB] Aviso ao salvar dados do item:', saveErr);
+                    }
+                }
 
                 if (!silent || (options.fromAutoPoll && addedMonthlyCount > 0)) {
                     const summaryBalances = accounts.map(a => `• ${a.type === 'CREDIT' ? '💳' : '🏦'} ${a.name}: ${formatBRL(a.balance)}`).join('\n');
