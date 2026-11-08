@@ -112,4 +112,12 @@
   - **Relatórios:** Exportação organizada em grade de 3 colunas compactas (`PDF`, `Mês`, `Geral`).
 - **Alinhamento Flexível Responsivo (Column to Row):**
   - Containers configurados com `flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4`, garantindo empilhamento limpo do título sobre os botões no mobile e alinhamento horizontal elegante no desktop.
-- **Versionamento de Cache:** `bootstrap.js` atualizado para `20261108_mobile_header_compact_v4`.
+- **Versionamento de Cache:** `bootstrap.js` atualizado para `20261108_simulador_ia_v2_1`.
+
+### 12. Simulador de Decisão de Compra com IA v2.1 & Consultor Financeiro Pessoal v2
+- **Arquivo de Patch Integrado (`simulador-ia-v2.1.patch`):** Patch consolidando aprimoramentos matemáticos e prompts estruturados do Consultor e Simulador de Compras.
+- **Regras de Decisão Antifraude/Antijuros:**
+  - Cálculo de Planos B realistas (`LOJA_2X`, `LOJA_3X`, etc.) mantendo a taxa de juros da loja, caso o lojista recuse negociações de desconto no balcão.
+  - O campo `planoB` tornou-se obrigatório no schema do Gemini sempre que a recomendação depender da aceitação da loja.
+- **Tratamento de Caixa com Virada de Cartão:** Se o mês atual já iniciou com déficit prévio, a IA não reprova compras quando a 1ª parcela só cai na fatura do mês seguinte (`impactoAtual <= 0`), informando com clareza o início do desembolso.
+- **Consultor Financeiro Pessoal v2:** Histórico nativo de conversação por turnos com Gemini (`contents`), dados reais consolidados de caixa atual, projeção de 6 meses, compras parceladas ativas e cartões com virada de ciclo.

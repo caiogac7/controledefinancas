@@ -1,0 +1,866 @@
+diff --git a/js/app.js b/js/app.js
+index 329e953..614b61e 100644
+--- a/js/app.js
++++ b/js/app.js
+@@ -12671,7 +12671,7 @@ function computeHistoricalMonthlyExpense(startMonthKey, monthsBack = 3) {
+  * Monta as opções reais que a IA pode escolher, cada uma com o impacto EXATO no caixa
+  * (mês atual e pior mês futuro). A IA nunca inventa número: ela escolhe uma destas.
+  */
+-function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaSobra) {
++function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaSobra, taxaMensal, delay) {
+     const startKey = ctx.curMonthKey;
+     const startOffset = Number(cardInfo?.startOffset || 0);
+     const sobraAtual = Number(base.sobraLivreMesAtual || 0);
+@@ -12680,7 +12680,7 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+     (projecao || []).forEach(m => { byKey[m.monthKey] = Number(m.sobraConservadora); });
+     const monthKeyOf = (offset) => (typeof addMonthsToKey === 'function' ? addMonthsToKey(startKey, offset) : startKey);
+ 
+-    const build = (id, titulo, entrada, k, valorParcela, custoTotalFixo) => {
++    const build = (id, titulo, entrada, k, valorParcela, custoTotalFixo, dependeDaLoja) => {
+         entrada = simRound2(entrada);
+         valorParcela = simRound2(valorParcela);
+         let impactoAtual = entrada;
+@@ -12696,6 +12696,10 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+         const sobraMesAtualApos = simRound2(sobraAtual - impactoAtual);
+         const menorSobraFutura = menor === null ? null : simRound2(menor);
+         const custoTotal = simRound2(custoTotalFixo !== undefined ? custoTotalFixo : entrada + valorParcela * k);
++        // Se o mês atual JÁ está negativo, o que importa é a compra não piorar o mês atual (ex.: 1ª parcela só no mês seguinte).
++        const naoPioraMesAtual = impactoAtual <= 0.005;
++        const cabeMesAtual = sobraMesAtualApos >= 0 || naoPioraMesAtual;
++        const cabeFuturo = menorSobraFutura === null || menorSobraFutura >= 0;
+         return {
+             id,
+             titulo,
+@@ -12708,19 +12712,35 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+             sobraMesAtualApos,
+             menorSobraFutura,
+             mesMenorSobra: mesMenor,
+-            cabe: sobraMesAtualApos >= 0 && (menorSobraFutura === null || menorSobraFutura >= 0),
+-            folgaSegura: sobraAtual > 0 && sobraMesAtualApos >= sobraAtual * 0.20
++            cabe: cabeMesAtual && cabeFuturo,
++            folgaSegura: (sobraAtual > 0 ? sobraMesAtualApos >= sobraAtual * 0.20 : naoPioraMesAtual) && cabeFuturo,
++            dependeDaLoja: Boolean(dependeDaLoja),
++            mesAtualJaNegativo: sobraAtual < 0
+         };
+     };
+ 
+     const opcoes = [];
+-    opcoes.push(build('A_VISTA', 'Pagar 100% à vista (PIX/débito)', cashPrice, 0, 0, cashPrice));
++    opcoes.push(build('A_VISTA', 'Pagar 100% à vista (PIX/débito)', cashPrice, 0, 0, cashPrice, false));
+     opcoes.push(build(
+         'SIMULACAO',
+         `Parcelar como simulado (${numInst}x de ${formatSimMoney(installmentTotal / numInst)})`,
+-        0, numInst, installmentTotal / numInst, installmentTotal
++        0, numInst, installmentTotal / numInst, installmentTotal, false
+     ));
+ 
++    // Plano B realista: parcelar em MENOS vezes mantendo a mesma taxa de juros que a loja cobra (estimativa).
++    if (taxaMensal > 0 && jurosTotais > 0.01) {
++        [2, 3, 4, 6].filter(k => k < numInst).forEach(k => {
++            let anuidade = 0;
++            for (let j = 0; j < k; j++) anuidade += 1 / Math.pow(1 + taxaMensal, delay + j);
++            const parcelaK = cashPrice / anuidade;
++            opcoes.push(build(
++                `LOJA_${k}X`,
++                `Parcelar em ${k}x mantendo a taxa da loja (estimativa)`,
++                0, k, parcelaK, parcelaK * k, false
++            ));
++        });
++    }
++
+     [1, 2, 3, 4, 6, 10, 12]
+         .filter(k => k <= Math.max(numInst, 3))
+         .filter(k => !(k === numInst && jurosTotais <= 0.01))
+@@ -12730,7 +12750,7 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+                 k === 1
+                     ? '1x no cartão pelo preço à vista (negociar)'
+                     : `${k}x sem juros pelo preço à vista (negociar)`,
+-                0, k, cashPrice / k, cashPrice
++                0, k, cashPrice / k, cashPrice, true
+             ));
+         });
+ 
+@@ -12739,8 +12759,8 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+     if (entradaH > 0 && entradaH < cashPrice) {
+         opcoes.push(build(
+             `ENTRADA_${kH}X`,
+-            `${formatSimMoney(entradaH)} de entrada + ${kH}x no cartão (sem juros)`,
+-            entradaH, kH, (cashPrice - entradaH) / kH, cashPrice
++            `${formatSimMoney(entradaH)} de entrada + ${kH}x no cartão (sem juros, negociar)`,
++            entradaH, kH, (cashPrice - entradaH) / kH, cashPrice, true
+         ));
+     }
+     return opcoes;
+@@ -12767,7 +12787,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal,
+         ? simRound2(projecao.reduce((a, m) => a + m.sobraConservadora, 0) / projecao.length)
+         : base.mediaSobraFutura;
+ 
+-    const opcoes = buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaConservadora);
++    const opcoes = buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaConservadora, taxa, delay);
+ 
+     return {
+         ...base,
+@@ -12796,7 +12816,7 @@ function buildSimulationResponseSchema(preMath) {
+     };
+     const order = [
+         'raciocinio', 'item', 'decisao', 'opcaoEscolhidaId', 'vereditoTitulo', 'vereditoResumo',
+-        'observacaoAVista', 'observacaoSimulacao', 'explicacaoJogada',
++        'observacaoAVista', 'observacaoSimulacao', 'explicacaoJogada', 'planoB',
+         'scriptBarganhaBalcao', 'alertaSazonalidade', 'alertaCustoAcoplado'
+     ];
+     return {
+@@ -12811,6 +12831,7 @@ function buildSimulationResponseSchema(preMath) {
+             observacaoAVista: { type: 'STRING' },
+             observacaoSimulacao: { type: 'STRING' },
+             explicacaoJogada: { type: 'STRING' },
++            planoB: { type: 'STRING', description: 'O que fazer se a loja não negociar: qual opção que não depende da loja escolher, com o custo de juros em R$.' },
+             scriptBarganhaBalcao: { type: 'STRING' },
+             alertaSazonalidade: { type: 'STRING' },
+             alertaCustoAcoplado: { type: 'STRING' }
+@@ -12838,7 +12859,7 @@ function parseAiDecisionResponse(rawText) {
+ function simDecisionFromOptionId(id) {
+     const s = String(id || '');
+     if (s === 'A_VISTA') return 'PAGAR_A_VISTA';
+-    if (s === 'SIMULACAO') return 'PARCELAR_COMO_SIMULADO';
++    if (s === 'SIMULACAO' || s.startsWith('LOJA_')) return 'PARCELAR_COMO_SIMULADO';
+     if (s.startsWith('NEGOCIAR_')) return 'NEGOCIAR_E_PARCELAR';
+     if (s.startsWith('ENTRADA_')) return 'ENTRADA_E_PARCELAS';
+     return null;
+@@ -12852,8 +12873,8 @@ function simBestFeasibleOption(opcoes, vidaUtilMeses) {
+     }
+     if (!ok.length) return null;
+     const folga = (o) => (o.menorSobraFutura === null ? 1e12 : o.menorSobraFutura);
+-    // 1º folga segura no mês atual, 2º menor custo total, 3º maior sobra no PIOR mês futuro
+-    ok.sort((a, b) => (Number(b.folgaSegura) - Number(a.folgaSegura)) || (a.custoTotal - b.custoTotal) || (folga(b) - folga(a)));
++    // 1º folga segura, 2º que NÃO dependa da loja aceitar, 3º menor custo total, 4º maior sobra no PIOR mês futuro
++    ok.sort((a, b) => (Number(b.folgaSegura) - Number(a.folgaSegura)) || (Number(a.dependeDaLoja) - Number(b.dependeDaLoja)) || (a.custoTotal - b.custoTotal) || (folga(b) - folga(a)));
+     return ok[0];
+ }
+ 
+@@ -12949,7 +12970,7 @@ function convertAiDecisionToSimulationResult(rawText, preMath, cashPrice, instal
+                 parcelasRecomendadas: opcao ? Math.max(1, opcao.parcelas) : 1,
+                 custoTotalEstimado: opcao ? opcao.custoTotal : 0,
+                 statusTag: tagPorDecisao[decisao],
+-                explicacao: String(ai.explicacaoJogada || '').trim()
++                explicacao: [String(ai.explicacaoJogada || '').trim(), String(ai.planoB || '').trim() ? `Plano B: ${String(ai.planoB).trim()}` : ''].filter(Boolean).join(' ')
+             }
+         },
+         analiseTatica: {
+@@ -13211,7 +13232,7 @@ COMO TRABALHAR
+ PASSOS DO RACIOCÍNIO
+ 1. Item: o que é, para que serve, é essencial (saúde, trabalho, segurança, moradia, transporte) ou dispensável? Qual a vida útil realista em meses?
+ 2. Juros: a taxa implícita mensal está acima do CDI (0,85% a.m.)? Quanto custa a mais em reais?
+-3. Caixa: quais opções cabem (cabe=SIM) e quais deixam folga segura (folga segura=SIM, ou seja, sobra >= 20% da sobra atual)?
++3. Caixa: quais opções cabem (cabe=SIM significa: não piora o mês atual e nenhum mês futuro fica negativo) e quais deixam folga segura? Se a 1ª parcela só vence no mês seguinte (virada do cartão), o impacto no mês atual é R$ 0: explique isso ("você leva hoje e só começa a pagar em <mês>").
+ 4. Prazo: quantas parcelas em relação à vida útil? Acima de 50% da vida útil é ruim.
+ 5. Custo acoplado: o item exige montagem, instalação, alinhamento, balanceamento ou serviço técnico? Estime a faixa em R$.
+ 6. Decisão pelas regras abaixo.
+@@ -13221,14 +13242,17 @@ REGRAS DE DECISÃO (aplique na ordem; use a primeira que servir)
+ 2. Item dispensável e nenhuma opção deixa folga segura -> ADIAR_COMPRA (opcaoEscolhidaId = NENHUMA).
+ 3. Simulação sem juros (ou taxa implícita <= 0,85% a.m.), que cabe, com prazo <= 50% da vida útil -> PARCELAR_COMO_SIMULADO (opção SIMULACAO). O dinheiro rende no CDI enquanto parcela.
+ 4. Taxa implícita > 0,85% a.m. e a opção A_VISTA cabe com folga segura -> PAGAR_A_VISTA (opção A_VISTA).
+-5. Taxa implícita > 0,85% a.m. e A_VISTA não cabe (ou não deixa folga segura) -> escolha, entre as opções NEGOCIAR_* e ENTRADA_* que cabem, a de menor custo total que respeite o prazo de vida útil. O scriptBarganhaBalcao é obrigatório.
+-6. Se nenhuma regra anterior servir, escolha a opção que cabe com o menor custo total.
++5. Taxa implícita > 0,85% a.m. e A_VISTA não cabe (ou não deixa folga segura) -> escolha, entre as opções que cabem, a de menor custo total que respeite o prazo de vida útil. Opções NEGOCIAR_* e ENTRADA_* dependem de a loja aceitar; SIMULACAO e LOJA_* existem hoje (com juros). O scriptBarganhaBalcao é obrigatório.
++6. Item ESSENCIAL que só dá para comprar parcelando com juros: NÃO reprove. Aprove o parcelamento sem dependência da loja que caiba e tenha o menor custo, informando os juros em R$ e explicando que o impacto no caixa só começa quando a fatura vencer.
++7. Se uma opção escolhida depende da loja (NEGOCIAR_* ou ENTRADA_*), o campo planoB é OBRIGATÓRIO: diga qual opção que não depende da loja (SIMULACAO ou LOJA_*) o usuário deve fechar se a loja recusar, com o custo extra em R$ e por que ainda vale a pena. Se a escolhida já não depende da loja, use planoB para dizer como reduzir os juros (script de barganha).
++8. Se o mês atual JÁ está negativo antes da compra, isso NÃO é motivo de reprovação quando a opção não aumenta a saída do mês atual. Mencione o déficit existente e a necessidade de cobri-lo, sem confundir com o impacto da compra.
+ 
+ COMO ESCREVER
+ - Português do Brasil, direto, citando o NOME do item e os números reais do sistema. É proibido texto genérico que serviria para qualquer compra.
+ - vereditoTitulo: até 70 caracteres, em maiúsculas. vereditoResumo: 2 a 3 frases.
+ - observacaoAVista e observacaoSimulacao: uma frase cada, coerente com os números (cabe/não cabe, juros).
+ - explicacaoJogada: por que a opção escolhida é a melhor para ESTE item e ESTE caixa.
++- planoB: 1 a 2 frases (veja regra 7).
+ - scriptBarganhaBalcao: frase pronta para falar no balcão ou no WhatsApp, citando valores do sistema (teto de negociação, preço à vista). Se a decisão for PAGAR_A_VISTA, peça desconto no PIX.
+ - alertaSazonalidade: use o radar do sistema; se não atravessa Jan/Fev/Mar, diga que não há risco sazonal.
+ - alertaCustoAcoplado: se o item exige instalação, informe a faixa em R$ e diga para reservar à vista; senão, diga que não há custo extra previsto.
+@@ -13273,7 +13297,7 @@ function buildUserPromptPayload(itemName, cashPrice, installmentTotal, installme
+         const forma = o.parcelas > 0 && o.valorParcela > 0
+             ? `${o.parcelas}x de ${formatSimMoney(o.valorParcela)}`
+             : 'sem parcelas';
+-        return `- [${o.id}] ${o.titulo} | entrada ${formatSimMoney(o.entrada)} | ${forma} | custo total ${formatSimMoney(o.custoTotal)} (juros vs à vista: ${formatSimMoney(o.jurosVsAVista)}) | sobra do mês atual após: ${formatSimMoney(o.sobraMesAtualApos)} | pior mês futuro: ${pior} | cabe: ${o.cabe ? 'SIM' : 'NÃO'} | folga segura: ${o.folgaSegura ? 'SIM' : 'NÃO'}`;
++        return `- [${o.id}] ${o.titulo} | entrada ${formatSimMoney(o.entrada)} | ${forma} | custo total ${formatSimMoney(o.custoTotal)} (juros vs à vista: ${formatSimMoney(o.jurosVsAVista)}) | sobra do mês atual após: ${formatSimMoney(o.sobraMesAtualApos)} | pior mês futuro: ${pior} | cabe: ${o.cabe ? 'SIM' : 'NÃO'} | folga segura: ${o.folgaSegura ? 'SIM' : 'NÃO'} | ${o.dependeDaLoja ? 'DEPENDE DA LOJA ACEITAR' : 'existe hoje / estimativa realista'}`;
+     }).join('\n');
+ 
+     return `Analise esta decisão de compra. Todos os números abaixo são do sistema; use-os sem recalcular.
+@@ -13298,13 +13322,14 @@ ${cartaoTexto}
+ ${projecaoStr}
+ - Sobra média futura conservadora: ${formatSimMoney(preMath.mediaSobraFutura)}
+ 
+-## 4. OPÇÕES DISPONÍVEIS (impacto exato no caixa; escolha uma pelo ID)
++## 4. OPÇÕES DISPONÍVEIS (impacto exato no caixa; escolha uma pelo ID; impacto no mês atual = o que sai da conta neste mês)
+ ${opcoesStr}
+ 
+ ## 5. RADAR DO SISTEMA
+ - Sazonalidade: ${preMath.alertaSazonalidade}
+ - Dica de custo acoplado (heurística por palavra-chave, pode estar errada; confirme pelo item): ${preMath.alertaCustoAcoplado}
+ ${sim ? `- A simulação do usuário ${sim.cabe ? 'CABE' : 'NÃO CABE'} no caixa.` : ''}
++${Number(preMath.sobraLivreMesAtual) < 0 ? `- ATENÇÃO: o mês atual JÁ está negativo em ${formatSimMoney(preMath.sobraLivreMesAtual)} antes da compra. Isso é um déficit existente, não efeito da compra.` : ''}
+ 
+ Siga os passos do raciocínio e devolva o JSON do schema.`;
+ }
+@@ -13354,9 +13379,13 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
+         ...(expectJson && options.responseSchema ? { responseSchema: options.responseSchema } : {})
+     };
+ 
++    const geminiContents = (Array.isArray(options.contents) && options.contents.length > 0)
++        ? options.contents
++        : [{ role: 'user', parts: [{ text: userPromptText }] }];
++
+     const standardPayload = {
+         systemInstruction: { parts: [{ text: systemInstruction }] },
+-        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
++        contents: geminiContents,
+         generationConfig
+     };
+ 
+@@ -13452,6 +13481,7 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
+             body: JSON.stringify({
+                 systemInstruction,
+                 userPrompt: userPromptText,
++                ...(Array.isArray(options.contents) && options.contents.length > 0 ? { contents: options.contents } : {}),
+                 generationConfig
+             })
+         });
+@@ -14808,6 +14838,168 @@ function buildDetailedTransactionsSummaryForAi(curMonthKey) {
+     };
+ }
+ 
++// =========================================================================
++// CONSULTOR v2 — INÍCIO
++// O chat antes só via o MÊS ATUAL e por isso "inventava" dezembro/janeiro.
++// Agora ele recebe: projeção mês a mês, cartões com a virada calculada, parcelas e histórico.
++// =========================================================================
++function consultantFirstBillOffset(closingDay, dueDay, day) {
++    // Mesma regra do Simulador de Compras.
++    if (dueDay > closingDay) return day < closingDay ? 0 : 1;
++    return day < closingDay ? 1 : 2;
++}
++
++function consultantMonthLabel(key) {
++    try {
++        const obj = (typeof MONTHS !== 'undefined' && Array.isArray(MONTHS)) ? MONTHS.find(m => m.key === key) : null;
++        if (obj && obj.label) return obj.label;
++    } catch (_) { /* usa o fallback abaixo */ }
++    return simMonthLabel(key);
++}
++
++function buildConsultantCardsText(todayStr) {
++    const cards = (typeof savedCards !== 'undefined' && Array.isArray(savedCards)) ? savedCards : [];
++    if (!cards.length) return 'Nenhum cartão de crédito cadastrado.';
++    const [y, m, d] = String(todayStr).split('-').map(Number);
++    const startKey = `${y}-${String(m).padStart(2, '0')}`;
++    const hojeBR = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
++    return cards.map(c => {
++        const nome = c.name || c.alias || 'Cartão';
++        const closing = Math.max(0, Math.min(31, Number(c.closingDay || 0)));
++        const due = Math.max(0, Math.min(31, Number(c.dueDay || 0)));
++        if (!closing || !due) return `• ${nome}: fechamento/vencimento não configurados (não dá para calcular a virada).`;
++        const off = consultantFirstBillOffset(closing, due, d);
++        const key = (typeof addMonthsToKey === 'function') ? addMonthsToKey(startKey, off) : startKey;
++        const venc = `${String(due).padStart(2, '0')}/${key.slice(5, 7)}/${key.slice(0, 4)}`;
++        const efeito = off === 0
++            ? 'IMPACTA o caixa DESTE mês'
++            : `NÃO impacta o caixa deste mês; só começa a pesar em ${consultantMonthLabel(key)}`;
++        return `• ${nome}: fecha dia ${closing}, vence dia ${due}. Uma compra feita HOJE (${hojeBR}) tem a 1ª parcela vencendo em ${venc} (${efeito}).`;
++    }).join('\n');
++}
++
++function buildConsultantProjectionText(ctx) {
++    const fmt = (n) => formatSimMoney(n);
++    const hist = computeHistoricalMonthlyExpense(ctx.curMonthKey);
++    let acumulado = Number(ctx.projectedMonthBalance || 0);
++    const linhas = [`• ${ctx.currentMonthLabel} (mês atual): saldo projetado no fim do mês ${fmt(acumulado)} (fato do app: saldo em conta + receitas pendentes - despesas pendentes)`];
++    for (let i = 1; i <= 6; i++) {
++        const key = (typeof addMonthsToKey === 'function') ? addMonthsToKey(ctx.curMonthKey, i) : ctx.curMonthKey;
++        let txs = [];
++        try {
++            if (typeof ensureMonthExists === 'function') ensureMonthExists(key, true);
++            txs = (typeof getHomeVisibleTransactions === 'function') ? (getHomeVisibleTransactions(key) || []) : [];
++        } catch (_) { txs = []; }
++        const recLancada = txs.filter(t => t && t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0);
++        const despLancada = txs.filter(t => t && t.type === 'expense').reduce((a, b) => a + (b.isConsolidatedBill
++            ? Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0)
++            : Number(b.amount || 0)), 0);
++        const recEstimada = recLancada === 0 && Number(ctx.totalIncome) > 0;
++        const rec = recEstimada ? Number(ctx.totalIncome) : recLancada;
++        const despBase = Math.max(despLancada, hist);
++        const resultado = rec - despBase;
++        acumulado += resultado;
++        linhas.push(
++            `• ${consultantMonthLabel(key)}: receita ${fmt(rec)}${recEstimada ? ' (ESTIMADA: ainda sem receita lançada, usei a do mês atual)' : ''}`
++            + ` | despesas já lançadas ${fmt(despLancada)} | gasto médio histórico ${fmt(hist)}`
++            + ` | resultado conservador do mês ${fmt(resultado)} | saldo acumulado estimado ${fmt(acumulado)}`
++        );
++    }
++    return linhas.join('\n');
++}
++
++function buildConsultantInstallmentsText(ctx, auditData) {
++    const list = (auditData && auditData.installmentList) || [];
++    if (!list.length) return 'Nenhuma compra parcelada em andamento registrada.';
++    return list.map(p => {
++        const libera = (p.remainingInst >= 0 && typeof addMonthsToKey === 'function')
++            ? consultantMonthLabel(addMonthsToKey(ctx.curMonthKey, p.remainingInst + 1))
++            : '-';
++        return `• "${p.name}": parcela ${p.currentInst}/${p.totalInst} de ${formatSimMoney(p.amount)}. Faltam ${p.remainingInst}. Última parcela em ${p.endMonthLabel}; libera ${formatSimMoney(p.amount)}/mês a partir de ${libera}.`;
++    }).join('\n');
++}
++
++function buildConsultantExpensesText(auditData) {
++    const exps = (auditData && auditData.currentMonthExpenses) || [];
++    if (!exps.length) return 'Nenhuma despesa cadastrada para este mês.';
++    const byCat = {};
++    exps.forEach(d => { const c = d.cat || 'Geral'; byCat[c] = (byCat[c] || 0) + Number(d.amount || 0); });
++    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8)
++        .map(([c, v]) => `${c}: ${formatSimMoney(v)}`).join(' | ');
++    const top = exps.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0)).slice(0, 15)
++        .map(d => `• ${d.desc}: ${formatSimMoney(d.amount)} (${d.paid ? 'pago' : 'pendente'}, ${d.cat || 'Geral'})`).join('\n');
++    return `Total por categoria: ${cats}\nMaiores despesas:\n${top}`;
++}
++
++function buildConsultantSystemPrompt(todayStr, ctx, auditData) {
++    const [y, m, d] = String(todayStr).split('-');
++    const hojeBR = `${d}/${m}/${y}`;
++    return `Você é o Consultor Financeiro Pessoal do usuário, dentro do app de controle de finanças dele. A conversa é livre: ele pode pedir qualquer análise avulsa (posso comprar isso? onde corto gastos? o que pago primeiro? como fica dezembro?).
++
++HOJE É ${hojeBR}.
++
++COMO RESPONDER
++- Português do Brasil, tom humano, direto e acolhedor, como um amigo que entende de finanças. Sem sermão e sem jargão.
++- Respostas curtas por padrão (até cerca de 150 palavras). Aprofunde só se o usuário pedir. Use lista apenas quando houver itens para comparar. Faça no máximo UMA pergunta no final, e só quando ela ajudar de verdade; não termine toda resposta com pergunta.
++- Se a mensagem for só uma saudação, cumprimente e pergunte no que pode ajudar. Não despeje números.
++- Valores sempre em R$, no formato brasileiro.
++
++REGRA DE OURO: NÃO INVENTAR
++- Use SOMENTE os dados da seção DADOS. Se o usuário perguntar algo que não está lá (um mês além da projeção, uma conta que não aparece, o preço de um item), diga com clareza o que falta e peça. Nunca preencha com suposição.
++- Cada mês tem a sua própria linha na PROJEÇÃO. Nunca repita o mesmo valor para meses diferentes se a tabela não mostrar isso.
++- Separe fato (dado lançado no app) de estimativa (receita estimada, gasto médio histórico, saldo acumulado). Chame as estimativas de "estimado".
++- Se os dados forem incompletos ou contraditórios, diga isso em vez de forçar uma resposta.
++- Antes de responder, confira as contas contra os números da tabela.
++
++COMO ANALISAR
++1. Compra ("posso comprar X?"): descubra o item, o preço à vista e as parcelas (pergunte o que faltar). Veja se é essencial. Olhe o caixa do mês atual e dos meses seguintes na PROJEÇÃO. Considere a VIRADA DO CARTÃO (seção CARTÕES): se a 1ª parcela só vence no mês seguinte, comprar parcelado hoje não pesa no caixa deste mês, mesmo que o mês atual esteja apertado. Dê um veredito claro (sim, sim com cuidado, ou não agora) e o motivo.
++2. Juros: a referência é o CDI, cerca de 0,85% ao mês. Parcelar sem juros costuma valer a pena porque o dinheiro rende. Com juros acima disso, só compensa quando o item é necessário, o caixa não comporta pagar à vista e o prazo é curto. Quando o usuário informar preço à vista e parcelas, calcule o custo extra em R$ e em %. Para a taxa mensal exata e simulações completas, indique o Simulador de Compras do app.
++3. Cortar gastos: aponte despesas reais da lista, com valores e o efeito por mês.
++4. Prioridades de pagamento: ordene pela consequência de atrasar (moradia, luz e água, fatura do cartão, dívidas com juros) e depois o resto.
++5. Futuro: use a PROJEÇÃO e o término das parcelas (cada parcela que acaba libera caixa).
++- Se o mês atual já estiver negativo, diga isso com clareza e sugira como cobrir, separando isso de qualquer compra em análise.
++- Não recomende investimentos específicos. Em decisões grandes, no máximo uma frase lembrando que você não substitui um profissional.
++
++DADOS FINANCEIROS REAIS DO USUÁRIO
++
++CAIXA DO MÊS ATUAL (${ctx.currentMonthLabel})
++- Saldo em contas hoje: ${formatSimMoney(ctx.totalBankBalance)}
++- Receitas do mês: ${formatSimMoney(ctx.totalIncome)} (ainda a receber: ${formatSimMoney(ctx.pendingIncome)})
++- Despesas do mês: ${formatSimMoney(ctx.totalExpense)} (ainda a pagar: ${formatSimMoney(ctx.pendingExpense)})
++- Saldo projetado no fim do mês: ${formatSimMoney(ctx.projectedMonthBalance)}
++
++CARTÕES E VIRADA
++${buildConsultantCardsText(todayStr)}
++
++PROJEÇÃO DOS PRÓXIMOS 6 MESES
++${buildConsultantProjectionText(ctx)}
++
++COMPRAS PARCELADAS EM ANDAMENTO
++${buildConsultantInstallmentsText(ctx, auditData)}
++
++DESPESAS DO MÊS ATUAL
++${buildConsultantExpensesText(auditData)}`;
++}
++
++/** Converte o histórico do chat em turnos do Gemini (começa em "user", alterna papéis). */
++function buildGeminiHistoryContents(history, maxItems) {
++    const items = (Array.isArray(history) ? history : []).slice(-(maxItems || 12))
++        .filter(m => m && String(m.text || '').trim());
++    const out = [];
++    items.forEach(m => {
++        const role = m.role === 'user' ? 'user' : 'model';
++        const text = String(m.text).trim();
++        if (!out.length && role !== 'user') return;
++        if (out.length && out[out.length - 1].role === role) {
++            out[out.length - 1].parts[0].text += '\n\n' + text;
++        } else {
++            out.push({ role, parts: [{ text }] });
++        }
++    });
++    return out;
++}
++// CONSULTOR v2 — FIM
++
+ async function handleSendAiChatMessage(event) {
+     if (event) {
+         event.preventDefault();
+@@ -14862,35 +15054,9 @@ async function handleSendAiChatMessage(event) {
+     let replyText = null;
+ 
+     try {
+-        const systemPromptWithRealData = `Você é o Consultor Estrategista de Finanças Pessoais do usuário.
+-Você está em uma conversa contínua e interativa em tempo real com o usuário.
+-
+-DIRETRIZES FUNDAMENTAIS:
+-1. Responda SEMPRE em Português do Brasil (pt-BR).
+-2. Seja humano, direto, prático, motivador e empático. Respostas concisas e bem formatadas em tópicos.
+-3. SE A MENSAGEM DO USUÁRIO FOR APENAS UMA SAUDAÇÃO (ex: "oi", "olá", "bom dia", "boa tarde", "tudo bem"):
+-   - Cumprimente-o com simpatia e pergunte como pode ajudá-lo hoje com o orçamento ou planejamento de ${ctx.currentMonthLabel}.
+-   - NUNCA despeje uma tabela fria de saldo e números se ele apenas cumprimentou!
+-4. Se ele perguntar se pode comprar algo, avalie a sobra de caixa (${formatSimMoney(ctx.projectedMonthBalance)}) e dê um veredito claro e embasado.
+-5. Se ele perguntar onde cortar gastos ou qual conta priorizar, aponte diretamente os dados reais dele.
+-6. Se ele perguntar sobre dívidas ou compras a prazo, cite quando terminam.
+-
+-DADOS FINANCEIROS REAIS DO USUÁRIO (${ctx.currentMonthLabel}):
+-- Saldo em contas hoje: ${formatSimMoney(ctx.totalBankBalance)}
+-- Receitas previstas no mês: ${formatSimMoney(ctx.totalIncome)} (a receber: ${formatSimMoney(ctx.pendingIncome)})
+-- Despesas previstas no mês: ${formatSimMoney(ctx.totalExpense)} (pendentes: ${formatSimMoney(ctx.pendingExpense)})
+-- Saldo projetado no fim do mês: ${formatSimMoney(ctx.projectedMonthBalance)}
+-
+-COMPRAS PARCELADAS ATIVAS:
+-${parcelasTexto}
+-
+-DESPESAS DO MÊS:
+-${despesasTexto}`;
+-
+-        const recentHistory = aiChatHistory.slice(-6).map(m => `${m.role === 'user' ? 'Usuário' : 'Consultor'}: ${m.text}`).join('\n');
+-        const userPrompt = `HISTÓRICO DA CONVERSA:\n${recentHistory}\n\nÚLTIMA MENSAGEM DO USUÁRIO:\n${text}`;
+-
+-        replyText = await queryGeminiApi(systemPromptWithRealData, userPrompt);
++        const systemPromptWithRealData = buildConsultantSystemPrompt(todayStr, ctx, auditData);
++        const chatContents = buildGeminiHistoryContents(aiChatHistory, 12);
++        replyText = await queryGeminiApi(systemPromptWithRealData, text, { contents: chatContents, temperature: 0.4, maxOutputTokens: 8192 });
+     } catch (e) {
+         console.warn('Erro ao chamar IA no chat:', e);
+     }
+diff --git a/public/js/app.js b/public/js/app.js
+index 329e953..614b61e 100644
+--- a/public/js/app.js
++++ b/public/js/app.js
+@@ -12671,7 +12671,7 @@ function computeHistoricalMonthlyExpense(startMonthKey, monthsBack = 3) {
+  * Monta as opções reais que a IA pode escolher, cada uma com o impacto EXATO no caixa
+  * (mês atual e pior mês futuro). A IA nunca inventa número: ela escolhe uma destas.
+  */
+-function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaSobra) {
++function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaSobra, taxaMensal, delay) {
+     const startKey = ctx.curMonthKey;
+     const startOffset = Number(cardInfo?.startOffset || 0);
+     const sobraAtual = Number(base.sobraLivreMesAtual || 0);
+@@ -12680,7 +12680,7 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+     (projecao || []).forEach(m => { byKey[m.monthKey] = Number(m.sobraConservadora); });
+     const monthKeyOf = (offset) => (typeof addMonthsToKey === 'function' ? addMonthsToKey(startKey, offset) : startKey);
+ 
+-    const build = (id, titulo, entrada, k, valorParcela, custoTotalFixo) => {
++    const build = (id, titulo, entrada, k, valorParcela, custoTotalFixo, dependeDaLoja) => {
+         entrada = simRound2(entrada);
+         valorParcela = simRound2(valorParcela);
+         let impactoAtual = entrada;
+@@ -12696,6 +12696,10 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+         const sobraMesAtualApos = simRound2(sobraAtual - impactoAtual);
+         const menorSobraFutura = menor === null ? null : simRound2(menor);
+         const custoTotal = simRound2(custoTotalFixo !== undefined ? custoTotalFixo : entrada + valorParcela * k);
++        // Se o mês atual JÁ está negativo, o que importa é a compra não piorar o mês atual (ex.: 1ª parcela só no mês seguinte).
++        const naoPioraMesAtual = impactoAtual <= 0.005;
++        const cabeMesAtual = sobraMesAtualApos >= 0 || naoPioraMesAtual;
++        const cabeFuturo = menorSobraFutura === null || menorSobraFutura >= 0;
+         return {
+             id,
+             titulo,
+@@ -12708,19 +12712,35 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+             sobraMesAtualApos,
+             menorSobraFutura,
+             mesMenorSobra: mesMenor,
+-            cabe: sobraMesAtualApos >= 0 && (menorSobraFutura === null || menorSobraFutura >= 0),
+-            folgaSegura: sobraAtual > 0 && sobraMesAtualApos >= sobraAtual * 0.20
++            cabe: cabeMesAtual && cabeFuturo,
++            folgaSegura: (sobraAtual > 0 ? sobraMesAtualApos >= sobraAtual * 0.20 : naoPioraMesAtual) && cabeFuturo,
++            dependeDaLoja: Boolean(dependeDaLoja),
++            mesAtualJaNegativo: sobraAtual < 0
+         };
+     };
+ 
+     const opcoes = [];
+-    opcoes.push(build('A_VISTA', 'Pagar 100% à vista (PIX/débito)', cashPrice, 0, 0, cashPrice));
++    opcoes.push(build('A_VISTA', 'Pagar 100% à vista (PIX/débito)', cashPrice, 0, 0, cashPrice, false));
+     opcoes.push(build(
+         'SIMULACAO',
+         `Parcelar como simulado (${numInst}x de ${formatSimMoney(installmentTotal / numInst)})`,
+-        0, numInst, installmentTotal / numInst, installmentTotal
++        0, numInst, installmentTotal / numInst, installmentTotal, false
+     ));
+ 
++    // Plano B realista: parcelar em MENOS vezes mantendo a mesma taxa de juros que a loja cobra (estimativa).
++    if (taxaMensal > 0 && jurosTotais > 0.01) {
++        [2, 3, 4, 6].filter(k => k < numInst).forEach(k => {
++            let anuidade = 0;
++            for (let j = 0; j < k; j++) anuidade += 1 / Math.pow(1 + taxaMensal, delay + j);
++            const parcelaK = cashPrice / anuidade;
++            opcoes.push(build(
++                `LOJA_${k}X`,
++                `Parcelar em ${k}x mantendo a taxa da loja (estimativa)`,
++                0, k, parcelaK, parcelaK * k, false
++            ));
++        });
++    }
++
+     [1, 2, 3, 4, 6, 10, 12]
+         .filter(k => k <= Math.max(numInst, 3))
+         .filter(k => !(k === numInst && jurosTotais <= 0.01))
+@@ -12730,7 +12750,7 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+                 k === 1
+                     ? '1x no cartão pelo preço à vista (negociar)'
+                     : `${k}x sem juros pelo preço à vista (negociar)`,
+-                0, k, cashPrice / k, cashPrice
++                0, k, cashPrice / k, cashPrice, true
+             ));
+         });
+ 
+@@ -12739,8 +12759,8 @@ function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx,
+     if (entradaH > 0 && entradaH < cashPrice) {
+         opcoes.push(build(
+             `ENTRADA_${kH}X`,
+-            `${formatSimMoney(entradaH)} de entrada + ${kH}x no cartão (sem juros)`,
+-            entradaH, kH, (cashPrice - entradaH) / kH, cashPrice
++            `${formatSimMoney(entradaH)} de entrada + ${kH}x no cartão (sem juros, negociar)`,
++            entradaH, kH, (cashPrice - entradaH) / kH, cashPrice, true
+         ));
+     }
+     return opcoes;
+@@ -12767,7 +12787,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal,
+         ? simRound2(projecao.reduce((a, m) => a + m.sobraConservadora, 0) / projecao.length)
+         : base.mediaSobraFutura;
+ 
+-    const opcoes = buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaConservadora);
++    const opcoes = buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaConservadora, taxa, delay);
+ 
+     return {
+         ...base,
+@@ -12796,7 +12816,7 @@ function buildSimulationResponseSchema(preMath) {
+     };
+     const order = [
+         'raciocinio', 'item', 'decisao', 'opcaoEscolhidaId', 'vereditoTitulo', 'vereditoResumo',
+-        'observacaoAVista', 'observacaoSimulacao', 'explicacaoJogada',
++        'observacaoAVista', 'observacaoSimulacao', 'explicacaoJogada', 'planoB',
+         'scriptBarganhaBalcao', 'alertaSazonalidade', 'alertaCustoAcoplado'
+     ];
+     return {
+@@ -12811,6 +12831,7 @@ function buildSimulationResponseSchema(preMath) {
+             observacaoAVista: { type: 'STRING' },
+             observacaoSimulacao: { type: 'STRING' },
+             explicacaoJogada: { type: 'STRING' },
++            planoB: { type: 'STRING', description: 'O que fazer se a loja não negociar: qual opção que não depende da loja escolher, com o custo de juros em R$.' },
+             scriptBarganhaBalcao: { type: 'STRING' },
+             alertaSazonalidade: { type: 'STRING' },
+             alertaCustoAcoplado: { type: 'STRING' }
+@@ -12838,7 +12859,7 @@ function parseAiDecisionResponse(rawText) {
+ function simDecisionFromOptionId(id) {
+     const s = String(id || '');
+     if (s === 'A_VISTA') return 'PAGAR_A_VISTA';
+-    if (s === 'SIMULACAO') return 'PARCELAR_COMO_SIMULADO';
++    if (s === 'SIMULACAO' || s.startsWith('LOJA_')) return 'PARCELAR_COMO_SIMULADO';
+     if (s.startsWith('NEGOCIAR_')) return 'NEGOCIAR_E_PARCELAR';
+     if (s.startsWith('ENTRADA_')) return 'ENTRADA_E_PARCELAS';
+     return null;
+@@ -12852,8 +12873,8 @@ function simBestFeasibleOption(opcoes, vidaUtilMeses) {
+     }
+     if (!ok.length) return null;
+     const folga = (o) => (o.menorSobraFutura === null ? 1e12 : o.menorSobraFutura);
+-    // 1º folga segura no mês atual, 2º menor custo total, 3º maior sobra no PIOR mês futuro
+-    ok.sort((a, b) => (Number(b.folgaSegura) - Number(a.folgaSegura)) || (a.custoTotal - b.custoTotal) || (folga(b) - folga(a)));
++    // 1º folga segura, 2º que NÃO dependa da loja aceitar, 3º menor custo total, 4º maior sobra no PIOR mês futuro
++    ok.sort((a, b) => (Number(b.folgaSegura) - Number(a.folgaSegura)) || (Number(a.dependeDaLoja) - Number(b.dependeDaLoja)) || (a.custoTotal - b.custoTotal) || (folga(b) - folga(a)));
+     return ok[0];
+ }
+ 
+@@ -12949,7 +12970,7 @@ function convertAiDecisionToSimulationResult(rawText, preMath, cashPrice, instal
+                 parcelasRecomendadas: opcao ? Math.max(1, opcao.parcelas) : 1,
+                 custoTotalEstimado: opcao ? opcao.custoTotal : 0,
+                 statusTag: tagPorDecisao[decisao],
+-                explicacao: String(ai.explicacaoJogada || '').trim()
++                explicacao: [String(ai.explicacaoJogada || '').trim(), String(ai.planoB || '').trim() ? `Plano B: ${String(ai.planoB).trim()}` : ''].filter(Boolean).join(' ')
+             }
+         },
+         analiseTatica: {
+@@ -13211,7 +13232,7 @@ COMO TRABALHAR
+ PASSOS DO RACIOCÍNIO
+ 1. Item: o que é, para que serve, é essencial (saúde, trabalho, segurança, moradia, transporte) ou dispensável? Qual a vida útil realista em meses?
+ 2. Juros: a taxa implícita mensal está acima do CDI (0,85% a.m.)? Quanto custa a mais em reais?
+-3. Caixa: quais opções cabem (cabe=SIM) e quais deixam folga segura (folga segura=SIM, ou seja, sobra >= 20% da sobra atual)?
++3. Caixa: quais opções cabem (cabe=SIM significa: não piora o mês atual e nenhum mês futuro fica negativo) e quais deixam folga segura? Se a 1ª parcela só vence no mês seguinte (virada do cartão), o impacto no mês atual é R$ 0: explique isso ("você leva hoje e só começa a pagar em <mês>").
+ 4. Prazo: quantas parcelas em relação à vida útil? Acima de 50% da vida útil é ruim.
+ 5. Custo acoplado: o item exige montagem, instalação, alinhamento, balanceamento ou serviço técnico? Estime a faixa em R$.
+ 6. Decisão pelas regras abaixo.
+@@ -13221,14 +13242,17 @@ REGRAS DE DECISÃO (aplique na ordem; use a primeira que servir)
+ 2. Item dispensável e nenhuma opção deixa folga segura -> ADIAR_COMPRA (opcaoEscolhidaId = NENHUMA).
+ 3. Simulação sem juros (ou taxa implícita <= 0,85% a.m.), que cabe, com prazo <= 50% da vida útil -> PARCELAR_COMO_SIMULADO (opção SIMULACAO). O dinheiro rende no CDI enquanto parcela.
+ 4. Taxa implícita > 0,85% a.m. e a opção A_VISTA cabe com folga segura -> PAGAR_A_VISTA (opção A_VISTA).
+-5. Taxa implícita > 0,85% a.m. e A_VISTA não cabe (ou não deixa folga segura) -> escolha, entre as opções NEGOCIAR_* e ENTRADA_* que cabem, a de menor custo total que respeite o prazo de vida útil. O scriptBarganhaBalcao é obrigatório.
+-6. Se nenhuma regra anterior servir, escolha a opção que cabe com o menor custo total.
++5. Taxa implícita > 0,85% a.m. e A_VISTA não cabe (ou não deixa folga segura) -> escolha, entre as opções que cabem, a de menor custo total que respeite o prazo de vida útil. Opções NEGOCIAR_* e ENTRADA_* dependem de a loja aceitar; SIMULACAO e LOJA_* existem hoje (com juros). O scriptBarganhaBalcao é obrigatório.
++6. Item ESSENCIAL que só dá para comprar parcelando com juros: NÃO reprove. Aprove o parcelamento sem dependência da loja que caiba e tenha o menor custo, informando os juros em R$ e explicando que o impacto no caixa só começa quando a fatura vencer.
++7. Se uma opção escolhida depende da loja (NEGOCIAR_* ou ENTRADA_*), o campo planoB é OBRIGATÓRIO: diga qual opção que não depende da loja (SIMULACAO ou LOJA_*) o usuário deve fechar se a loja recusar, com o custo extra em R$ e por que ainda vale a pena. Se a escolhida já não depende da loja, use planoB para dizer como reduzir os juros (script de barganha).
++8. Se o mês atual JÁ está negativo antes da compra, isso NÃO é motivo de reprovação quando a opção não aumenta a saída do mês atual. Mencione o déficit existente e a necessidade de cobri-lo, sem confundir com o impacto da compra.
+ 
+ COMO ESCREVER
+ - Português do Brasil, direto, citando o NOME do item e os números reais do sistema. É proibido texto genérico que serviria para qualquer compra.
+ - vereditoTitulo: até 70 caracteres, em maiúsculas. vereditoResumo: 2 a 3 frases.
+ - observacaoAVista e observacaoSimulacao: uma frase cada, coerente com os números (cabe/não cabe, juros).
+ - explicacaoJogada: por que a opção escolhida é a melhor para ESTE item e ESTE caixa.
++- planoB: 1 a 2 frases (veja regra 7).
+ - scriptBarganhaBalcao: frase pronta para falar no balcão ou no WhatsApp, citando valores do sistema (teto de negociação, preço à vista). Se a decisão for PAGAR_A_VISTA, peça desconto no PIX.
+ - alertaSazonalidade: use o radar do sistema; se não atravessa Jan/Fev/Mar, diga que não há risco sazonal.
+ - alertaCustoAcoplado: se o item exige instalação, informe a faixa em R$ e diga para reservar à vista; senão, diga que não há custo extra previsto.
+@@ -13273,7 +13297,7 @@ function buildUserPromptPayload(itemName, cashPrice, installmentTotal, installme
+         const forma = o.parcelas > 0 && o.valorParcela > 0
+             ? `${o.parcelas}x de ${formatSimMoney(o.valorParcela)}`
+             : 'sem parcelas';
+-        return `- [${o.id}] ${o.titulo} | entrada ${formatSimMoney(o.entrada)} | ${forma} | custo total ${formatSimMoney(o.custoTotal)} (juros vs à vista: ${formatSimMoney(o.jurosVsAVista)}) | sobra do mês atual após: ${formatSimMoney(o.sobraMesAtualApos)} | pior mês futuro: ${pior} | cabe: ${o.cabe ? 'SIM' : 'NÃO'} | folga segura: ${o.folgaSegura ? 'SIM' : 'NÃO'}`;
++        return `- [${o.id}] ${o.titulo} | entrada ${formatSimMoney(o.entrada)} | ${forma} | custo total ${formatSimMoney(o.custoTotal)} (juros vs à vista: ${formatSimMoney(o.jurosVsAVista)}) | sobra do mês atual após: ${formatSimMoney(o.sobraMesAtualApos)} | pior mês futuro: ${pior} | cabe: ${o.cabe ? 'SIM' : 'NÃO'} | folga segura: ${o.folgaSegura ? 'SIM' : 'NÃO'} | ${o.dependeDaLoja ? 'DEPENDE DA LOJA ACEITAR' : 'existe hoje / estimativa realista'}`;
+     }).join('\n');
+ 
+     return `Analise esta decisão de compra. Todos os números abaixo são do sistema; use-os sem recalcular.
+@@ -13298,13 +13322,14 @@ ${cartaoTexto}
+ ${projecaoStr}
+ - Sobra média futura conservadora: ${formatSimMoney(preMath.mediaSobraFutura)}
+ 
+-## 4. OPÇÕES DISPONÍVEIS (impacto exato no caixa; escolha uma pelo ID)
++## 4. OPÇÕES DISPONÍVEIS (impacto exato no caixa; escolha uma pelo ID; impacto no mês atual = o que sai da conta neste mês)
+ ${opcoesStr}
+ 
+ ## 5. RADAR DO SISTEMA
+ - Sazonalidade: ${preMath.alertaSazonalidade}
+ - Dica de custo acoplado (heurística por palavra-chave, pode estar errada; confirme pelo item): ${preMath.alertaCustoAcoplado}
+ ${sim ? `- A simulação do usuário ${sim.cabe ? 'CABE' : 'NÃO CABE'} no caixa.` : ''}
++${Number(preMath.sobraLivreMesAtual) < 0 ? `- ATENÇÃO: o mês atual JÁ está negativo em ${formatSimMoney(preMath.sobraLivreMesAtual)} antes da compra. Isso é um déficit existente, não efeito da compra.` : ''}
+ 
+ Siga os passos do raciocínio e devolva o JSON do schema.`;
+ }
+@@ -13354,9 +13379,13 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
+         ...(expectJson && options.responseSchema ? { responseSchema: options.responseSchema } : {})
+     };
+ 
++    const geminiContents = (Array.isArray(options.contents) && options.contents.length > 0)
++        ? options.contents
++        : [{ role: 'user', parts: [{ text: userPromptText }] }];
++
+     const standardPayload = {
+         systemInstruction: { parts: [{ text: systemInstruction }] },
+-        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
++        contents: geminiContents,
+         generationConfig
+     };
+ 
+@@ -13452,6 +13481,7 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
+             body: JSON.stringify({
+                 systemInstruction,
+                 userPrompt: userPromptText,
++                ...(Array.isArray(options.contents) && options.contents.length > 0 ? { contents: options.contents } : {}),
+                 generationConfig
+             })
+         });
+@@ -14808,6 +14838,168 @@ function buildDetailedTransactionsSummaryForAi(curMonthKey) {
+     };
+ }
+ 
++// =========================================================================
++// CONSULTOR v2 — INÍCIO
++// O chat antes só via o MÊS ATUAL e por isso "inventava" dezembro/janeiro.
++// Agora ele recebe: projeção mês a mês, cartões com a virada calculada, parcelas e histórico.
++// =========================================================================
++function consultantFirstBillOffset(closingDay, dueDay, day) {
++    // Mesma regra do Simulador de Compras.
++    if (dueDay > closingDay) return day < closingDay ? 0 : 1;
++    return day < closingDay ? 1 : 2;
++}
++
++function consultantMonthLabel(key) {
++    try {
++        const obj = (typeof MONTHS !== 'undefined' && Array.isArray(MONTHS)) ? MONTHS.find(m => m.key === key) : null;
++        if (obj && obj.label) return obj.label;
++    } catch (_) { /* usa o fallback abaixo */ }
++    return simMonthLabel(key);
++}
++
++function buildConsultantCardsText(todayStr) {
++    const cards = (typeof savedCards !== 'undefined' && Array.isArray(savedCards)) ? savedCards : [];
++    if (!cards.length) return 'Nenhum cartão de crédito cadastrado.';
++    const [y, m, d] = String(todayStr).split('-').map(Number);
++    const startKey = `${y}-${String(m).padStart(2, '0')}`;
++    const hojeBR = `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
++    return cards.map(c => {
++        const nome = c.name || c.alias || 'Cartão';
++        const closing = Math.max(0, Math.min(31, Number(c.closingDay || 0)));
++        const due = Math.max(0, Math.min(31, Number(c.dueDay || 0)));
++        if (!closing || !due) return `• ${nome}: fechamento/vencimento não configurados (não dá para calcular a virada).`;
++        const off = consultantFirstBillOffset(closing, due, d);
++        const key = (typeof addMonthsToKey === 'function') ? addMonthsToKey(startKey, off) : startKey;
++        const venc = `${String(due).padStart(2, '0')}/${key.slice(5, 7)}/${key.slice(0, 4)}`;
++        const efeito = off === 0
++            ? 'IMPACTA o caixa DESTE mês'
++            : `NÃO impacta o caixa deste mês; só começa a pesar em ${consultantMonthLabel(key)}`;
++        return `• ${nome}: fecha dia ${closing}, vence dia ${due}. Uma compra feita HOJE (${hojeBR}) tem a 1ª parcela vencendo em ${venc} (${efeito}).`;
++    }).join('\n');
++}
++
++function buildConsultantProjectionText(ctx) {
++    const fmt = (n) => formatSimMoney(n);
++    const hist = computeHistoricalMonthlyExpense(ctx.curMonthKey);
++    let acumulado = Number(ctx.projectedMonthBalance || 0);
++    const linhas = [`• ${ctx.currentMonthLabel} (mês atual): saldo projetado no fim do mês ${fmt(acumulado)} (fato do app: saldo em conta + receitas pendentes - despesas pendentes)`];
++    for (let i = 1; i <= 6; i++) {
++        const key = (typeof addMonthsToKey === 'function') ? addMonthsToKey(ctx.curMonthKey, i) : ctx.curMonthKey;
++        let txs = [];
++        try {
++            if (typeof ensureMonthExists === 'function') ensureMonthExists(key, true);
++            txs = (typeof getHomeVisibleTransactions === 'function') ? (getHomeVisibleTransactions(key) || []) : [];
++        } catch (_) { txs = []; }
++        const recLancada = txs.filter(t => t && t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0);
++        const despLancada = txs.filter(t => t && t.type === 'expense').reduce((a, b) => a + (b.isConsolidatedBill
++            ? Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0)
++            : Number(b.amount || 0)), 0);
++        const recEstimada = recLancada === 0 && Number(ctx.totalIncome) > 0;
++        const rec = recEstimada ? Number(ctx.totalIncome) : recLancada;
++        const despBase = Math.max(despLancada, hist);
++        const resultado = rec - despBase;
++        acumulado += resultado;
++        linhas.push(
++            `• ${consultantMonthLabel(key)}: receita ${fmt(rec)}${recEstimada ? ' (ESTIMADA: ainda sem receita lançada, usei a do mês atual)' : ''}`
++            + ` | despesas já lançadas ${fmt(despLancada)} | gasto médio histórico ${fmt(hist)}`
++            + ` | resultado conservador do mês ${fmt(resultado)} | saldo acumulado estimado ${fmt(acumulado)}`
++        );
++    }
++    return linhas.join('\n');
++}
++
++function buildConsultantInstallmentsText(ctx, auditData) {
++    const list = (auditData && auditData.installmentList) || [];
++    if (!list.length) return 'Nenhuma compra parcelada em andamento registrada.';
++    return list.map(p => {
++        const libera = (p.remainingInst >= 0 && typeof addMonthsToKey === 'function')
++            ? consultantMonthLabel(addMonthsToKey(ctx.curMonthKey, p.remainingInst + 1))
++            : '-';
++        return `• "${p.name}": parcela ${p.currentInst}/${p.totalInst} de ${formatSimMoney(p.amount)}. Faltam ${p.remainingInst}. Última parcela em ${p.endMonthLabel}; libera ${formatSimMoney(p.amount)}/mês a partir de ${libera}.`;
++    }).join('\n');
++}
++
++function buildConsultantExpensesText(auditData) {
++    const exps = (auditData && auditData.currentMonthExpenses) || [];
++    if (!exps.length) return 'Nenhuma despesa cadastrada para este mês.';
++    const byCat = {};
++    exps.forEach(d => { const c = d.cat || 'Geral'; byCat[c] = (byCat[c] || 0) + Number(d.amount || 0); });
++    const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8)
++        .map(([c, v]) => `${c}: ${formatSimMoney(v)}`).join(' | ');
++    const top = exps.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0)).slice(0, 15)
++        .map(d => `• ${d.desc}: ${formatSimMoney(d.amount)} (${d.paid ? 'pago' : 'pendente'}, ${d.cat || 'Geral'})`).join('\n');
++    return `Total por categoria: ${cats}\nMaiores despesas:\n${top}`;
++}
++
++function buildConsultantSystemPrompt(todayStr, ctx, auditData) {
++    const [y, m, d] = String(todayStr).split('-');
++    const hojeBR = `${d}/${m}/${y}`;
++    return `Você é o Consultor Financeiro Pessoal do usuário, dentro do app de controle de finanças dele. A conversa é livre: ele pode pedir qualquer análise avulsa (posso comprar isso? onde corto gastos? o que pago primeiro? como fica dezembro?).
++
++HOJE É ${hojeBR}.
++
++COMO RESPONDER
++- Português do Brasil, tom humano, direto e acolhedor, como um amigo que entende de finanças. Sem sermão e sem jargão.
++- Respostas curtas por padrão (até cerca de 150 palavras). Aprofunde só se o usuário pedir. Use lista apenas quando houver itens para comparar. Faça no máximo UMA pergunta no final, e só quando ela ajudar de verdade; não termine toda resposta com pergunta.
++- Se a mensagem for só uma saudação, cumprimente e pergunte no que pode ajudar. Não despeje números.
++- Valores sempre em R$, no formato brasileiro.
++
++REGRA DE OURO: NÃO INVENTAR
++- Use SOMENTE os dados da seção DADOS. Se o usuário perguntar algo que não está lá (um mês além da projeção, uma conta que não aparece, o preço de um item), diga com clareza o que falta e peça. Nunca preencha com suposição.
++- Cada mês tem a sua própria linha na PROJEÇÃO. Nunca repita o mesmo valor para meses diferentes se a tabela não mostrar isso.
++- Separe fato (dado lançado no app) de estimativa (receita estimada, gasto médio histórico, saldo acumulado). Chame as estimativas de "estimado".
++- Se os dados forem incompletos ou contraditórios, diga isso em vez de forçar uma resposta.
++- Antes de responder, confira as contas contra os números da tabela.
++
++COMO ANALISAR
++1. Compra ("posso comprar X?"): descubra o item, o preço à vista e as parcelas (pergunte o que faltar). Veja se é essencial. Olhe o caixa do mês atual e dos meses seguintes na PROJEÇÃO. Considere a VIRADA DO CARTÃO (seção CARTÕES): se a 1ª parcela só vence no mês seguinte, comprar parcelado hoje não pesa no caixa deste mês, mesmo que o mês atual esteja apertado. Dê um veredito claro (sim, sim com cuidado, ou não agora) e o motivo.
++2. Juros: a referência é o CDI, cerca de 0,85% ao mês. Parcelar sem juros costuma valer a pena porque o dinheiro rende. Com juros acima disso, só compensa quando o item é necessário, o caixa não comporta pagar à vista e o prazo é curto. Quando o usuário informar preço à vista e parcelas, calcule o custo extra em R$ e em %. Para a taxa mensal exata e simulações completas, indique o Simulador de Compras do app.
++3. Cortar gastos: aponte despesas reais da lista, com valores e o efeito por mês.
++4. Prioridades de pagamento: ordene pela consequência de atrasar (moradia, luz e água, fatura do cartão, dívidas com juros) e depois o resto.
++5. Futuro: use a PROJEÇÃO e o término das parcelas (cada parcela que acaba libera caixa).
++- Se o mês atual já estiver negativo, diga isso com clareza e sugira como cobrir, separando isso de qualquer compra em análise.
++- Não recomende investimentos específicos. Em decisões grandes, no máximo uma frase lembrando que você não substitui um profissional.
++
++DADOS FINANCEIROS REAIS DO USUÁRIO
++
++CAIXA DO MÊS ATUAL (${ctx.currentMonthLabel})
++- Saldo em contas hoje: ${formatSimMoney(ctx.totalBankBalance)}
++- Receitas do mês: ${formatSimMoney(ctx.totalIncome)} (ainda a receber: ${formatSimMoney(ctx.pendingIncome)})
++- Despesas do mês: ${formatSimMoney(ctx.totalExpense)} (ainda a pagar: ${formatSimMoney(ctx.pendingExpense)})
++- Saldo projetado no fim do mês: ${formatSimMoney(ctx.projectedMonthBalance)}
++
++CARTÕES E VIRADA
++${buildConsultantCardsText(todayStr)}
++
++PROJEÇÃO DOS PRÓXIMOS 6 MESES
++${buildConsultantProjectionText(ctx)}
++
++COMPRAS PARCELADAS EM ANDAMENTO
++${buildConsultantInstallmentsText(ctx, auditData)}
++
++DESPESAS DO MÊS ATUAL
++${buildConsultantExpensesText(auditData)}`;
++}
++
++/** Converte o histórico do chat em turnos do Gemini (começa em "user", alterna papéis). */
++function buildGeminiHistoryContents(history, maxItems) {
++    const items = (Array.isArray(history) ? history : []).slice(-(maxItems || 12))
++        .filter(m => m && String(m.text || '').trim());
++    const out = [];
++    items.forEach(m => {
++        const role = m.role === 'user' ? 'user' : 'model';
++        const text = String(m.text).trim();
++        if (!out.length && role !== 'user') return;
++        if (out.length && out[out.length - 1].role === role) {
++            out[out.length - 1].parts[0].text += '\n\n' + text;
++        } else {
++            out.push({ role, parts: [{ text }] });
++        }
++    });
++    return out;
++}
++// CONSULTOR v2 — FIM
++
+ async function handleSendAiChatMessage(event) {
+     if (event) {
+         event.preventDefault();
+@@ -14862,35 +15054,9 @@ async function handleSendAiChatMessage(event) {
+     let replyText = null;
+ 
+     try {
+-        const systemPromptWithRealData = `Você é o Consultor Estrategista de Finanças Pessoais do usuário.
+-Você está em uma conversa contínua e interativa em tempo real com o usuário.
+-
+-DIRETRIZES FUNDAMENTAIS:
+-1. Responda SEMPRE em Português do Brasil (pt-BR).
+-2. Seja humano, direto, prático, motivador e empático. Respostas concisas e bem formatadas em tópicos.
+-3. SE A MENSAGEM DO USUÁRIO FOR APENAS UMA SAUDAÇÃO (ex: "oi", "olá", "bom dia", "boa tarde", "tudo bem"):
+-   - Cumprimente-o com simpatia e pergunte como pode ajudá-lo hoje com o orçamento ou planejamento de ${ctx.currentMonthLabel}.
+-   - NUNCA despeje uma tabela fria de saldo e números se ele apenas cumprimentou!
+-4. Se ele perguntar se pode comprar algo, avalie a sobra de caixa (${formatSimMoney(ctx.projectedMonthBalance)}) e dê um veredito claro e embasado.
+-5. Se ele perguntar onde cortar gastos ou qual conta priorizar, aponte diretamente os dados reais dele.
+-6. Se ele perguntar sobre dívidas ou compras a prazo, cite quando terminam.
+-
+-DADOS FINANCEIROS REAIS DO USUÁRIO (${ctx.currentMonthLabel}):
+-- Saldo em contas hoje: ${formatSimMoney(ctx.totalBankBalance)}
+-- Receitas previstas no mês: ${formatSimMoney(ctx.totalIncome)} (a receber: ${formatSimMoney(ctx.pendingIncome)})
+-- Despesas previstas no mês: ${formatSimMoney(ctx.totalExpense)} (pendentes: ${formatSimMoney(ctx.pendingExpense)})
+-- Saldo projetado no fim do mês: ${formatSimMoney(ctx.projectedMonthBalance)}
+-
+-COMPRAS PARCELADAS ATIVAS:
+-${parcelasTexto}
+-
+-DESPESAS DO MÊS:
+-${despesasTexto}`;
+-
+-        const recentHistory = aiChatHistory.slice(-6).map(m => `${m.role === 'user' ? 'Usuário' : 'Consultor'}: ${m.text}`).join('\n');
+-        const userPrompt = `HISTÓRICO DA CONVERSA:\n${recentHistory}\n\nÚLTIMA MENSAGEM DO USUÁRIO:\n${text}`;
+-
+-        replyText = await queryGeminiApi(systemPromptWithRealData, userPrompt);
++        const systemPromptWithRealData = buildConsultantSystemPrompt(todayStr, ctx, auditData);
++        const chatContents = buildGeminiHistoryContents(aiChatHistory, 12);
++        replyText = await queryGeminiApi(systemPromptWithRealData, text, { contents: chatContents, temperature: 0.4, maxOutputTokens: 8192 });
+     } catch (e) {
+         console.warn('Erro ao chamar IA no chat:', e);
+     }
