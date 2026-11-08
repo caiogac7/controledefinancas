@@ -48,6 +48,14 @@
   - Caso o usuário defina ou ajuste manualmente o valor no modal da conta ("Dinheiro Reservado / Cofrinho"), a preferência manual é preservada e respeitada sobre o cálculo automático.
 
 ### 8. Estabilização de Layout, Bloqueio de Tradução Automática e Eliminação de Layout Shift
+
+### 9. Proteção de Interface Mobile e Debounce no Open Finance
+- **Trava Rígida de Clique (Anti-Double-Tap):** Bloqueio de cliques e toques repetidos no mobile através das variáveis de estado `isSyncingAllPluggyInProgress` e `activeSyncingItemIds`, desabilitando visual e funcionalmente os botões com `pointer-events: none`, `opacity: 0.5`, `cursor: not-allowed` e spinner de carregamento.
+- **Prevenção de Disparos Fantasmas no Touch:** Aplicação de `touch-action: manipulation;` nos botões de sincronização para eliminar o atraso tátil de 300ms e evitar que o navegador móvel dispare duplo clique acidental.
+- **Cooldown no Cliente (Debounce de 3 Minutos):** Janela de segurança de 3 minutos entre sincronizações gerais de Open Finance, protegendo contra esgotamento da cota de requisições por toques repetidos.
+- **Execução Sequencial com Intervalo:** Execução estritamente em fila com intervalo de respiro de 2 segundos entre conexões bancárias, impedindo bombardeamento simultâneo na API da Pluggy.
+- **Proteção do LocalStorage (DOMException / QuotaExceededError):** Encapsulamento seguro via `safeLocalStorageSet` e eliminação definitiva do armazenamento de JSONs brutos de debug (`pluggy_card_raw_debug.json`) no armazenamento local do celular, mantendo o consumo de memória mobile estritamente abaixo do limite de 5MB.
+
 - **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.
 - **Nomenclatura Oficial Restaurada:**
   - Sistema / Logo: `Controle de Finanças`

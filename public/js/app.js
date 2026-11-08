@@ -43,12 +43,43 @@
         let isRendering = false;
         let isAppInitializing = false;
 
+        // Utilitários de LocalStorage com proteção ativa contra estouro de cota (DOMException / QuotaExceededError no Mobile)
+        function safeLocalStorageSet(key, value) {
+            try {
+                localStorage.setItem(key, value);
+            } catch (err) {
+                console.warn(`[LocalStorage] Não foi possível salvar ${key} (cota excedida ou restrito):`, err?.message);
+                // Limpeza preventiva de dados pesados de debug que esgotam os 5MB do celular
+                try {
+                    localStorage.removeItem('pluggy_card_raw_debug.json');
+                    if (!key.includes('raw_debug') && !key.includes('backup_')) {
+                        localStorage.setItem(key, value);
+                    }
+                } catch (_) {}
+            }
+        }
+
+        function safeLocalStorageGet(key, fallback = null) {
+            try {
+                return localStorage.getItem(key) ?? fallback;
+            } catch (_) {
+                return fallback;
+            }
+        }
+
+        function safeLocalStorageRemove(key) {
+            try {
+                localStorage.removeItem(key);
+            } catch (_) {}
+        }
+
+        // Limpeza preventiva de lixo pesado de debug no boot do app
+        safeLocalStorageRemove('pluggy_card_raw_debug.json');
+
         // Cache local para apresentação instantânea sem flash de R$ 0,00
         function saveLastSummaryCache(userId, summaryData) {
             if (!userId || !summaryData) return;
-            try {
-                localStorage.setItem(`financas_last_summary_${userId}`, JSON.stringify(summaryData));
-            } catch (_) {}
+            safeLocalStorageSet(`financas_last_summary_${userId}`, JSON.stringify(summaryData));
         }
 
         function applyLastSummaryCache(userId) {
@@ -1778,10 +1809,10 @@
                     ...(existingTerms ? { termsAcceptance: existingTerms } : {})
                 };
 
-                localStorage.setItem(`financas_backup_${userId}`, JSON.stringify(transactionsArray));
-                localStorage.setItem(`financas_settings_${userId}`, JSON.stringify(settingsPayload));
-                localStorage.setItem(`financas_cards_${userId}`, JSON.stringify(savedCards));
-                localStorage.setItem(`financas_credit_bills_${userId}`, JSON.stringify(creditBills));
+                safeLocalStorageSet(`financas_backup_${userId}`, JSON.stringify(transactionsArray));
+                safeLocalStorageSet(`financas_settings_${userId}`, JSON.stringify(settingsPayload));
+                safeLocalStorageSet(`financas_cards_${userId}`, JSON.stringify(savedCards));
+                safeLocalStorageSet(`financas_credit_bills_${userId}`, JSON.stringify(creditBills));
 
                 if (profileData) profileData.transactions_json = transactionsArray || [];
                 if (typeof currentUser !== 'undefined' && currentUser && currentUser.id === userId) {
@@ -5389,10 +5420,10 @@ function openBankModal() {
                         </div>
                         ${accSummaryHtml}
                         <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
-                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, buttonEl: this })" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm" title="Sincroniza os últimos 7 dias e atualiza o saldo da conta">
+                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza os últimos 7 dias e atualiza o saldo da conta">
                                 <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Sincronizar (7 Dias)
                             </button>
-                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, buttonEl: this })" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
+                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
                                 <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Histórico Completo
                             </button>
                             <button type="button" onclick="openPluggyConnect('${escapeHtml(item.id)}')" class="px-2.5 py-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition" title="Atualizar credenciais">
@@ -5442,30 +5473,67 @@ function openBankModal() {
         }
 
         let isSyncingAllPluggyInProgress = false;
+        const activeSyncingItemIds = new Set();
 
-        async function syncAllPluggyItems(fullSync = false) {
-            if (isSyncingAllPluggyInProgress) return;
+        async function syncAllPluggyItems(fullSync = false, force = false) {
+            // 1. TRAVA RÍGIDA DE CLIQUE (FRONTEND): Impede disparos concorrentes por duplo clique/touch
+            if (isSyncingAllPluggyInProgress) {
+                console.warn('[OpenFinance] Sincronização geral já em andamento. Disparo duplicado ignorado.');
+                return;
+            }
 
             if (!Array.isArray(pluggyItems) || pluggyItems.length === 0) {
                 alert('Nenhuma instituição conectada ainda. Clique em "Conectar Instituição" ou cole um Item ID.');
                 return;
             }
 
+            // 2. COOLDOWN TEMPORÁRIO (DEBOUNCE NO CLIENT): Evita que cliques repetidos estourem a cota da Pluggy
+            const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos de cooldown
+            const lastSyncAt = Number(safeLocalStorageGet('finan_last_pluggy_sync_at', 0));
+            const elapsed = Date.now() - lastSyncAt;
+            if (!force && !fullSync && lastSyncAt > 0 && elapsed < COOLDOWN_MS) {
+                const waitSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+                alert(`⏳ Seus dados foram sincronizados há pouco tempo.\n\nAguarde mais ${waitSec} segundos para nova consulta, evitando sobrecarga na cota do Open Finance.`);
+                return;
+            }
+
             isSyncingAllPluggyInProgress = true;
-            const btn = fullSync ? document.getElementById('btn-sync-all-pluggy-total') : document.getElementById('btn-sync-all-pluggy');
-            const origHtml = btn ? btn.innerHTML : '';
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
+
+            const btn7d = document.getElementById('btn-sync-all-pluggy');
+            const btnTotal = document.getElementById('btn-sync-all-pluggy-total');
+            const activeBtn = fullSync ? btnTotal : btn7d;
+            const origHtml = activeBtn ? activeBtn.innerHTML : '';
+
+            // Bloqueio visual e tátil estrito em ambos os botões para desarmar eventos de touch do mobile
+            [btn7d, btnTotal].forEach(b => {
+                if (b) {
+                    b.disabled = true;
+                    b.style.pointerEvents = 'none';
+                    b.style.opacity = '0.5';
+                    b.style.cursor = 'not-allowed';
+                }
+            });
+
+            if (activeBtn) {
+                activeBtn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando... por favor aguarde';
                 if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
             }
 
             let totalImported = 0;
             let successCount = 0;
             const failedErrors = [];
+
             try {
-                for (const item of pluggyItems) {
-                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false, fullSync });
+                // 3. SEPARAÇÃO DAS CONEXÕES EM FILA (NÃO PARALELO) COM INTERVALO DE ALÍVIO
+                for (let i = 0; i < pluggyItems.length; i++) {
+                    const item = pluggyItems[i];
+
+                    // Espaçamento de segurança de 2 segundos entre conexões
+                    if (i > 0) {
+                        await new Promise(r => setTimeout(r, 2000));
+                    }
+
+                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false, fullSync, isBatch: true });
                     if (!res || res.ok === false) {
                         failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
                     } else {
@@ -5473,10 +5541,12 @@ function openBankModal() {
                         if (res.importedCount) totalImported += res.importedCount;
                     }
                 }
-                localStorage.setItem('finan_last_pluggy_sync_at', String(Date.now()));
+
+                safeLocalStorageSet('finan_last_pluggy_sync_at', String(Date.now()));
                 cleanupStatementAndCreditNoise();
                 renderAll();
                 renderPluggyConnections();
+
                 const syncTypeLabel = fullSync ? 'Histórico Completo' : 'Últimos 7 Dias';
                 if (failedErrors.length > 0 && successCount === 0) {
                     alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões) (${syncTypeLabel}):\n• ${failedErrors.join('\n• ')}`);
@@ -5490,9 +5560,16 @@ function openBankModal() {
                 alert('Erro durante a sincronização: ' + (err?.message || 'Erro inesperado'));
             } finally {
                 isSyncingAllPluggyInProgress = false;
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = origHtml;
+                [btn7d, btnTotal].forEach(b => {
+                    if (b) {
+                        b.disabled = false;
+                        b.style.pointerEvents = '';
+                        b.style.opacity = '';
+                        b.style.cursor = '';
+                    }
+                });
+                if (activeBtn) {
+                    activeBtn.innerHTML = origHtml;
                     if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
                 }
             }
@@ -5653,13 +5730,25 @@ function openBankModal() {
 
         async function syncPluggyItem(itemId, options = {}) {
             if (!itemId) return null;
-            const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false } = options;
+            const itemIdStr = String(itemId);
 
-            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemId}`) || document.getElementById(`btn-sync-total-${itemId}`);
+            // Trava individual para impedir chamadas simultâneas no mesmo item
+            if (activeSyncingItemIds.has(itemIdStr)) {
+                console.warn(`[Sync] Sincronização já em andamento para o item ${itemIdStr}. Ignorando disparo duplicado.`);
+                return null;
+            }
+            activeSyncingItemIds.add(itemIdStr);
+
+            const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false, isBatch = false } = options;
+
+            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemIdStr}`) || document.getElementById(`btn-sync-total-${itemIdStr}`);
             const origHtml = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
+                btn.style.pointerEvents = 'none';
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+                btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
                 if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
             }
 
@@ -5668,31 +5757,35 @@ function openBankModal() {
                 const resp = await fetch('/api/pluggy-sync', {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ itemId, triggerUpdate, fullSync })
+                    body: JSON.stringify({ itemId: itemIdStr, triggerUpdate, fullSync })
                 });
 
                 if (!resp.ok) {
                     const errData = await resp.json().catch(() => ({}));
                     const stepInfo = errData.step ? ` [etapa: ${errData.step}]` : '';
-                    const friendlyMsg = (errData.error || errData.erro || `Erro HTTP ${resp.status} ao sincronizar dados da Pluggy.`) + stepInfo;
+                    const rawMsg = String(errData.error || errData.erro || `Erro HTTP ${resp.status} ao sincronizar dados da Pluggy.`);
+                    const friendlyMsg = rawMsg.toLowerCase().includes('quota')
+                        ? 'Cota temporária de consultas atingida no Open Finance. Aguarde alguns minutos antes de consultar novamente.'
+                        : (rawMsg + stepInfo);
                     throw new Error(friendlyMsg);
                 }
 
                 const data = await resp.json();
                 if (data && data.ok === false) {
                     const stepInfo = data.step ? ` [etapa: ${data.step}]` : '';
-                    throw new Error((data.error || data.erro || 'Erro ao sincronizar dados da Pluggy.') + stepInfo);
+                    const rawMsg = String(data.error || data.erro || 'Erro ao sincronizar dados da Pluggy.');
+                    const friendlyMsg = rawMsg.toLowerCase().includes('quota')
+                        ? 'Cota temporária de consultas atingida no Open Finance. Aguarde alguns minutos antes de consultar novamente.'
+                        : (rawMsg + stepInfo);
+                    throw new Error(friendlyMsg);
                 }
 
                 const itemInfo = data.item || {};
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 const pluggyTxs = Array.isArray(data.transactions) ? data.transactions : [];
                 if (data.rawDebugPayload) {
-                    try {
-                        localStorage.setItem('pluggy_card_raw_debug.json', JSON.stringify(data.rawDebugPayload, null, 2));
-                        window.lastPluggyRawDebug = data.rawDebugPayload;
-                        console.log('📌 JSON Bruto da API Pluggy recebido:', data.rawDebugPayload);
-                    } catch (e) {}
+                    window.lastPluggyRawDebug = data.rawDebugPayload;
+                    console.log('📌 JSON Bruto da API Pluggy recebido (em memória):', data.rawDebugPayload);
                 }
 
                 // 1. Atualiza registro em pluggyItems com o resumo de cada conta (Corrente e Cartão)
@@ -6178,8 +6271,12 @@ function openBankModal() {
                 }
                 return { ok: false, error: errMsg };
             } finally {
+                activeSyncingItemIds.delete(itemIdStr);
                 if (btn) {
                     btn.disabled = false;
+                    btn.style.pointerEvents = '';
+                    btn.style.opacity = '';
+                    btn.style.cursor = '';
                     btn.innerHTML = origHtml;
                     if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
                 }
@@ -15830,23 +15927,14 @@ window.updateAiChatStatusPill = updateAiChatStatusPill;
                     const data = await resp.json();
                     if (data?.rawDebugPayload) {
                         rawPayload = data.rawDebugPayload;
-                        try {
-                            localStorage.setItem("pluggy_card_raw_debug.json", JSON.stringify(rawPayload));
-                            window.lastPluggyRawDebug = rawPayload;
-                        } catch (e) {}
+                        window.lastPluggyRawDebug = rawPayload;
                     } else {
                         rawPayload = data;
                     }
                 }
 
-                if (!rawPayload) {
-                    const cached = localStorage.getItem("pluggy_card_raw_debug.json");
-                    if (cached) {
-                        try { rawPayload = JSON.parse(cached); } catch (e) {}
-                    }
-                    if (!rawPayload && window.lastPluggyRawDebug) {
-                        rawPayload = window.lastPluggyRawDebug;
-                    }
+                if (!rawPayload && window.lastPluggyRawDebug) {
+                    rawPayload = window.lastPluggyRawDebug;
                 }
 
                 if (!rawPayload) {
