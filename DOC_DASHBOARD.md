@@ -94,10 +94,16 @@
   - Remoção de event listeners contínuos de `mousemove` que aplicavam rotação 3D (`perspective`, `rotateX`, `rotateY`, `scale`) nos cards a cada pixel movido, eliminando trepidação e distorção de fontes.
   - Proteção de CSS contra injeção de barras de tradução com `body { top: 0px !important; }` e `.skiptranslate { display: none !important; }`.
 
-### 9. Responsividade Mobile: Linhas de Transações e Eliminação de Sobreposição
-- **Distribuição Flexbox Segregada:**
-  - Container principal: `flex items-center justify-between gap-3 p-3 w-full`.
-  - Lado esquerdo flexível: `<div class="flex items-center gap-2.5 min-w-0 flex-1">` com container de textos truncáveis (`min-w-0 flex-1 truncate block`) para título e subtítulo de conta/categoria, impedindo colisão com o valor.
-  - Lado direito blindado: `<div class="flex items-center gap-2 flex-shrink-0">` com bloco numérico de largura mínima (`min-w-[70px] whitespace-nowrap text-right`) e botão de ação compacto (`px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0`).
-- **Telas Ultracompactas (< 360px):**
-  - Regras de CSS adaptam padding, ícones e tipografia sem quebras de linha ou sobreposição de botões.
+### 10. Atualização 1-Click Bank Refresh (Popup) no MeuPluggy & Resiliência a Restrições de API
+- **Detecção de Restrição da API Pluggy:** Conexões importadas ou gerenciadas via portal `MeuPluggy` retornam HTTP 400 (`"MeuPluggy item cant be updated"`) ao receber requisições de `PATCH /items/{id}` via API.
+- **Tratamento no Backend (`/api/pluggy-sync`):** A rota identifica conexões cujo conector seja `MeuPluggy` e pula automaticamente a chamada inútil de `PATCH`, evitando erros 400 e aguardando 0 segundos de polling desnecessário, executando diretamente a extração dos dados mais recentes (`fetchAccounts` e `fetchAllTransactionsV2`) com status 200 estável.
+- **Botão "⚡ Atualizar no Banco (Popup)" (Cabeçalho e Cards):**
+  - Abre uma janela popup centralizada de 520x720 apontando para o portal oficial do usuário:
+    `https://meu.pluggy.ai/connections/{itemId}` (ou `https://meu.pluggy.ai/` como visão geral).
+  - O usuário autentica / atualiza diretamente no portal com total suporte a biometria/MFA do banco e sem consumir limites de cota da API de desenvolvedor.
+  - O sistema grava timestamp de abertura (`pluggy_popup_opened_at`) e `pluggy_popup_item_id` no `localStorage`.
+- **Detecção Automática de Retorno (`window focus` & `document visibilitychange`):**
+  - Assim que o usuário conclui no portal MeuPluggy e retorna para a aba do aplicativo (nos últimos 3 minutos), o sistema detecta o retorno automaticamente.
+  - Exibe toast: `🔄 Você retornou do MeuPluggy! Sincronizando dados frescos com o Supabase...`.
+  - Dispara sincronização com `triggerUpdate: false`, trazendo saldos e transações atualizados pelo portal direto para o Supabase sem queimar cotas.
+  - Incremento da versão de cache em `bootstrap.js` para `20261108_popup_refresh_v2`.

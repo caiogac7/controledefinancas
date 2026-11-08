@@ -1207,8 +1207,21 @@ async function handler(req, res) {
         const isRecentEnough = lastUpdatedTs > 0 && (Date.now() - lastUpdatedTs < FIFTEEN_MINUTES_MS) && String(itemData.status || '').toUpperCase() === 'UPDATED';
         const shouldTriggerPatch = Boolean(triggerUpdate || forceRefresh);
 
+        const connectorNameLower = String(itemData.connector?.name || itemData.connectorName || '').toLowerCase();
+        const isMeuPluggyItem = connectorNameLower.includes('meupluggy');
+
         if (shouldTriggerPatch) {
-            if (isRecentEnough && !forceRefresh) {
+            if (isMeuPluggyItem) {
+                // A API da Pluggy proíbe PATCH /items/{id} para conexões geradas no portal MeuPluggy (retorna HTTP 400 'MeuPluggy item cant be updated').
+                // Para conexões MeuPluggy, a atualização no banco é feita diretamente pelo portal do usuário via popup!
+                console.log(`[Pluggy] Item ${itemId} é gerenciado pelo MeuPluggy. O endpoint PATCH direto é restrito pelo provedor ("MeuPluggy item cant be updated"). Prosseguindo com a leitura direta dos dados mais recentes.`);
+                patchRes = {
+                    ok: false,
+                    status: 200,
+                    message: 'Conexão gerenciada via MeuPluggy. Atualize pelo botão "Atualizar no Banco (Popup)" caso queira forçar nova consulta no banco.'
+                };
+                quotaNotice = 'Conexão MeuPluggy: dados lidos da versão mais recente disponível no portal.';
+            } else if (isRecentEnough && !forceRefresh) {
                 console.log(`[Pluggy] Item ${itemId} já atualizado no banco há menos de 15 minutos (${new Date(itemData.lastUpdatedAt).toLocaleTimeString('pt-BR')}). Pulando PATCH para economizar cota.`);
                 quotaNotice = 'O banco já estava na versão mais recente da Pluggy; extratos e saldos sincronizados com sucesso.';
             } else {
@@ -1232,6 +1245,9 @@ async function handler(req, res) {
                     if (msg.toLowerCase().includes('quota') || patchRes.status === 429) {
                         console.warn(`[Pluggy] Cota de refresh direto no banco atingida para ${itemId}. Prosseguindo com os dados mais recentes salvos na Pluggy sem erro.`);
                         quotaNotice = 'Cota temporária de atualização direta do banco já utilizada recentemente. Sincronizando com a última versão disponível na Pluggy.';
+                    } else if (msg.toLowerCase().includes('meupluggy')) {
+                        console.warn(`[Pluggy] Item ${itemId} é gerenciado pelo MeuPluggy e não permite PATCH externo. Leitura direta concluída.`);
+                        quotaNotice = 'Conexão MeuPluggy: dados lidos com sucesso.';
                     } else {
                         console.warn(`[Pluggy] Aviso ao atualizar item ${itemId}:`, msg);
                     }
