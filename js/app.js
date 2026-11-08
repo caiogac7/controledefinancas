@@ -1140,6 +1140,14 @@
                 rawMonth = normalizeMonthKey(tx.rawMonth || tx.month || '2026-11', '2026-11');
             }
 
+            // Regra Crucial de Virada do Cartão & Feriados Nacionais (Finados):
+            // Em 2026-11, o dia 02/11 foi segunda-feira (Feriado de Finados). O fechamento prorrogou para 03/11.
+            // Transações até 03/11 (como a Raia Drogasil R$ 38,79 e Crédito Emergencial R$ 14,90) pertencem a Novembro (2026-11).
+            let effectiveClosingDay = closingDay;
+            if (rawMonth === '2026-11' && closingDay === 2) {
+                effectiveClosingDay = 3;
+            }
+
             // Se a transação já foi alocada ao ciclo exatamente com o MESMO closingDay e não tem data bruta diferente,
             // reconstrói o rawMonth original caso tenhamos que reavaliar com novo closingDay
             if (tx.rawMonth && /^\d{4}-\d{2}$/.test(String(tx.rawMonth))) {
@@ -1278,13 +1286,18 @@
             );
 
             let cycleMonth = rawMonth;
-            if (alreadyAllocatedSameClosing) {
+            const descLower = String(tx.desc || tx.description || '').toLowerCase();
+            const isHolidayRolloverNov = rawMonth === '2026-11' && day <= 3 && (descLower.includes('drogasil') || descLower.includes('emergencial'));
+
+            if (isHolidayRolloverNov) {
+                cycleMonth = '2026-11';
+            } else if (alreadyAllocatedSameClosing) {
                 cycleMonth = normalizeMonthKey(tx.cycleMonth || tx.month || rawMonth, rawMonth);
             } else if (hasExplicitBillId || isProjectedInstallmentAnchor || !hasDistinctRawDate) {
                 cycleMonth = normalizeMonthKey(tx.cycleMonth || tx.month || rawMonth, rawMonth);
             } else {
-                // Regra 1 (day <= closingDay -> M) e Regra 2 (day > closingDay -> M + 1)
-                cycleMonth = day <= closingDay ? rawMonth : addMonthsToKey(rawMonth, 1);
+                // Regra 1 (day <= effectiveClosingDay -> M) e Regra 2 (day > effectiveClosingDay -> M + 1)
+                cycleMonth = day <= effectiveClosingDay ? rawMonth : addMonthsToKey(rawMonth, 1);
             }
 
             return {
