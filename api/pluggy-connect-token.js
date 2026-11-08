@@ -1,5 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
-import { PluggyClient } from 'pluggy-sdk';
+const { createClient } = require('@supabase/supabase-js');
+const { PluggyClient } = require('pluggy-sdk');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -8,13 +8,16 @@ const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
  * Autentica o usuário via JWT do Supabase e gera um Connect Token oficial na Pluggy
  * usando o SDK oficial `pluggy-sdk` (PluggyClient) sem expor CLIENT_ID/CLIENT_SECRET.
  */
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
     const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
     const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
 
@@ -61,6 +64,6 @@ export default async function handler(req, res) {
         });
     } catch (error) {
         console.error('Erro em /api/pluggy-connect-token:', error);
-        return res.status(500).json({ erro: 'Erro ao gerar Connect Token na Pluggy. Verifique PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET.' });
+        return res.status(500).json({ erro: 'Erro ao gerar Connect Token na Pluggy: ' + (error?.message || 'Erro interno') });
     }
-}
+};

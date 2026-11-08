@@ -1,5 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
-import { PluggyClient } from 'pluggy-sdk';
+const { createClient } = require('@supabase/supabase-js');
+const { PluggyClient } = require('pluggy-sdk');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -8,7 +8,7 @@ const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 
 /**
  * Formata um timestamp ISO completo no fuso America/Sao_Paulo
  */
-export function getSaoPauloTimestamp() {
+function getSaoPauloTimestamp() {
     try {
         const now = new Date();
         const str = now.toLocaleString('en-CA', { timeZone: 'America/Sao_Paulo', hour12: false });
@@ -24,7 +24,7 @@ export function getSaoPauloTimestamp() {
 /**
  * Formata uma data ISO para YYYY-MM e dia numérico no fuso America/Sao_Paulo
  */
-export function parseDateInSaoPaulo(isoString) {
+function parseDateInSaoPaulo(isoString) {
     if (!isoString) isoString = new Date().toISOString();
     let s = String(isoString).trim();
     if (/^\d{4}-\d{2}$/.test(s)) {
@@ -57,11 +57,11 @@ export function parseDateInSaoPaulo(isoString) {
     return { year: fallbackY, monthNum: fallbackM, month: `${fallbackY}-${String(fallbackM).padStart(2, '0')}`, day: fallbackD, isYearMonthOnly: false };
 }
 
-export function sleep(ms) {
+function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function normalizeTextForClassification(desc) {
+function normalizeTextForClassification(desc) {
     if (!desc) return '';
     return String(desc)
         .normalize('NFD')
@@ -71,7 +71,7 @@ export function normalizeTextForClassification(desc) {
         .trim();
 }
 
-export function isCardBillPayment(desc) {
+function isCardBillPayment(desc) {
     if (!desc) return false;
     const clean = normalizeTextForClassification(desc);
     return clean.includes('pagamento de fatura cartao de credito') ||
@@ -87,7 +87,7 @@ export function isCardBillPayment(desc) {
            (clean.includes('pagamento') && clean.includes('credito'));
 }
 
-export function isCardPaymentReceivedMirror(desc) {
+function isCardPaymentReceivedMirror(desc) {
     if (!desc) return false;
     const clean = normalizeTextForClassification(desc);
     return clean.includes('pagamento recebido') ||
@@ -97,7 +97,7 @@ export function isCardPaymentReceivedMirror(desc) {
            clean.includes('pagamento fatura');
 }
 
-export function isVaultTransactionDesc(desc) {
+function isVaultTransactionDesc(desc) {
     if (!desc) return false;
     const clean = normalizeTextForClassification(desc);
     return clean.includes('reserva por gasto') ||
@@ -119,7 +119,7 @@ export function isVaultTransactionDesc(desc) {
  * - GRUPO 4: VAULT_TX (Cofre/Reservas -> atualizam vault_balance)
  * - GRUPO 5: BANK_REGULAR_TX (Movimentações Bancárias Comuns -> show_on_home = false)
  */
-export function classifyPluggyTransaction(txObj) {
+function classifyPluggyTransaction(txObj) {
     if (!txObj) {
         return { tx_group: 'BANK_REGULAR_TX', show_on_home: false, paymentSource: null };
     }
@@ -174,7 +174,7 @@ export function classifyPluggyTransaction(txObj) {
     };
 }
 
-export function mapPluggyCategory(rawCat, desc, isExpense) {
+function mapPluggyCategory(rawCat, desc, isExpense) {
     const c = String(rawCat || '').toLowerCase();
     const d = String(desc || '').toLowerCase();
     if (!isExpense) {
@@ -194,7 +194,7 @@ export function mapPluggyCategory(rawCat, desc, isExpense) {
 /**
  * Normaliza descrição do estabelecimento para assinatura de compra parcelada
  */
-export function getCleanMerchantSignature(desc) {
+function getCleanMerchantSignature(desc) {
     let s = String(desc || '')
         .toUpperCase()
         .normalize('NFD')
@@ -214,7 +214,7 @@ export function getCleanMerchantSignature(desc) {
     return s.slice(0, 14);
 }
 
-export function shiftMonthKey(yearMonthStr, deltaMonths) {
+function shiftMonthKey(yearMonthStr, deltaMonths) {
     if (!yearMonthStr || typeof yearMonthStr !== 'string') return yearMonthStr;
     const parts = yearMonthStr.slice(0, 7).split('-');
     if (parts.length < 2) return yearMonthStr;
@@ -227,11 +227,11 @@ export function shiftMonthKey(yearMonthStr, deltaMonths) {
     return y + '-' + String(m + 1).padStart(2, '0');
 }
 
-export function getPrevMonthKey(ym) {
+function getPrevMonthKey(ym) {
     return shiftMonthKey(ym, -1);
 }
 
-export function getNextMonthKey(ym) {
+function getNextMonthKey(ym) {
     return shiftMonthKey(ym, 1);
 }
 
@@ -239,7 +239,7 @@ export function getNextMonthKey(ym) {
  * Resolve a configuração oficial de ciclo do cartão (closingDay e dueDay) a partir do banco de dados
  * (public.credit_cards / public.banks / settings_json), com fallback para os metadados da conta Pluggy.
  */
-export function resolveCardCycleConfig(acc, creditBills = [], dbCards = [], dbBanks = []) {
+function resolveCardCycleConfig(acc, creditBills = [], dbCards = [], dbBanks = []) {
     const accIdStr = String(acc?.id || '');
     const shortId = accIdStr.slice(0, 8);
     const expectedCardId = shortId ? `card_${shortId}` : '';
@@ -329,7 +329,7 @@ export function resolveCardCycleConfig(acc, creditBills = [], dbCards = [], dbBa
  *    pagamentos, antecipações, reembolsos e estornos.
  * 4. Não aplica deslocamento duplo se a transação já estiver associada ao ciclo correto (`billId`, `isSyntheticGapFill`, `isAlreadyCycleAllocated` ou `day === 1`).
  */
-export function allocateTransactionToCardCycle(tx, cardConfig = {}) {
+function allocateTransactionToCardCycle(tx, cardConfig = {}) {
     if (!tx) return tx;
     const closingDay = Math.max(1, Math.min(31, Number(cardConfig.closingDay ?? tx.closingDayUsed ?? 2)));
     const dueDay = Math.max(1, Math.min(31, Number(cardConfig.dueDay ?? tx.dueDayUsed ?? 7)));
@@ -450,7 +450,7 @@ export function allocateTransactionToCardCycle(tx, cardConfig = {}) {
  * @param {Object} cardConfig - Configuração de ciclo do cartão ({ closingDay, dueDay })
  * @returns {Array<Object>} Transações originais + apenas as parcelas sintéticas faltantes
  */
-export function fillInstallmentGaps(txList, cardConfig = { closingDay: 2, dueDay: 7 }) {
+function fillInstallmentGaps(txList, cardConfig = { closingDay: 2, dueDay: 7 }) {
     if (!Array.isArray(txList)) return [];
 
     const nonInstallmentTxs = [];
@@ -583,7 +583,7 @@ export function fillInstallmentGaps(txList, cardConfig = { closingDay: 2, dueDay
 }
 
 // Retrocompatibilidade
-export function processInstallments(transaction) {
+function processInstallments(transaction) {
     return fillInstallmentGaps([transaction]);
 }
 
@@ -597,7 +597,7 @@ export function processInstallments(transaction) {
  * - postClosingRefunds (Reembolsos pós-virada entre closingDay+1 e vencimento)
  * - total_amount, paid_amount, pending_amount, status
  */
-export function calculateHomologatedCardBills(allTransactions, officialBills = [], cardConfig = { closingDay: 2, dueDay: 7 }, nowSp = null) {
+function calculateHomologatedCardBills(allTransactions, officialBills = [], cardConfig = { closingDay: 2, dueDay: 7 }, nowSp = null) {
     const currentSp = nowSp || parseDateInSaoPaulo(new Date().toISOString());
     const closingDay = Math.max(1, Math.min(31, Number(cardConfig?.closingDay || 2)));
     const dueDay = Math.max(1, Math.min(31, Number(cardConfig?.dueDay || 7)));
@@ -725,7 +725,7 @@ export function calculateHomologatedCardBills(allTransactions, officialBills = [
  * Coletor Oficial Pluggy V2 com Paginação por Cursor (/v2/transactions)
  * Substitui definitivamente o endpoint v1 descontinuado (HTTP 410 Gone).
  */
-export async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateTo } = {}) {
+async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateTo } = {}) {
     const transactions = [];
     const seenIds = new Set();
     const cursorOptions = {};
@@ -836,13 +836,16 @@ export async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom
     return transactions;
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
     const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
     const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
 
@@ -1003,24 +1006,38 @@ export default async function handler(req, res) {
                 acc.bankData.reservedBalances.forEach(rb => {
                     if (Array.isArray(rb.availableAmounts)) {
                         rb.availableAmounts.forEach(aa => {
-                            if (typeof aa?.amount === 'number') nativeReserved += aa.amount;
+                            const val = Number(aa?.amount ?? aa?.value ?? aa?.balance ?? 0);
+                            if (val > 0) nativeReserved += val;
                         });
-                    } else if (typeof rb?.amount === 'number') {
-                        nativeReserved += rb.amount;
+                    }
+                    const rbDirect = Number(rb?.amount ?? rb?.value ?? rb?.balance ?? rb?.total ?? 0);
+                    if (rbDirect > 0 && !Array.isArray(rb.availableAmounts)) {
+                        nativeReserved += rbDirect;
                     }
                 });
             }
             if (nativeReserved <= 0 && typeof acc.bankData?.automaticallyInvestedBalance === 'number' && acc.bankData.automaticallyInvestedBalance > 0) {
                 nativeReserved = acc.bankData.automaticallyInvestedBalance;
             }
+            if (nativeReserved <= 0 && typeof acc.bankData?.blockedBalance === 'number' && acc.bankData.blockedBalance > 0) {
+                nativeReserved = acc.bankData.blockedBalance;
+            }
 
             // Se ainda não encontrou e for conta bancária, consulta fetchAccountBalance nativo da Pluggy
             if (!isCredit && nativeReserved <= 0 && typeof pluggyClient?.fetchAccountBalance === 'function') {
                 try {
                     const accBal = await pluggyClient.fetchAccountBalance(String(acc.id));
-                    if (typeof accBal?.blockedBalance === 'number' && accBal.blockedBalance > 0) {
+                    if (Array.isArray(accBal?.reservedBalances)) {
+                        accBal.reservedBalances.forEach(rb => {
+                            const rbVal = Number(rb?.amount ?? rb?.value ?? rb?.balance ?? 0);
+                            if (rbVal > 0) nativeReserved += rbVal;
+                        });
+                    }
+                    if (nativeReserved <= 0 && typeof accBal?.reservedBalance === 'number' && accBal.reservedBalance > 0) {
+                        nativeReserved = accBal.reservedBalance;
+                    } else if (nativeReserved <= 0 && typeof accBal?.blockedBalance === 'number' && accBal.blockedBalance > 0) {
                         nativeReserved = accBal.blockedBalance;
-                    } else if (typeof accBal?.automaticallyInvestedBalance === 'number' && accBal.automaticallyInvestedBalance > 0) {
+                    } else if (nativeReserved <= 0 && typeof accBal?.automaticallyInvestedBalance === 'number' && accBal.automaticallyInvestedBalance > 0) {
                         nativeReserved = accBal.automaticallyInvestedBalance;
                     }
                 } catch (_) {}
@@ -1219,6 +1236,9 @@ export default async function handler(req, res) {
                         isAlreadyCycleAllocated: true
                     });
                 });
+            }
+            } catch (accErr) {
+                console.warn(`[Pluggy Sync] Erro ao processar conta ${acc?.id}:`, accErr?.message || accErr);
             }
         }));
 
@@ -1502,3 +1522,25 @@ export default async function handler(req, res) {
         return res.status(500).json({ erro: 'Erro ao sincronizar dados da Pluggy: ' + (error?.message || 'Erro interno') });
     }
 }
+
+module.exports = handler;
+module.exports.default = handler;
+module.exports.getSaoPauloTimestamp = getSaoPauloTimestamp;
+module.exports.parseDateInSaoPaulo = parseDateInSaoPaulo;
+module.exports.sleep = sleep;
+module.exports.normalizeTextForClassification = normalizeTextForClassification;
+module.exports.isCardBillPayment = isCardBillPayment;
+module.exports.isCardPaymentReceivedMirror = isCardPaymentReceivedMirror;
+module.exports.isVaultTransactionDesc = isVaultTransactionDesc;
+module.exports.classifyPluggyTransaction = classifyPluggyTransaction;
+module.exports.mapPluggyCategory = mapPluggyCategory;
+module.exports.getCleanMerchantSignature = getCleanMerchantSignature;
+module.exports.shiftMonthKey = shiftMonthKey;
+module.exports.getPrevMonthKey = getPrevMonthKey;
+module.exports.getNextMonthKey = getNextMonthKey;
+module.exports.resolveCardCycleConfig = resolveCardCycleConfig;
+module.exports.allocateTransactionToCardCycle = allocateTransactionToCardCycle;
+module.exports.fillInstallmentGaps = fillInstallmentGaps;
+module.exports.processInstallments = processInstallments;
+module.exports.calculateHomologatedCardBills = calculateHomologatedCardBills;
+module.exports.fetchAllTransactionsV2 = fetchAllTransactionsV2;

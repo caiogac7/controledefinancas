@@ -10,4 +10,5 @@
 | 08/11/2026 | `transactions` | Criação dos índices `idx_transactions_user_month (user_id, month)` e `idx_transactions_user_bill_id (user_id, bill_id)`. | Otimização de tempo de resposta em filtros mensais e agregação de transações de faturas. |
 | 08/11/2026 | `credit_bills` | Criação do índice `idx_credit_bills_user_month (user_id, month)`. | Aceleração de consultas e leitura de faturas mensais persistidas. |
 | 08/11/2026 | `bank_statements` | Criação do índice `idx_bank_statements_user_bank (user_id, bank_id)`. | Otimização de busca e reconciliação bancária por instituição. |
+| 08/11/2026 | `banks` / `profiles` | Atualização do `vault_balance` da conta Mercado Pago (`2350304a`) para R$ 25,00 exatos e padronização CommonJS de endpoints serverless. | Refletir o saldo reservado real reportado pela Pluggy no Open Finance após a retirada recente e destravar sync na Vercel. |
 

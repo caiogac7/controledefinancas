@@ -4280,14 +4280,14 @@ function openBankModal() {
          */
         function getBankVaultBalance(b) {
             if (!b) return 0;
-            // Se o usuário personalizou manualmente no modal da conta, respeita a escolha manual
+            // 1. Se o usuário personalizou manualmente no modal da conta, respeita a escolha manual
             if (b.hasCustomVaultBalance && typeof b.vaultBalance === 'number') {
                 return roundCurrency(Math.max(0, b.vaultBalance));
             }
 
-            // Se o saldo já é o valor oficial fornecido pela Pluggy (ex: R$ 25,00 e não resíduo antigo > 1500)
+            // 2. Se a conta possui saldo oficial reservado/bloqueado pela Pluggy (Open Finance) ou persistido
             const explicit = Number(b.vaultBalance ?? b.vault_balance ?? b.reservedBalance ?? 0);
-            if (explicit > 0 && explicit < 1500) {
+            if (explicit > 0) {
                 return roundCurrency(explicit);
             }
 

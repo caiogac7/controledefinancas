@@ -5,7 +5,10 @@
  *
  * NUNCA coloque a SUPABASE_SERVICE_ROLE_KEY aqui.
  */
-export default function handler(req, res) {
+module.exports = function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'GET') {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
@@ -19,4 +22,4 @@ export default function handler(req, res) {
         supabaseUrl,
         supabaseAnon
     });
-}
+};

@@ -1,12 +1,12 @@
-import { fillInstallmentGaps } from './pluggy-sync.js';
-import { createClient } from '@supabase/supabase-js';
+const { fillInstallmentGaps } = require('./pluggy-sync');
+const { createClient } = require('@supabase/supabase-js');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
 /**
  * Obtém a data corrente formatada como YYYY-MM-DD no fuso horário America/Sao_Paulo
  */
-export function getTodayInSaoPaulo() {
+function getTodayInSaoPaulo() {
     const parts = new Intl.DateTimeFormat('sv-SE', {
         timeZone: 'America/Sao_Paulo',
         year: 'numeric',
@@ -22,7 +22,7 @@ export function getTodayInSaoPaulo() {
 /**
  * Calcula o mês anterior no formato YYYY-MM no fuso America/Sao_Paulo
  */
-export function getPreviousMonthKey(yearMonth) {
+function getPreviousMonthKey(yearMonth) {
     if (!/^\d{4}-\d{2}$/.test(String(yearMonth))) {
         return getTodayInSaoPaulo().slice(0, 7);
     }
@@ -36,7 +36,7 @@ export function getPreviousMonthKey(yearMonth) {
 /**
  * Retorna a quantidade de dias de um determinado mês YYYY-MM
  */
-export function getDaysInMonth(yearMonth) {
+function getDaysInMonth(yearMonth) {
     const [y, m] = yearMonth.split('-').map(Number);
     return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
@@ -46,7 +46,7 @@ export function getDaysInMonth(yearMonth) {
  * Início: dia (closingDay + 1) do mês anterior
  * Fim: dia (closingDay) do mês alvo
  */
-export function calculateBillingCycleDates(targetMonth, closingDay) {
+function calculateBillingCycleDates(targetMonth, closingDay) {
     const cleanClosingDay = Math.max(1, Math.min(31, Number(closingDay) || 25));
     const prevMonthKey = getPreviousMonthKey(targetMonth);
 
@@ -77,7 +77,7 @@ export function calculateBillingCycleDates(targetMonth, closingDay) {
  * @param {Array} [params.memoryTransactions] - Transações em memória (opcional, para processamento direto)
  * @param {Array} [params.creditBills] - Faturas retornadas pela API Pluggy (opcional)
  */
-export async function calculateInvoiceDetails({
+async function calculateInvoiceDetails({
     supabase,
     userId,
     accountId,
@@ -316,7 +316,10 @@ export async function calculateInvoiceDetails({
 /**
  * Handler HTTP da API Vercel Serverless (POST /api/calculate-invoice)
  */
-export default async function handler(req, res) {
+async function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido. Utilize POST.' });
     }
@@ -324,8 +327,8 @@ export default async function handler(req, res) {
     const authHeader = req.headers.authorization || '';
     const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
     if (!jwt || !SUPABASE_KEY) {
         return res.status(401).json({ erro: 'Token de autenticação ausente ou inválido.' });
@@ -360,3 +363,11 @@ export default async function handler(req, res) {
         return res.status(500).json({ erro: 'Erro ao calcular detalhes da fatura: ' + (err?.message || 'Erro interno') });
     }
 }
+
+module.exports = handler;
+module.exports.default = handler;
+module.exports.getTodayInSaoPaulo = getTodayInSaoPaulo;
+module.exports.getPreviousMonthKey = getPreviousMonthKey;
+module.exports.getDaysInMonth = getDaysInMonth;
+module.exports.calculateBillingCycleDates = calculateBillingCycleDates;
+module.exports.calculateInvoiceDetails = calculateInvoiceDetails;

@@ -1,5 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
-import { PluggyClient } from 'pluggy-sdk';
+const { createClient } = require('@supabase/supabase-js');
+const { PluggyClient } = require('pluggy-sdk');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -27,10 +27,18 @@ function getSaoPauloTimestamp() {
  * Endpoint seguro para receber notificações de eventos da Pluggy (Open Finance)
  * Suporta: item/updated, item/created, transactions/created
  */
-export default async function handler(req, res) {
+async function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
+
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+    const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
+    const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
 
     const { event, itemId, error: hookError } = req.body || {};
 
@@ -50,11 +58,6 @@ export default async function handler(req, res) {
     if (event && !relevantEvents.includes(event)) {
         return res.status(200).json({ recebido: true, ignorado: `Evento ${event} não requer ingestão` });
     }
-
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
-    const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
 
     if (!SUPABASE_KEY || !PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
         console.error('[Pluggy Webhook] Configurações de ambiente ausentes no servidor');
@@ -165,4 +168,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ erro: 'Falha interna ao processar webhook: ' + (err?.message || 'Erro inesperado') });
     }
 }
+
+module.exports = handler;
+module.exports.default = handler;
 

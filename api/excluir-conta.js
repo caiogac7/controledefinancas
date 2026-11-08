@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+const { createClient } = require('@supabase/supabase-js');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -7,12 +7,15 @@ const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
  * Exclui todos os dados relacionais e a conta de autenticação (auth.users)
  * do usuário autenticado via Service Role Key no servidor (Conformidade LGPD & OWASP).
  */
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
     const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!SUPABASE_KEY) {
@@ -56,4 +59,4 @@ export default async function handler(req, res) {
         console.error('Erro ao excluir conta:', error);
         return res.status(500).json({ erro: 'Erro interno ao processar exclusão de conta' });
     }
-}
+};
