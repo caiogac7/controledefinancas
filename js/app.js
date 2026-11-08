@@ -7552,6 +7552,9 @@ function openBankModal() {
                     refreshAiAdvisorView();
                 }
             }
+            if (typeof updateBatchActionBarUI === 'function') {
+                updateBatchActionBarUI();
+            }
         }
 
         function getSaoPauloDateYYYYMMDD() {
@@ -9448,6 +9451,13 @@ function openBankModal() {
             const sumEl = document.getElementById('batch-selected-sum');
             const selectAllLbl = document.getElementById('lbl-batch-select-all');
             if (!bar) return;
+
+            // Oculta a barra flutuante se a aba ativa for o Consultor IA (advisor)
+            const advisorSec = document.getElementById('view-advisor');
+            if (advisorSec && !advisorSec.classList.contains('hidden')) {
+                bar.classList.add('hidden');
+                return;
+            }
 
             const selectedList = transactions.filter(t => selectedTxIds.has(Number(t.id)));
             const total = selectedList.reduce((acc, t) => acc + Number(t.amount || 0), 0);
@@ -12565,18 +12575,17 @@ Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
 
 // Lista ordenada de modelos oficiais do Google Gemini com fallback automático contra 404
 const GEMINI_CANDIDATE_MODELS = [
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-latest',
     'gemini-2.5-flash',
-    'gemini-1.5-pro'
+    'gemini-2.0-flash',
+    'gemini-2.5-pro',
+    'gemini-1.5-flash'
 ];
 
 async function resolveGeminiModel(apiKey) {
     if (cachedGeminiConfig && cachedGeminiConfig.model) {
         return cachedGeminiConfig.model;
     }
-    return 'gemini-2.0-flash';
+    return 'gemini-2.5-flash';
 }
 
 async function queryGeminiApi(systemInstruction, userPromptText) {
@@ -12588,13 +12597,12 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
     lastAiPromptPayload = `=== SYSTEM INSTRUCTION ===\n${systemInstruction}\n\n=== USER PROMPT ===\n${userPromptText}`;
     window.lastGeminiError = null;
 
-    // Lista de modelos suportados pela API v1beta
+    // Lista de modelos suportados pela API v1beta (linha 1.5 descontinuada atualizada para 2.0/2.5)
     const baseCandidateList = [
-        { model: 'gemini-2.0-flash', version: 'v1beta' },
-        { model: 'gemini-1.5-flash', version: 'v1beta' },
-        { model: 'gemini-1.5-flash-latest', version: 'v1beta' },
         { model: 'gemini-2.5-flash', version: 'v1beta' },
-        { model: 'gemini-1.5-pro', version: 'v1beta' }
+        { model: 'gemini-2.0-flash', version: 'v1beta' },
+        { model: 'gemini-2.5-pro', version: 'v1beta' },
+        { model: 'gemini-1.5-flash', version: 'v1beta' }
     ];
 
     let candidatesToTry = [...baseCandidateList];
