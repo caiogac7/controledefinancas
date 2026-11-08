@@ -13892,17 +13892,19 @@ Siga os passos do raciocínio e devolva o JSON do schema.`;
 }
 // SIMULADOR IA v2 — FIM (prompts)
 
-// Modelos oficiais da série 3.x (com fallback automático contra 503/404)
+// Modelos oficiais da série 3.x com prioridade para modelos Lite (cota ampla e latência ultrarrápida)
+let preferredGeminiModel = 'gemini-3.5-flash-lite';
 const GEMINI_CANDIDATE_MODELS = [
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-lite-latest',
     'gemini-3.5-flash',
     'gemini-3.6-flash',
-    'gemini-3.7-flash',
-    'gemini-3.8-flash',
     'gemini-flash-latest'
 ];
 
 async function resolveGeminiModel(apiKey) {
-    return 'gemini-3.5-flash';
+    return preferredGeminiModel || 'gemini-3.5-flash-lite';
 }
 
 async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
@@ -13920,7 +13922,7 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
             status: 400,
             code: 'API_KEY_MISSING',
             message: missingMsg,
-            model: 'gemini-3.5-flash'
+            model: preferredGeminiModel || 'gemini-3.5-flash-lite'
         };
         if (typeof showSystemAlert === 'function') {
             showSystemAlert(missingMsg, 'warning');
@@ -13946,8 +13948,10 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
         generationConfig
     };
 
-    // 3. Chamada principal e fallbacks diretos na API v1beta da Google (gemini-3.5-flash -> gemini-3.6-flash -> gemini-3.8-flash)
-    for (const model of GEMINI_CANDIDATE_MODELS) {
+    // 3. Chamada principal com rotação inteligente de modelos e priorização do modelo ativo
+    const candidateList = [preferredGeminiModel, ...GEMINI_CANDIDATE_MODELS.filter(m => m !== preferredGeminiModel)];
+
+    for (const model of candidateList) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(userApiKey)}`;
         try {
             const resp = await fetch(url, {
@@ -13971,6 +13975,7 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
                 }
 
                 if (reply) {
+                    preferredGeminiModel = model;
                     lastAiEngineUsed = `Google Gemini (${model})`;
                     window.lastGeminiError = null;
                     return reply;
@@ -13978,6 +13983,11 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
             } else {
                 const errData = await resp.json().catch(() => ({}));
                 const rawErrMsg = errData?.error?.message || resp.statusText || `HTTP ${resp.status}`;
+                if (resp.status === 429) {
+                    console.warn(`[Gemini ${model}] Cota temporária atingida (429), alternando para próximo modelo candidato...`);
+                    window.lastGeminiError = { status: 429, message: 'Cota de requisições atingida no modelo ' + model, model };
+                    continue;
+                }
                 const isKeyInvalid = resp.status === 400 && (
                     rawErrMsg.includes('API key not valid') ||
                     rawErrMsg.includes('API_KEY_INVALID') ||

@@ -65,7 +65,7 @@
 
     // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
     const script = document.createElement('script');
-    const APP_CACHE_VERSION = '20261108_gabriel_installment_fix';
+    const APP_CACHE_VERSION = '20261108_gemini_quota_lite_fix';
     script.src = `js/app.js?v=${APP_CACHE_VERSION}`;
     script.defer = true;
     document.body.appendChild(script);
