@@ -6,12 +6,16 @@
 - When given multi-step tasks or sequential prompts, execute all file modifications sequentially and report only the final result.
 - Avoid introducing unverified variables, broken imports, or missing scoped parameters.
 
-# REGRAS DE PROTEÇÃO DE DADOS E ARQUIVOS DE ANÁLISE
+# REGRAS DE PROTEÇÃO DE DADOS, INTEGRIDADE E ESTABILIDADE DE REQUISIÇÕES
 
-1. ARQUIVOS SOMENTE LEITURA (PROIBIDO INJETAR):
+1. ESTABILIDADE DE REQUISIÇÕES E ROTAS EXISTENTES (PROIBIDO QUEBRAR FUNCIONALIDADES ATIVAS):
+   - NUNCA quebrar, alterar sem necessidade ou remover requisições, endpoints e fluxos que já estão funcionando em produção (ex: `/api/pluggy-sync`, `/api/pluggy-connect-token`, `/api/config`, autenticação Supabase, renderizações e rotinas de conciliação).
+   - Quaisquer melhorias ou novas funcionalidades de IA devem ser aditivas, modulares e resilientes, mantendo fallbacks funcionais e respeitando contratos de dados existentes.
+
+2. ARQUIVOS SOMENTE LEITURA (PROIBIDO INJETAR):
    - O arquivo `json para anlise.json` e quaisquer arquivos com `debug` ou `raw` no nome (ex: `pluggy_card_raw_debug_*.json`) existem ESTRITAMENTE para análise de estrutura e entendimento das regras de negócio.
    - NUNCA importe, faça seed, injete no banco de dados ou conecte esses arquivos `.json` ao código do Frontend ou Backend do site.
    - Toda alimentação de dados do sistema deve vir exclusivamente das rotas reais da API / banco de dados da aplicação.
 
-2. IDIOMA E COMUNICAÇÃO:
+3. IDIOMA E COMUNICAÇÃO:
    - Responda e documente sempre em Português do Brasil (pt-BR).
