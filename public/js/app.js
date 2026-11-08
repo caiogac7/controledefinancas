@@ -1,21 +1,4 @@
-        // Inicialização resiliente com Proxy contra race condition de scripts
-        const supabaseClient = new Proxy({}, {
-            get(target, prop) {
-                const client = window.__supabaseClient;
-                if (!client) {
-                    console.warn(`[Supabase Guard] Tentativa de acesso a '${String(prop)}' antes do bootstrap.js finalizar.`);
-                    return () => ({
-                        select: () => ({ eq: () => Promise.resolve({ data: [], error: null }), order: () => ({ limit: () => Promise.resolve({ data: [] }) }) }),
-                        upsert: () => Promise.resolve({ error: null }),
-                        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-                        delete: () => ({ eq: () => Promise.resolve({ error: null }), in: () => Promise.resolve({ error: null }) }),
-                        auth: { getUser: () => Promise.resolve({ data: null, error: null }) }
-                    });
-                }
-                const val = client[prop];
-                return typeof val === 'function' ? val.bind(client) : val;
-            }
-        });
+        const supabaseClient = window.__supabaseClient;
         const mp = window.__mp;
 
         // Sanitização contra XSS (OWASP A03 - Injection)
@@ -5376,17 +5359,8 @@ function openBankModal() {
             }
         }
 
-        const syncingItemsLock = new Set();
-
         async function syncPluggyItem(itemId, options = {}) {
             if (!itemId) return null;
-            const cleanItemId = String(itemId).trim();
-            if (syncingItemsLock.has(cleanItemId)) {
-                console.warn(`[Sync Guard] Sincronização já em andamento para o item ${cleanItemId}. Ignorando chamada duplicada.`);
-                return null;
-            }
-            syncingItemsLock.add(cleanItemId);
-
             const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false } = options;
 
             const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemId}`) || document.getElementById(`btn-sync-total-${itemId}`);
@@ -5912,7 +5886,6 @@ function openBankModal() {
                 }
                 return { ok: false, error: errMsg };
             } finally {
-                syncingItemsLock.delete(cleanItemId);
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = origHtml;
@@ -12627,17 +12600,12 @@ Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
 }
 
 
-// Lista ordenada de modelos oficiais do Google Gemini com fallback automático contra 404
+// Modelo oficial estável recomendado para produção
 const GEMINI_CANDIDATE_MODELS = [
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash-exp'
+    'gemini-1.5-flash'
 ];
 
 async function resolveGeminiModel(apiKey) {
-    if (cachedGeminiConfig && cachedGeminiConfig.model) {
-        return cachedGeminiConfig.model;
-    }
     return 'gemini-1.5-flash';
 }
 
@@ -12652,7 +12620,9 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
     // Oculta a API Key do DevTools do navegador e elimina qualquer violação de CSP
     try {
         const headers = { 'Content-Type': 'application/json' };
-        if (apiKey) headers['X-Gemini-Key'] = apiKey;
+        if (apiKey) {
+            headers['x-gemini-key'] = apiKey;
+        }
 
         const proxyResp = await fetch('/api/gemini', {
             method: 'POST',
@@ -12666,7 +12636,7 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         if (proxyResp.ok) {
             const data = await proxyResp.json();
             if (data?.ok && data.text) {
-                lastAiEngineUsed = `Google Gemini (${data.model || '2.5-flash'})`;
+                lastAiEngineUsed = 'Google Gemini (gemini-1.5-flash)';
                 window.lastGeminiError = null;
                 return data.text.trim();
             }
@@ -12676,7 +12646,7 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
             window.lastGeminiError = {
                 status: proxyResp.status,
                 message: errMsg,
-                model: 'gemini-proxy'
+                model: 'gemini-1.5-flash'
             };
             console.warn('Aviso no proxy Gemini (/api/gemini):', errMsg);
         }
@@ -12684,14 +12654,11 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         console.warn('Proxy /api/gemini indisponível, tentando chamada direta segura:', proxyErr?.message || proxyErr);
     }
 
-    // 2. Fallback local seguro (caso esteja rodando estático sem servidor Node)
+    // 2. Fallback local seguro utilizando estritamente gemini-1.5-flash
     if (!apiKey) return null;
 
-    const baseCandidateList = [
-        { model: 'gemini-1.5-flash', version: 'v1beta' },
-        { model: 'gemini-1.5-pro', version: 'v1beta' },
-        { model: 'gemini-2.0-flash-exp', version: 'v1beta' }
-    ];
+    const model = 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     const standardPayload = {
         systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -12699,29 +12666,26 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
     };
 
-    for (const item of baseCandidateList) {
-        const cleanModel = item.model.replace(/^models\//, '');
-        const ver = item.version || 'v1beta';
-        const url = `https://generativelanguage.googleapis.com/${ver}/models/${cleanModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(standardPayload)
+        });
 
-        try {
-            const resp = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(standardPayload)
-            });
-
-            if (resp.ok) {
-                const data = await resp.json();
-                const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (reply && reply.trim()) {
-                    lastAiEngineUsed = `Google Gemini (${cleanModel})`;
-                    window.lastGeminiError = null;
-                    return reply.trim();
-                }
+        if (resp.ok) {
+            const data = await resp.json();
+            const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (reply && reply.trim()) {
+                lastAiEngineUsed = 'Google Gemini (gemini-1.5-flash)';
+                window.lastGeminiError = null;
+                return reply.trim();
             }
-        } catch (_) {}
-    }
+        } else {
+            const errData = await resp.json().catch(() => ({}));
+            console.warn(`[Gemini Fallback Error] Status ${resp.status}:`, errData?.error?.message || resp.statusText);
+        }
+    } catch (_) {}
 
     return null;
 }

@@ -1,7 +1,7 @@
 /**
  * POST /api/gemini
- * Proxy Seguro para Google Gemini API (CommonJS / Node 18+ nativo)
- * Oculta a API Key do DevTools do navegador e elimina erros de CSP no cliente
+ * Proxy Seguro para Google Gemini API v1beta (CommonJS / Node 18+ nativo)
+ * Usa exclusivamente o modelo 'gemini-1.5-flash' estável e homologado para produção.
  */
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -9,7 +9,7 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, X-Gemini-Key'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, X-Gemini-Key, x-gemini-key'
   );
 
   if (req.method === 'OPTIONS') {
@@ -21,7 +21,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const userKeyHeader = req.headers['x-gemini-key'];
+    const userKeyHeader = req.headers['x-gemini-key'] || req.headers['X-Gemini-Key'];
     const apiKey = (userKeyHeader && typeof userKeyHeader === 'string' && userKeyHeader.trim())
       ? userKeyHeader.trim()
       : (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '');
@@ -35,12 +35,13 @@ module.exports = async function handler(req, res) {
 
     const { systemInstruction, userPrompt, contents, generationConfig } = req.body || {};
 
-    // Modelos oficiais suportados pela API Google AI (v1beta)
-    const candidateModels = [
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
-      'gemini-2.0-flash-exp'
-    ];
+    if (!userPrompt && (!contents || contents.length === 0)) {
+      return res.status(400).json({ ok: false, error: 'Prompt não fornecido.' });
+    }
+
+    // Modelo estável e oficial para produção
+    const model = 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     let outgoingPayload;
     if (Array.isArray(contents) && contents.length > 0) {
@@ -72,44 +73,77 @@ module.exports = async function handler(req, res) {
       };
     }
 
-    let lastError = null;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(outgoingPayload)
+    });
 
-    for (const model of candidateModels) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-      try {
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(outgoingPayload)
-        });
-
-        if (resp.ok) {
-          const data = await resp.json();
-          const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          return res.status(200).json({
-            ok: true,
-            model,
-            text: reply ? reply.trim() : '',
-            candidates: data.candidates || []
-          });
-        } else {
-          const errData = await resp.json().catch(() => ({}));
-          lastError = errData?.error?.message || `HTTP ${resp.status}`;
-          if (resp.status === 403 || resp.status === 429) {
-            break;
-          }
-        }
-      } catch (e) {
-        lastError = e.message;
-      }
+    if (resp.ok) {
+      const data = await resp.json();
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      return res.status(200).json({
+        ok: true,
+        model,
+        text: reply ? reply.trim() : '',
+        candidates: data.candidates || []
+      });
     }
 
-    return res.status(502).json({
+    // Captura e loga o corpo de erro oficial retornado pelo Google
+    const errText = await resp.text().catch(() => '');
+    let errData = null;
+    try {
+      errData = JSON.parse(errText);
+    } catch (_) {}
+
+    const googleErrMsg = errData?.error?.message || errText || `HTTP ${resp.status}`;
+    console.error(`[Gemini API Google Error] Status ${resp.status} (${model}):`, googleErrMsg);
+
+    // Se falhar por causa da systemInstruction na v1beta, tenta o payload combinado universal
+    if (resp.status === 400 || resp.status === 422) {
+      const fallbackPayload = {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `${systemInstruction || ''}\n\n---\nCONSULTA DO USUÁRIO:\n${userPrompt || ''}` }]
+          }
+        ],
+        generationConfig: generationConfig || {
+          temperature: 0.2,
+          maxOutputTokens: 2048
+        }
+      };
+
+      const retryResp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fallbackPayload)
+      });
+
+      if (retryResp.ok) {
+        const retryData = await retryResp.json();
+        const retryReply = retryData?.candidates?.[0]?.content?.parts?.[0]?.text;
+        return res.status(200).json({
+          ok: true,
+          model,
+          text: retryReply ? retryReply.trim() : '',
+          candidates: retryData.candidates || []
+        });
+      }
+
+      const retryErrText = await retryResp.text().catch(() => '');
+      console.error(`[Gemini API Google Retry Error] Status ${retryResp.status} (${model}):`, retryErrText);
+    }
+
+    return res.status(resp.status >= 500 ? 502 : resp.status).json({
       ok: false,
-      error: lastError || 'Não foi possível obter resposta dos modelos Gemini.'
+      model,
+      error: googleErrMsg,
+      details: errData || errText
     });
   } catch (error) {
+    console.error('[Gemini Serverless Function Error]:', error.message);
     return res.status(500).json({ ok: false, error: error.message });
   }
 };
