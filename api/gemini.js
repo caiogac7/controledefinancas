@@ -47,6 +47,16 @@ module.exports = async function handler(req, res) {
       'gemini-flash-latest'
     ];
 
+    const expectJson = Boolean(
+      (generationConfig && generationConfig.responseMimeType === 'application/json') ||
+      (systemInstruction && (String(systemInstruction).includes('SCHEMA DO JSON') || String(systemInstruction).includes('formato JSON')))
+    );
+    const defaultGenConfig = {
+      temperature: expectJson ? 0.1 : 0.2,
+      maxOutputTokens: 8192,
+      ...(expectJson ? { responseMimeType: 'application/json' } : {})
+    };
+
     let outgoingPayload;
     if (Array.isArray(contents) && contents.length > 0) {
       outgoingPayload = {
@@ -54,10 +64,7 @@ module.exports = async function handler(req, res) {
           parts: [{ text: String(systemInstruction) }]
         } : undefined,
         contents,
-        generationConfig: generationConfig || {
-          temperature: 0.2,
-          maxOutputTokens: 2048
-        }
+        generationConfig: { ...defaultGenConfig, ...(generationConfig || {}) }
       };
     } else {
       outgoingPayload = {
@@ -70,10 +77,7 @@ module.exports = async function handler(req, res) {
             parts: [{ text: String(userPrompt || '') }]
           }
         ],
-        generationConfig: generationConfig || {
-          temperature: 0.2,
-          maxOutputTokens: 2048
-        }
+        generationConfig: { ...defaultGenConfig, ...(generationConfig || {}) }
       };
     }
 
@@ -94,12 +98,22 @@ module.exports = async function handler(req, res) {
 
       if (resp.ok) {
         const data = await resp.json();
-        const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (reply && reply.trim()) {
+        const candidate = data?.candidates?.[0];
+        const finishReason = candidate?.finishReason || 'STOP';
+        const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+        const textParts = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text);
+        const reply = (textParts.length > 0 ? textParts.join('') : (parts[parts.length - 1]?.text || '')).trim();
+
+        if (finishReason === 'MAX_TOKENS' && expectJson && !reply.endsWith('}')) {
+          continue;
+        }
+
+        if (reply) {
           return res.status(200).json({
             ok: true,
             model,
-            text: reply.trim(),
+            finishReason,
+            text: reply,
             candidates: data.candidates || []
           });
         }

@@ -12186,6 +12186,18 @@ function parseSimValue(inputVal) {
     return isNaN(val) ? 0 : val;
 }
 
+function maskMoney(input) {
+    if (!input) return;
+    const digits = String(input.value || '').replace(/\D/g, '');
+    if (!digits) {
+        input.value = '';
+        return;
+    }
+    const numberVal = parseInt(digits, 10) / 100;
+    input.value = numberVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+window.maskMoney = maskMoney;
+
 function formatSimMoney(num) {
     return Number(num || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -12691,7 +12703,7 @@ async function resolveGeminiModel(apiKey) {
     return 'gemini-3.5-flash';
 }
 
-async function queryGeminiApi(systemInstruction, userPromptText) {
+async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
     // 1. Busca garantida diretamente do registro do usuário autenticado (ou banco de dados caso não esteja em memória)
     const fetchedKey = await fetchUserGeminiApiKey();
     const userApiKey = (fetchedKey && typeof fetchedKey === 'string') ? fetchedKey.trim() : '';
@@ -12706,7 +12718,7 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
             status: 400,
             code: 'API_KEY_MISSING',
             message: missingMsg,
-            model: 'gemini-2.5-flash'
+            model: 'gemini-3.5-flash'
         };
         if (typeof showSystemAlert === 'function') {
             showSystemAlert(missingMsg, 'warning');
@@ -12714,13 +12726,20 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         return null;
     }
 
+    const expectJson = Boolean(options.expectJson || systemInstruction.includes('SCHEMA DO JSON') || systemInstruction.includes('formato JSON'));
+    const generationConfig = {
+        temperature: expectJson ? 0.1 : 0.2,
+        maxOutputTokens: 8192,
+        ...(expectJson ? { responseMimeType: 'application/json' } : {})
+    };
+
     const standardPayload = {
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+        generationConfig
     };
 
-    // 3. Chamada principal e fallbacks diretos na API v1beta da Google (gemini-2.5-flash -> gemini-2.5-pro -> gemini-2.0-flash)
+    // 3. Chamada principal e fallbacks diretos na API v1beta da Google (gemini-3.5-flash -> gemini-3.6-flash -> gemini-3.8-flash)
     for (const model of GEMINI_CANDIDATE_MODELS) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(userApiKey)}`;
         try {
@@ -12732,11 +12751,22 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
 
             if (resp.ok) {
                 const data = await resp.json();
-                const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (reply && reply.trim()) {
+                const candidate = data?.candidates?.[0];
+                const finishReason = candidate?.finishReason || 'STOP';
+                const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+                // Filtra blocos de pensamento interno (thought: true) e concatena apenas a resposta final
+                const textParts = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text);
+                const reply = (textParts.length > 0 ? textParts.join('') : (parts[parts.length - 1]?.text || '')).trim();
+
+                if (finishReason === 'MAX_TOKENS' && expectJson && !reply.endsWith('}')) {
+                    console.warn(`[Gemini ${model}] Resposta truncada por MAX_TOKENS, tentando próximo modelo...`);
+                    continue;
+                }
+
+                if (reply) {
                     lastAiEngineUsed = `Google Gemini (${model})`;
                     window.lastGeminiError = null;
-                    return reply.trim();
+                    return reply;
                 }
             } else {
                 const errData = await resp.json().catch(() => ({}));
@@ -12796,7 +12826,8 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
             },
             body: JSON.stringify({
                 systemInstruction,
-                userPrompt: userPromptText
+                userPrompt: userPromptText,
+                generationConfig
             })
         });
 
@@ -13724,7 +13755,7 @@ async function runAiPurchaseSimulation() {
 
         let aiRawResponse = null;
         try {
-            aiRawResponse = await queryGeminiApi(SYSTEM_PROMPT_FINANCIAL_ADVISOR, userPromptText);
+            aiRawResponse = await queryGeminiApi(SYSTEM_PROMPT_FINANCIAL_ADVISOR, userPromptText, { expectJson: true });
         } catch (apiErr) {
             console.warn('Chamada Gemini falhou, usando contingência analítica:', apiErr);
         }
