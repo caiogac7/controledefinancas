@@ -897,78 +897,67 @@ export default async function handler(req, res) {
                 dueDay: cardCycleConfig.dueDay
             });
 
-            // REGRA 3: Coleta exaustiva de transações e todas as parcelas (sem corte de 6 páginas)
+            // REGRA 3: Coleta exaustiva de transações e parcelas via V2 (Cursor /v2/transactions)
             const allTxsMap = new Map();
+            const cursorOptions = {};
+            const safeOneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-            // A. Busca com cursor completo
+            if (from) {
+                cursorOptions.dateFrom = String(from).slice(0, 10);
+            } else if (isCredit) {
+                cursorOptions.dateFrom = safeOneYearAgo;
+            }
+            if (to) {
+                cursorOptions.dateTo = String(to).slice(0, 10);
+            }
+
             try {
-                if (typeof pluggyClient.fetchAllTransactions === 'function') {
-                    const fullList = await pluggyClient.fetchAllTransactions(String(acc.id));
+                if (typeof pluggyClient.fetchTransactionsCursor === 'function') {
+                    let page = await pluggyClient.fetchTransactionsCursor(String(acc.id), cursorOptions);
+                    if (Array.isArray(page?.results)) {
+                        page.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
+                    }
+                    let nextUrl = page?.next;
+                    let pageCount = 1;
+                    while (nextUrl && pageCount < 50) {
+                        try {
+                            const afterParam = new URL(nextUrl, 'https://api.pluggy.ai').searchParams.get('after');
+                            if (!afterParam) break;
+                            page = await pluggyClient.fetchTransactionsCursor(String(acc.id), { ...cursorOptions, after: afterParam });
+                            if (Array.isArray(page?.results)) {
+                                page.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
+                            }
+                            nextUrl = page?.next;
+                            pageCount++;
+                        } catch (_) {
+                            break;
+                        }
+                    }
+                } else if (typeof pluggyClient.fetchAllTransactions === 'function') {
+                    const fullList = await pluggyClient.fetchAllTransactions(String(acc.id), cursorOptions);
                     if (Array.isArray(fullList)) {
                         fullList.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
                     }
                 }
-            } catch (errAll) {
-                console.warn(`fetchAllTransactions para ${acc.id}:`, errAll?.message || errAll);
-            }
-
-            // B. Varredura paginada completa (até 50 páginas = até 5.000 transações)
-            try {
-                const searchFilters = { pageSize: 100, page: 1 };
-                const safeOneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-                if (from) {
-                    searchFilters.from = String(from);
-                } else if (isCredit) {
-                    searchFilters.from = safeOneYearAgo;
-                }
-                if (to) searchFilters.to = String(to);
-
-                let firstPage = null;
-                try {
-                    firstPage = await pluggyClient.fetchTransactions(String(acc.id), searchFilters);
-                } catch (pageErr) {
-                    console.warn(`Tentando fetchTransactions sem filtro 'from' para ${acc.id}:`, pageErr?.message || pageErr);
-                    firstPage = await pluggyClient.fetchTransactions(String(acc.id), { pageSize: 100, page: 1 });
-                }
-
-                if (Array.isArray(firstPage?.results)) {
-                    firstPage.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
-                }
-                const totalPages = Math.min(Number(firstPage?.totalPages || 1), 50);
-                for (let page = 2; page <= totalPages; page++) {
-                    try {
-                        const nextPage = await pluggyClient.fetchTransactions(String(acc.id), { ...searchFilters, page });
-                        if (Array.isArray(nextPage?.results)) {
-                            nextPage.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
-                        }
-                    } catch (pErr) {
-                        break;
-                    }
-                }
             } catch (txErr) {
-                console.warn(`Aviso na paginação de transações para ${acc.id}:`, txErr?.message || txErr);
+                console.warn(`Aviso ao coletar transações v2 para ${acc.id}:`, txErr?.message || txErr);
             }
 
-            // C. Busca complementar por fatura (billId) para garantir que parcelas vinculadas venham integradas
+            // Garante associação da fatura para transações que possam não ter o billId preenchido
             if (isCredit && Array.isArray(creditBills) && creditBills.length > 0) {
-                for (const bill of creditBills) {
-                    if (!bill.id) continue;
-                    try {
-                        const billTxResp = await pluggyClient.fetchTransactions(String(acc.id), { billId: String(bill.id), pageSize: 100 });
-                        if (Array.isArray(billTxResp?.results)) {
-                            billTxResp.results.forEach(t => {
-                                if (t && t.id) {
-                                    if (!t.creditCardMetadata) t.creditCardMetadata = {};
-                                    if (!t.creditCardMetadata.billId) t.creditCardMetadata.billId = bill.id;
-                                    if (!t.creditCardMetadata.billForecastDate && bill.dueDate) {
-                                        t.creditCardMetadata.billForecastDate = String(bill.dueDate).slice(0, 7);
-                                    }
-                                    allTxsMap.set(String(t.id), t);
-                                }
-                            });
+                creditBills.forEach(bill => {
+                    if (!bill.id || !bill.dueDate) return;
+                    const bMonth = String(bill.dueDate).slice(0, 7);
+                    allTxsMap.forEach(t => {
+                        if (!t.creditCardMetadata) t.creditCardMetadata = {};
+                        if (!t.creditCardMetadata.billId && t.date && String(t.date).slice(0, 7) === bMonth) {
+                            t.creditCardMetadata.billId = bill.id;
                         }
-                    } catch (_) {}
-                }
+                        if (!t.creditCardMetadata.billForecastDate && bill.dueDate) {
+                            t.creditCardMetadata.billForecastDate = bMonth;
+                        }
+                    });
+                });
             }
 
             txResults = Array.from(allTxsMap.values());
