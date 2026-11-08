@@ -14,8 +14,10 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = String(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/+$/, '');
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON;
+    const rawUrl = String(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL).trim();
+    const mdMatch = rawUrl.match(/\((https?:\/\/[^)]+)\)/) || rawUrl.match(/(https?:\/\/[^\s\]"')]+)/);
+    const SUPABASE_URL = (mdMatch && mdMatch[1] ? mdMatch[1] : rawUrl).replace(/\/+$/, '');
+    const SUPABASE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON).trim();
 
     const authHeader = req.headers.authorization || '';
     const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;

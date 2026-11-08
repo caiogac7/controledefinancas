@@ -2,12 +2,31 @@ const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 const DEFAULT_SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcGRnY3hvemlla3d1cmFsd3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNzIzODAsImV4cCI6MjEwODY0ODM4MH0.sQ2fzs3rRbwVKjHrwa6wAP5mAugKtPIbOeSzbSpxD1Y';
 
 /**
+ * Sanitiza URLs vindas de variáveis de ambiente que possam conter formatação Markdown [https://...](https://...)
+ */
+function sanitizeEnvUrl(rawUrl, fallback = DEFAULT_SUPABASE_URL) {
+    if (!rawUrl) return fallback;
+    let str = String(rawUrl).trim();
+    const mdMatch = str.match(/\((https?:\/\/[^)]+)\)/) || str.match(/(https?:\/\/[^\s\]"')]+)/);
+    if (mdMatch && mdMatch[1]) {
+        str = mdMatch[1];
+    }
+    return str.replace(/\/+$/, '') || fallback;
+}
+
+function sanitizeEnvSecret(rawSecret, fallback = '') {
+    if (!rawSecret) return fallback;
+    return String(rawSecret).trim().replace(/^['"`]+|['"`]+$/g, '') || fallback;
+}
+
+/**
  * Cliente REST nativo para o Supabase (Node 18+ fetch) sem dependência de pacotes ESM externos
  */
 function createSupabaseRestClient(supabaseUrl, apiKey, userJwt) {
-    const baseUrl = String(supabaseUrl || DEFAULT_SUPABASE_URL).replace(/\/+$/, '');
-    const effectiveKey = apiKey || DEFAULT_SUPABASE_ANON;
-    const bearer = process.env.SUPABASE_SERVICE_ROLE_KEY || userJwt || effectiveKey;
+    const baseUrl = sanitizeEnvUrl(supabaseUrl, DEFAULT_SUPABASE_URL);
+    const effectiveKey = sanitizeEnvSecret(apiKey, DEFAULT_SUPABASE_ANON);
+    const serviceKey = sanitizeEnvSecret(process.env.SUPABASE_SERVICE_ROLE_KEY, '');
+    const bearer = serviceKey || userJwt || effectiveKey;
 
     return {
         auth: {

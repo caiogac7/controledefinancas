@@ -13,8 +13,10 @@ module.exports = function handler(req, res) {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ncpdgcxoziekwuralwzx.supabase.co';
-    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcGRnY3hvemlla3d1cmFsd3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNzIzODAsImV4cCI6MjEwODY0ODM4MH0.sQ2fzs3rRbwVKjHrwa6wAP5mAugKtPIbOeSzbSpxD1Y';
+    const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://ncpdgcxoziekwuralwzx.supabase.co';
+    const mdMatch = String(rawUrl).trim().match(/\((https?:\/\/[^)]+)\)/) || String(rawUrl).trim().match(/(https?:\/\/[^\s\]"')]+)/);
+    const supabaseUrl  = (mdMatch && mdMatch[1] ? mdMatch[1] : String(rawUrl).trim()).replace(/\/+$/, '');
+    const supabaseAnon = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcGRnY3hvemlla3d1cmFsd3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNzIzODAsImV4cCI6MjEwODY0ODM4MH0.sQ2fzs3rRbwVKjHrwa6wAP5mAugKtPIbOeSzbSpxD1Y').trim();
 
     // Cache de 1 hora — as chaves públicas mudam raramente
     res.setHeader('Cache-Control', 'public, max-age=3600');
