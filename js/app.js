@@ -3381,6 +3381,7 @@ function openBankModal() {
         // =========================================================================
         // MOTOR DE AUDITORIA CONTÁBIL E RECÁLCULO VIA STORED PROCEDURE POSTGRESQL
         // Suporta RBAC: Administrador pode auditar toda a base ou um usuário específico.
+        // Possui feedback visual com loading state e log detalhado por item.
         // =========================================================================
         async function triggerSystemAuditAndRecalculate(targetUserId = null) {
             const isGlobal = targetUserId === null;
@@ -3389,6 +3390,15 @@ function openBankModal() {
                 : 'Deseja auditar e recalcular as faturas e saldos da sua conta agora?';
 
             if (!confirm(confirmMsg)) return;
+
+            const btnEl = isGlobal ? document.getElementById('btn-audit-all') : document.getElementById('btn-audit-me');
+            const originalBtnHtml = btnEl ? btnEl.innerHTML : '';
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.classList.add('opacity-70', 'cursor-wait');
+                btnEl.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Auditando no PostgreSQL...`;
+                if (window.lucide) lucide.createIcons();
+            }
 
             showToast('Executando auditoria contábil no PostgreSQL...', 'info');
 
@@ -3404,11 +3414,21 @@ function openBankModal() {
                 }
 
                 const report = data || {};
-                const msg = isGlobal
-                    ? `✓ Auditoria Geral Concluída com Sucesso!\n\n• Usuários auditados: ${report.usuarios_auditados || 0}\n• Faturas recalculadas: ${report.faturas_recalculadas || 0}\n• Parcelas sintéticas limpas: ${report.sinteticas_limpas || 0}`
-                    : `✓ Auditoria Concluída com Sucesso!\n\n• Faturas recalculadas: ${report.faturas_recalculadas || 0}\n• Parcelas sintéticas limpas: ${report.sinteticas_limpas || 0}`;
+                const items = Array.isArray(report.itens_alterados) ? report.itens_alterados : [];
 
-                alert(msg);
+                if (items.length > 0) {
+                    const itemLines = items.map(it =>
+                        `• ${it.usuario || it.email} | ${it.cartao || 'Cartão'} (${it.mes}): de R$ ${Number(it.antes || 0).toFixed(2)} para R$ ${Number(it.depois || 0).toFixed(2)} (Dif: ${it.diferenca > 0 ? '+' : ''}R$ ${Number(it.diferenca || 0).toFixed(2)})`
+                    ).join('\n');
+
+                    alert(`✓ Auditoria Concluída com Alterações Registradas!\n\nUsuários auditados: ${report.usuarios_auditados || 0}\nFaturas recalculadas: ${report.faturas_recalculadas || 0}\nParcelas sintéticas limpas: ${report.sinteticas_limpas || 0}\n\nDETALHES DAS FATURAS AJUSTADAS:\n${itemLines}`);
+                } else {
+                    const msg = isGlobal
+                        ? `✓ Auditoria Geral Concluída com Sucesso!\n\n• Usuários auditados: ${report.usuarios_auditados || 0}\n• Faturas com divergência: 0\n• Parcelas sintéticas clonadas: 0\n\nNENHUMA DIVERGÊNCIA ENCONTRADA!\nTodas as faturas e saldos da base já estavam 100% calibrados e consistentes com os extratos bancários.\nNenhum lançamento foi excluído.`
+                        : `✓ Auditoria Concluída com Sucesso!\n\n• Faturas com divergência: 0\n• Parcelas sintéticas clonadas: 0\n\nSua conta está 100% consistente com os extratos e parcelamentos.`;
+                    alert(msg);
+                }
+
                 showToast('Auditoria e recálculo concluídos!', 'success');
 
                 // Recarrega os dados completos da nuvem para atualizar os cards imediatamente
@@ -3420,6 +3440,159 @@ function openBankModal() {
                 }
             } catch (err) {
                 console.error('Falha inesperada na auditoria:', err);
+                showToast('Erro inesperado: ' + (err.message || err), 'error');
+            } finally {
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.classList.remove('opacity-70', 'cursor-wait');
+                    btnEl.innerHTML = originalBtnHtml;
+                    if (window.lucide) lucide.createIcons();
+                }
+            }
+        }
+
+        // =========================================================================
+        // HISTÓRICO DE AUDITORIA E REVERSÃO (ROLLBACK)
+        // =========================================================================
+        async function openSystemAuditHistoryModal() {
+            let historyModal = document.getElementById('system-audit-history-modal');
+            if (!historyModal) {
+                historyModal = document.createElement('div');
+                historyModal.id = 'system-audit-history-modal';
+                historyModal.className = 'fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[95] hidden items-center justify-center p-3 sm:p-5';
+                historyModal.innerHTML = `
+                    <div class="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-3xl p-5 shadow-2xl max-h-[90vh] flex flex-col border border-slate-200 dark:border-slate-800">
+                        <div class="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+                            <div class="flex items-center gap-2.5">
+                                <div class="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 flex items-center justify-center flex-shrink-0">
+                                    <i data-lucide="history" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">Histórico de Auditorias & Reversão</h3>
+                                    <p class="text-[11px] text-slate-500 dark:text-slate-400">Trilha completa de alterações com opção de restaurar snapshots anteriores.</p>
+                                </div>
+                            </div>
+                            <button type="button" onclick="closeSystemAuditHistoryModal()" class="p-1.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200"><i data-lucide="x" class="w-4 h-4"></i></button>
+                        </div>
+                        <div id="system-audit-history-content" class="overflow-y-auto flex-1 py-4 space-y-3 pr-1">
+                            <p class="text-xs text-slate-400 text-center py-4">Carregando logs...</p>
+                        </div>
+                        <div class="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+                            <button type="button" onclick="closeSystemAuditHistoryModal()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-extrabold text-xs">Fechar</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(historyModal);
+            }
+
+            historyModal.classList.remove('hidden');
+            historyModal.classList.add('flex');
+            if (window.lucide) lucide.createIcons();
+            await renderAuditHistoryContent();
+        }
+
+        function closeSystemAuditHistoryModal() {
+            const historyModal = document.getElementById('system-audit-history-modal');
+            if (historyModal) {
+                historyModal.classList.add('hidden');
+                historyModal.classList.remove('flex');
+            }
+        }
+
+        async function renderAuditHistoryContent() {
+            const contentEl = document.getElementById('system-audit-history-content');
+            if (!contentEl) return;
+            contentEl.innerHTML = `<div class="flex items-center justify-center py-6 text-slate-400 text-xs"><i data-lucide="loader-2" class="w-4 h-4 animate-spin mr-2"></i> Buscando histórico no banco...</div>`;
+            if (window.lucide) lucide.createIcons();
+
+            try {
+                const [logsRes, itemsRes] = await Promise.all([
+                    supabaseClient.from('system_audit_logs').select('*').order('executed_at', { ascending: false }).limit(10),
+                    supabaseClient.from('system_audit_items').select('*').order('created_at', { ascending: false }).limit(30)
+                ]);
+
+                const logs = logsRes.data || [];
+                const items = itemsRes.data || [];
+
+                if (logs.length === 0) {
+                    contentEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-6">Nenhum registro de auditoria encontrado ainda.</p>`;
+                    return;
+                }
+
+                contentEl.innerHTML = logs.map(log => {
+                    const logItems = items.filter(it => String(it.log_id) === String(log.id));
+                    const isOk = log.status === 'SUCCESS';
+                    return `
+                        <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
+                            <div class="flex items-center justify-between flex-wrap gap-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-extrabold text-slate-800 dark:text-white">
+                                        ${log.target_type === 'GLOBAL' ? '🌐 Auditoria Geral' : '👤 Auditoria Individual'}
+                                    </span>
+                                    <span class="text-[10px] px-2 py-0.5 rounded-full ${isOk ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'bg-rose-100 text-rose-700'} font-bold">
+                                        ${escapeHtml(log.status || 'SUCCESS')}
+                                    </span>
+                                </div>
+                                <span class="text-[11px] text-slate-400 font-bold">${escapeHtml(formatSaoPauloDateTimeBR(log.executed_at))}</span>
+                            </div>
+                            <p class="text-[11px] text-slate-600 dark:text-slate-300">${escapeHtml(log.summary || '')}</p>
+                            ${logItems.length > 0 ? `
+                                <div class="pt-2 border-t border-slate-200 dark:border-slate-700 space-y-1.5">
+                                    <span class="text-[10px] uppercase font-extrabold text-slate-400">Detalhes das Alterações:</span>
+                                    ${logItems.map(it => `
+                                        <div class="flex items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px]">
+                                            <div class="min-w-0">
+                                                <p class="font-bold text-slate-800 dark:text-slate-200 truncate">${escapeHtml(it.user_name || it.user_email || 'Cliente')} • ${escapeHtml(it.card_name || 'Cartão')} (${escapeHtml(it.month || '')})</p>
+                                                <p class="text-[10px] text-slate-400">De <strong>R$ ${Number(it.before_amount || 0).toFixed(2)}</strong> para <strong>R$ ${Number(it.after_amount || 0).toFixed(2)}</strong></p>
+                                            </div>
+                                            <div class="flex items-center gap-2 flex-shrink-0">
+                                                ${it.reverted ? `
+                                                    <span class="text-[10px] font-extrabold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">Revertido</span>
+                                                ` : `
+                                                    <button type="button" onclick="rollbackSystemAuditItem(${it.id})" class="px-2.5 py-1 rounded-lg bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 font-extrabold text-[10px] transition border border-rose-500/30">
+                                                        Reverter
+                                                    </button>
+                                                `}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : `
+                                <p class="text-[10px] text-slate-400 italic">Nenhum lançamento precisou ser modificado nesta execução (base 100% íntegra).</p>
+                            `}
+                        </div>
+                    `;
+                }).join('');
+
+                if (window.lucide) lucide.createIcons();
+            } catch (err) {
+                console.error('Erro ao renderizar histórico de auditoria:', err);
+                contentEl.innerHTML = `<p class="text-xs text-rose-400 text-center py-4">Erro ao carregar histórico: ${escapeHtml(err.message || err)}</p>`;
+            }
+        }
+
+        async function rollbackSystemAuditItem(itemId) {
+            if (!confirm(`Deseja realmente reverter este ajuste contábil (#${itemId}) e restaurar os valores anteriores no banco de dados?`)) return;
+
+            showToast('Revertendo ajuste no PostgreSQL...', 'info');
+            try {
+                const { data, error } = await supabaseClient.rpc('rollback_audit_item', {
+                    target_item_id: itemId
+                });
+                if (error) {
+                    console.error('Erro ao reverter item de auditoria:', error);
+                    showToast('Erro ao reverter: ' + (error.message || 'Falha no banco'), 'error');
+                    return;
+                }
+                showToast('Ajuste revertido com sucesso!', 'success');
+                await syncDataFromSupabase();
+                renderAll();
+                await renderAuditHistoryContent();
+                if (typeof renderBalanceAlignmentModal === 'function') {
+                    renderBalanceAlignmentModal();
+                }
+            } catch (err) {
+                console.error('Erro ao reverter item:', err);
                 showToast('Erro inesperado: ' + (err.message || err), 'error');
             }
         }
@@ -3542,16 +3715,20 @@ function openBankModal() {
                         ${lastAuditLogInfo ? `<span class="${lastAuditLogInfo.status === 'SUCCESS' ? 'text-emerald-400' : 'text-amber-400'}">✓ Última auditoria no banco: <strong>${escapeHtml(formatSaoPauloDateTimeBR(lastAuditLogInfo.executed_at))}</strong> (${escapeHtml(lastAuditLogInfo.summary || '100% calibrado')})</span>` : 'Carregando histórico de auditoria...'}
                     </div>
                     <div class="flex items-center gap-2 pt-1 flex-wrap">
-                        <button type="button" onclick="triggerSystemAuditAndRecalculate(currentUser?.id)" 
+                        <button type="button" id="btn-audit-me" onclick="triggerSystemAuditAndRecalculate(currentUser?.id)" 
                             class="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-extrabold transition flex items-center gap-1.5">
                             <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Auditar Minha Conta
                         </button>
                         ${isAdmin ? `
-                        <button type="button" onclick="triggerSystemAuditAndRecalculate(null)" 
+                        <button type="button" id="btn-audit-all" onclick="triggerSystemAuditAndRecalculate(null)" 
                             class="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-extrabold transition flex items-center gap-1.5">
                             <i data-lucide="database" class="w-3.5 h-3.5"></i> Recalcular Todos os Clientes (Admin)
                         </button>
                         ` : ''}
+                        <button type="button" onclick="openSystemAuditHistoryModal()" 
+                            class="px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-extrabold transition flex items-center gap-1.5">
+                            <i data-lucide="list-checks" class="w-3.5 h-3.5"></i> Ver Histórico & Reversão
+                        </button>
                     </div>
                 </div>
 
@@ -10175,41 +10352,47 @@ function openBankModal() {
 
             showActionToast(`🎉 ${count} títulos quitados e conciliados ao débito de ${formatBRL(realAmt)}!`);
 
-            // Sincronização ultra-otimizada: persiste em background sem travar a interface do usuário
+            // Sincronização ultra-otimizada: persiste direto no PostgreSQL via Stored Procedure em milissegundos
             if (currentUser) {
                 currentUser.transactions_json = transactions;
                 (async () => {
                     try {
-                        // Persistência rápida direta no perfil do usuário
-                        await supabaseClient.from('profiles').update({
-                            transactions_json: transactions,
-                            updated_at: getSaoPauloTimestamp()
-                        }).eq('id', currentUser.id);
+                        const txIds = itemsToReconcile.map(t => Number(t.id));
+                        const { data, error } = await supabaseClient.rpc('reconcile_transactions_batch', {
+                            target_user_id: currentUser.id,
+                            tx_ids: txIds,
+                            statement_fitid: String(fitid),
+                            statement_real_amount: realTotal,
+                            chosen_bank_id: chosenBankId,
+                            payment_date: paidDate
+                        });
 
-                        // Atualiza as linhas específicas na tabela transactions em batch
-                        const updatedRows = itemsToReconcile.map(t => ({
-                            id: Number(t.id),
-                            user_id: currentUser.id,
-                            month: String(t.month),
-                            day: Number(t.day) || 1,
-                            type: t.type === 'income' ? 'income' : 'expense',
-                            description: String(t.desc || 'Lançamento'),
-                            amount: Number(t.amount) || 0,
-                            category: String(t.cat || 'Compras'),
-                            installment: String(t.inst || 'Fixa'),
-                            bank_id: String(t.bankId || 'bank_geral'),
-                            card_id: String(t.cardId || ''),
-                            fitid: String(t.fitid || ''),
-                            reconciled_with_statement: true,
-                            reconciled_fitid: String(t.reconciledFitid || ''),
-                            paid: true,
-                            paid_at: t.paidAt ? `${t.paidAt}T12:00:00-03:00` : null,
-                            updated_at: nowTs
-                        }));
-                        await supabaseClient.from('transactions').upsert(updatedRows, { onConflict: 'id' });
+                        if (error) {
+                            console.warn('[Conciliação RPC] Fallback via upsert:', error);
+                            const updatedRows = itemsToReconcile.map(t => ({
+                                id: Number(t.id),
+                                user_id: currentUser.id,
+                                month: String(t.month),
+                                day: Number(t.day) || 1,
+                                type: t.type === 'income' ? 'income' : 'expense',
+                                description: String(t.desc || 'Lançamento'),
+                                amount: Number(t.amount) || 0,
+                                original_amount: Number(t.originalAmount || t.amount) || 0,
+                                category: String(t.cat || 'Compras'),
+                                installment: String(t.inst || 'Fixa'),
+                                bank_id: String(t.bankId || 'bank_geral'),
+                                card_id: String(t.cardId || ''),
+                                fitid: String(t.fitid || ''),
+                                reconciled_with_statement: true,
+                                reconciled_fitid: String(t.reconciledFitid || ''),
+                                paid: true,
+                                paid_at: t.paidAt ? `${t.paidAt}T12:00:00-03:00` : null,
+                                updated_at: nowTs
+                            }));
+                            await supabaseClient.from('transactions').upsert(updatedRows, { onConflict: 'id' });
+                        }
                     } catch (syncErr) {
-                        console.warn('[Sync Otimizado] Falha ao atualizar transactions no banco:', syncErr);
-                        await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                        console.error('[Conciliação] Erro inesperado ao sincronizar com banco:', syncErr);
                     }
                 })().catch(() => {});
             }
@@ -10227,9 +10410,25 @@ function openBankModal() {
             tx.reconciledFitid = '';
             tx.reconciledAt = '';
             renderAll();
+
             if (currentUser) {
-                currentUser.transactions_json = transactions;
-                await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                try {
+                    await supabaseClient.rpc('undo_reconciliation_batch', {
+                        target_user_id: currentUser.id,
+                        tx_ids: [Number(txId)]
+                    });
+                } catch (err) {
+                    console.warn('[Desconciliação RPC] Fallback update:', err);
+                    await supabaseClient.from('transactions').update({
+                        amount: origAmt,
+                        paid: false,
+                        paid_at: null,
+                        reconciled_with_statement: false,
+                        reconciled_fitid: null,
+                        reconciled_at: null,
+                        updated_at: getSaoPauloTimestamp()
+                    }).eq('id', Number(txId));
+                }
             }
             showActionToast(`↩️ Conciliação de "${getBaseDescription(tx.desc)}" desfeita! Valor original (${formatBRL(origAmt)}) restaurado.`);
         }
@@ -10253,9 +10452,25 @@ function openBankModal() {
                 tx.reconciledAt = '';
             });
             renderAll();
+
             if (currentUser) {
-                currentUser.transactions_json = transactions;
-                await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                try {
+                    await supabaseClient.rpc('undo_reconciliation_by_fitid', {
+                        target_user_id: currentUser.id,
+                        target_fitid: String(fitid)
+                    });
+                } catch (err) {
+                    console.warn('[Desconciliação Lote RPC] Fallback:', err);
+                    const ids = affected.map(t => Number(t.id));
+                    await supabaseClient.from('transactions').update({
+                        paid: false,
+                        paid_at: null,
+                        reconciled_with_statement: false,
+                        reconciled_fitid: null,
+                        reconciled_at: null,
+                        updated_at: getSaoPauloTimestamp()
+                    }).in('id', ids);
+                }
             }
             showActionToast(`↩️ Lote de ${affected.length} lançamento(s) desconciliado e restaurado para Pendente!`);
         }

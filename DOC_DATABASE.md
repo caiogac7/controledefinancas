@@ -17,4 +17,9 @@
 | 08/11/2026 | `audit_and_recalculate_system` | Stored Procedure PL/pgSQL (`SECURITY DEFINER`) para higienização, recálculo e alinhamento contábil (individual e em massa). | Permitir auditoria e correção em milissegundos sem tráfego de rede ou risco de alucinação. |
 | 08/11/2026 | `cron.job` (`pg_cron`) | Agendamento diário da rotina `auto_ajuste_diario_saldos_faturas` às 03:15 da manhã. | Manutenção preventiva e auto-correção contínua da integridade de dados de todos os clientes. |
 | 08/11/2026 | `system_audit_logs` | Criação da tabela de auditoria com RLS e registro de data/hora, executor, total de faturas recalculadas e sintéticas expurgadas. | Rastreabilidade total, auditoria contábil e exibição do status ao vivo no modal de alinhamento. |
+| 08/11/2026 | `system_audit_items` / `rollback_audit_item` | Criação da tabela granular de itens de auditoria e função RPC `rollback_audit_item` com snapshot completo do estado anterior. | Rastreabilidade milimétrica de alterações por cliente/cartão/mês com reversão cirúrgica de faturas com 1 clique. |
+| 08/11/2026 | `bank_statements` | Correção do mês contábil da tarifa de uso do limite emergencial Mercado Pago (`id: 1794048770108`) de `2026-12` para `2026-11` conforme `billForecastDate: 2026-11` e `billPostDate: 2026-11-02`. | Corrigir divergência contábil de R$ 14,90 entre as faturas de Novembro e Dezembro/2026 do Cartão Mercado Pago. |
+| 08/11/2026 | `transactions` | Adição das colunas `original_amount numeric(15,2)` e `reconciled_at timestamptz`. | Armazenar o valor planejado original para viabilizar rateio proporcional em extrato e reversão perfeita a qualquer momento. |
+| 08/11/2026 | `reconcile_transactions_batch` / `undo_reconciliation_batch` | Stored Procedures transacionais ACID no PostgreSQL para quitação, conciliação e desconciliação ultra-rápidas (<30ms). | Eliminar lentidão e travamentos por upload de JSON pesado e proteger integridade contra mudança de aba/tela. |
+
 

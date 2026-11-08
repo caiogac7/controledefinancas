@@ -491,14 +491,20 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
     const descNorm = normalizeTextForClassification(tx.desc || tx.description || '');
     const isSynthetic = Boolean(tx.isSyntheticGapFill || String(tx.id || '').startsWith('syn_'));
     const hasBillId = Boolean(tx.billId || tx.creditCardMetadata?.billId);
+    const forecastMonth = (
+        (tx.creditCardMetadata?.billForecastDate && String(tx.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+        (tx.raw_data?.creditCardMetadata?.billForecastDate && String(tx.raw_data.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+        null
+    );
     const isPreAllocated = Boolean(
         hasBillId ||
         isSynthetic ||
         tx.isAlreadyCycleAllocated ||
+        Boolean(forecastMonth) ||
         (tx.accountType === 'CREDIT' && dayNum === 1 && !tx.rawPurchaseDate)
     );
 
-    let cycleMonth = rawMonth;
+    let cycleMonth = forecastMonth || rawMonth;
     let settlementPhase = 'IN_CYCLE';
 
     if (group === 'BILL_PAYMENT') {
