@@ -1,7 +1,7 @@
 /**
  * bootstrap.js
  * Busca as chaves públicas do servidor (/api/config) e inicializa
- * o Supabase Client ANTES de carregar o app.js.
+ * o Supabase Client com resiliência total ANTES de carregar o app.js.
  */
 (async function () {
     const FALLBACK_PUBLIC_CONFIG = {
@@ -25,26 +25,47 @@
         // Ambiente local sem servidor Vercel: utiliza configuração pública padrão
     }
 
-    try {
-        window.__supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnon);
-    } catch (err) {
-        console.error('Erro crítico no bootstrap:', err);
-        document.body.innerHTML = `
-            <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#fff;font-family:sans-serif;padding:2rem;text-align:center;">
-                <div>
-                    <p style="font-size:1.2rem;font-weight:bold;margin-bottom:.5rem;">Não foi possível iniciar o aplicativo.</p>
-                    <p style="color:#94a3b8;font-size:.9rem;">Verifique sua conexão e tente novamente.</p>
-                    <button id="btn-reload-bootstrap" style="margin-top:1.5rem;padding:.6rem 1.5rem;background:#4f46e5;color:#fff;border:none;border-radius:.75rem;font-weight:bold;cursor:pointer;">Tentar novamente</button>
-                </div>
-            </div>
-        `;
-        const btnReload = document.getElementById('btn-reload-bootstrap');
-        if (btnReload) btnReload.addEventListener('click', () => location.reload());
+    // 1. Garante que o SDK do Supabase está carregado antes de inicializar o client
+    async function waitForSupabaseSDK(maxWaitMs = 6000) {
+        const start = Date.now();
+        while ((!window.supabase || typeof window.supabase.createClient !== 'function') && (Date.now() - start) < maxWaitMs) {
+            await new Promise(r => setTimeout(r, 40));
+        }
+        if (window.supabase && typeof window.supabase.createClient === 'function') {
+            return true;
+        }
+
+        // Tenta carregar fallback dinamicamente da unpkg caso o CDN do jsdelivr oscile
+        try {
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = 'https://unpkg.com/@supabase/supabase-js@2';
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+            });
+            return Boolean(window.supabase && typeof window.supabase.createClient === 'function');
+        } catch (_) {
+            return false;
+        }
+    }
+
+    const hasSupabase = await waitForSupabaseSDK();
+    if (!hasSupabase) {
+        console.error('SDK do Supabase indisponível no navegador. Verifique a conexão com a CDN.');
         return;
     }
 
-    // Carrega o app principal dinamicamente após inicializar os clientes
+    try {
+        window.__supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnon);
+    } catch (err) {
+        console.error('Erro crítico no bootstrap ao criar cliente Supabase:', err);
+        return;
+    }
+
+    // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient
     const script = document.createElement('script');
     script.src = 'js/app.js';
+    script.defer = true;
     document.body.appendChild(script);
 })();

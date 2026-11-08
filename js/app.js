@@ -12600,14 +12600,50 @@ async function resolveGeminiModel(apiKey) {
 
 async function queryGeminiApi(systemInstruction, userPromptText) {
     const rawKey = getStoredAiKey();
-    if (!rawKey) return null;
-    const apiKey = rawKey.trim();
-    if (!apiKey) return null;
+    const apiKey = (rawKey && typeof rawKey === 'string') ? rawKey.trim() : '';
 
     lastAiPromptPayload = `=== SYSTEM INSTRUCTION ===\n${systemInstruction}\n\n=== USER PROMPT ===\n${userPromptText}`;
     window.lastGeminiError = null;
 
-    // Lista de modelos suportados pela API v1beta (linha 1.5 descontinuada atualizada para 2.0/2.5)
+    // 1. Prioritário e Seguro: Serverless Proxy (/api/gemini)
+    // Oculta a API Key do DevTools do navegador e elimina qualquer violação de CSP
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-Gemini-Key'] = apiKey;
+
+        const proxyResp = await fetch('/api/gemini', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                systemInstruction,
+                userPrompt: userPromptText
+            })
+        });
+
+        if (proxyResp.ok) {
+            const data = await proxyResp.json();
+            if (data?.ok && data.text) {
+                lastAiEngineUsed = `Google Gemini (${data.model || '2.5-flash'})`;
+                window.lastGeminiError = null;
+                return data.text.trim();
+            }
+        } else {
+            const errData = await proxyResp.json().catch(() => ({}));
+            const errMsg = errData?.error || `HTTP ${proxyResp.status}`;
+            window.lastGeminiError = {
+                status: proxyResp.status,
+                message: errMsg,
+                model: 'gemini-proxy'
+            };
+            console.warn('Aviso no proxy Gemini (/api/gemini):', errMsg);
+        }
+    } catch (proxyErr) {
+        console.warn('Proxy /api/gemini indisponível, tentando chamada direta segura:', proxyErr?.message || proxyErr);
+    }
+
+    // 2. Fallback local seguro (caso esteja rodando estático sem servidor Node)
+    if (!apiKey) return null;
+
     const baseCandidateList = [
         { model: 'gemini-2.5-flash', version: 'v1beta' },
         { model: 'gemini-2.0-flash', version: 'v1beta' },
@@ -12615,99 +12651,34 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         { model: 'gemini-1.5-flash', version: 'v1beta' }
     ];
 
-    let candidatesToTry = [...baseCandidateList];
-    if (cachedGeminiConfig && cachedGeminiConfig.model) {
-        candidatesToTry = [
-            { model: cachedGeminiConfig.model, version: cachedGeminiConfig.version || 'v1beta' },
-            ...baseCandidateList.filter(c => c.model !== cachedGeminiConfig.model)
-        ];
-    }
-
     const standardPayload = {
-        systemInstruction: {
-            parts: [{ text: systemInstruction }]
-        },
-        contents: [
-            {
-                role: 'user',
-                parts: [{ text: userPromptText }]
-            }
-        ],
-        generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 2048
-        }
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
     };
 
-    const combinedPayload = {
-        contents: [
-            {
-                role: 'user',
-                parts: [{ text: `${systemInstruction}\n\n---\nCONSULTA DO USUÁRIO:\n${userPromptText}` }]
-            }
-        ],
-        generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 2048
-        }
-    };
-
-    for (const item of candidatesToTry) {
+    for (const item of baseCandidateList) {
         const cleanModel = item.model.replace(/^models\//, '');
         const ver = item.version || 'v1beta';
         const url = `https://generativelanguage.googleapis.com/${ver}/models/${cleanModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
         try {
-            let resp = await fetch(url, {
+            const resp = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(standardPayload)
             });
 
-            // Se der 400 ou 422, tenta imediatamente o payload combinado universal
-            if (!resp.ok && (resp.status === 400 || resp.status === 422)) {
-                resp = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(combinedPayload)
-                });
-            }
-
             if (resp.ok) {
                 const data = await resp.json();
                 const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (reply && reply.trim()) {
-                    cachedGeminiConfig = { model: cleanModel, version: ver };
                     lastAiEngineUsed = `Google Gemini (${cleanModel})`;
                     window.lastGeminiError = null;
                     return reply.trim();
                 }
-            } else {
-                const errData = await resp.json().catch(() => ({}));
-                const errMsg = errData?.error?.message || `HTTP ${resp.status}`;
-                window.lastGeminiError = {
-                    status: resp.status,
-                    message: errMsg,
-                    model: cleanModel
-                };
-                console.warn(`Gemini (${resp.status}) em ${ver}/${cleanModel}:`, errMsg);
-
-                if (cachedGeminiConfig && cachedGeminiConfig.model === cleanModel) {
-                    cachedGeminiConfig = null;
-                }
-
-                if (resp.status === 403 || resp.status === 429) {
-                    break;
-                }
             }
-        } catch (netErr) {
-            console.warn(`Falha de conexão com Gemini (${cleanModel}):`, netErr);
-            window.lastGeminiError = {
-                status: 0,
-                message: 'Falha de conexão ou restrição de rede.',
-                model: cleanModel
-            };
-        }
+        } catch (_) {}
     }
 
     return null;
