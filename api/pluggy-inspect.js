@@ -48,13 +48,13 @@ module.exports = async function handler(req, res) {
     const allAccRes = await fetch(`https://api.pluggy.ai/accounts?itemId=${targetItemId}`, { headers });
     const allAccounts = allAccRes.ok ? await allAccRes.json() : { status: allAccRes.status };
 
-    // 4. Buscar transações V2 direto (sem filtro)
-    const txV2Res = await fetch(`https://api.pluggy.ai/v2/transactions?accountId=${targetAccountId}&pageSize=100`, { headers });
+    // 4. Buscar transações V2 direto (sem filtro e sem pageSize)
+    const txV2Res = await fetch(`https://api.pluggy.ai/v2/transactions?accountId=${targetAccountId}`, { headers });
     const txV2Data = txV2Res.ok ? await txV2Res.json() : { status: txV2Res.status, err: await txV2Res.text() };
 
     // 5. Buscar transações V2 com data de hoje
     const today = '2026-11-08';
-    const txTodayRes = await fetch(`https://api.pluggy.ai/v2/transactions?accountId=${targetAccountId}&from=${today}&pageSize=50`, { headers });
+    const txTodayRes = await fetch(`https://api.pluggy.ai/v2/transactions?accountId=${targetAccountId}&from=${today}`, { headers });
     const txTodayData = txTodayRes.ok ? await txTodayRes.json() : { status: txTodayRes.status, err: await txTodayRes.text() };
 
     return res.status(200).json({
