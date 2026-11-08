@@ -3357,6 +3357,51 @@ function openBankModal() {
         }
 
         // =========================================================================
+        // MOTOR DE AUDITORIA CONTÁBIL E RECÁLCULO VIA STORED PROCEDURE POSTGRESQL
+        // Suporta RBAC: Administrador pode auditar toda a base ou um usuário específico.
+        // =========================================================================
+        async function triggerSystemAuditAndRecalculate(targetUserId = null) {
+            const isGlobal = targetUserId === null;
+            const confirmMsg = isGlobal
+                ? 'Deseja iniciar a Auditoria e Recálculo Geral do Sistema?\n\nEsta rotina varre todos os clientes cadastrados no banco de dados, expurga parcelas duplicadas e alinha todas as faturas e saldos diretamente no PostgreSQL.'
+                : 'Deseja auditar e recalcular as faturas e saldos da sua conta agora?';
+
+            if (!confirm(confirmMsg)) return;
+
+            showToast('Executando auditoria contábil no PostgreSQL...', 'info');
+
+            try {
+                const { data, error } = await supabaseClient.rpc('audit_and_recalculate_system', {
+                    target_user_id: targetUserId
+                });
+
+                if (error) {
+                    console.error('Erro na auditoria do sistema:', error);
+                    showToast('Erro ao executar auditoria: ' + (error.message || 'Falha no banco'), 'error');
+                    return;
+                }
+
+                const report = data || {};
+                const msg = isGlobal
+                    ? `✓ Auditoria Geral Concluída com Sucesso!\n\n• Usuários auditados: ${report.usuarios_auditados || 0}\n• Faturas recalculadas: ${report.faturas_recalculadas || 0}\n• Parcelas sintéticas limpas: ${report.sinteticas_limpas || 0}`
+                    : `✓ Auditoria Concluída com Sucesso!\n\n• Faturas recalculadas: ${report.faturas_recalculadas || 0}\n• Parcelas sintéticas limpas: ${report.sinteticas_limpas || 0}`;
+
+                alert(msg);
+                showToast('Auditoria e recálculo concluídos!', 'success');
+
+                // Recarrega os dados completos da nuvem para atualizar os cards imediatamente
+                await syncDataFromSupabase();
+                renderAll();
+                if (typeof renderBalanceAlignmentModal === 'function') {
+                    renderBalanceAlignmentModal();
+                }
+            } catch (err) {
+                console.error('Falha inesperada na auditoria:', err);
+                showToast('Erro inesperado: ' + (err.message || err), 'error');
+            }
+        }
+
+        // =========================================================================
         // MODAL E MOTOR DE ALINHAMENTO DE SALDO (APPEND-ONLY, DATADO E REVERSÍVEL)
         // Regras:
         //  1. Nunca apaga lançamentos do usuário. Alinhar = inserir 1 lançamento "Ajuste de Saldo" datado (data+hora)
@@ -3443,6 +3488,11 @@ function openBankModal() {
 
             const activeBanks = banks.filter(b => isBankIncludedInTotal(b));
             const totalNow = activeBanks.reduce((acc, b) => acc + computeBankBalanceAt(b, nowTs), 0);
+            const isAdmin = currentUser?.role === 'admin' || [
+                'caiogarcia2020@gmail.com',
+                'caiogarcia.sup.shop@alterdata.com.br',
+                'controledefinan@gmail.com'
+            ].includes(currentUser?.email);
 
             reportEl.innerHTML = `
                 <div class="flex items-center justify-between gap-2 border-b border-white/5 dark:border-slate-700 pb-2">
@@ -3451,6 +3501,33 @@ function openBankModal() {
                     </span>
                     <strong class="text-sm font-extrabold text-rose-300">${escapeHtml(formatBRL(totalNow))}</strong>
                 </div>
+
+                <div class="p-3 my-2 rounded-xl bg-slate-900/80 border border-slate-700/60 flex flex-col gap-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                            <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i> Auditoria Contábil Automática
+                        </span>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full ${isAdmin ? 'bg-indigo-900/80 text-indigo-300 border border-indigo-500/40' : 'bg-slate-800 text-slate-400'} font-extrabold">
+                            ${isAdmin ? '👑 Nível: Administrador' : '👤 Nível: Usuário'}
+                        </span>
+                    </div>
+                    <p class="text-[11px] text-slate-400">
+                        Recalcula faturas por extrato, remove inconsistências e valida todos os lançamentos direto no motor PostgreSQL do Supabase.
+                    </p>
+                    <div class="flex items-center gap-2 pt-1 flex-wrap">
+                        <button type="button" onclick="triggerSystemAuditAndRecalculate(currentUser?.id)" 
+                            class="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-extrabold transition flex items-center gap-1.5">
+                            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Auditar Minha Conta
+                        </button>
+                        ${isAdmin ? `
+                        <button type="button" onclick="triggerSystemAuditAndRecalculate(null)" 
+                            class="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-extrabold transition flex items-center gap-1.5">
+                            <i data-lucide="database" class="w-3.5 h-3.5"></i> Recalcular Todos os Clientes (Admin)
+                        </button>
+                        ` : ''}
+                    </div>
+                </div>
+
                 <ul class="text-[11px] text-slate-600 dark:text-slate-300 space-y-1 pt-1 list-disc pl-4">
                     <li>O saldo considera a <strong>data e hora real</strong> em que cada conta foi paga ou recebida (regime de caixa).</li>
                     <li>Informe apenas o saldo dos bancos que estão diferentes do app. <strong>Campo em branco não altera nada.</strong></li>
