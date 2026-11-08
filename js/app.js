@@ -48,6 +48,21 @@
         }
         window.showToast = showToast;
 
+        async function syncDataFromSupabase() {
+            if (!currentUser?.id) return;
+            try {
+                if (typeof CloudDB !== 'undefined' && CloudDB.fetchOrCreateProfile) {
+                    const profile = await CloudDB.fetchOrCreateProfile(currentUser);
+                    if (profile && typeof enterAppWithProfile === 'function') {
+                        await enterAppWithProfile(profile);
+                    }
+                }
+            } catch (syncErr) {
+                console.warn('[Sync] Erro ao sincronizar dados da nuvem:', syncErr);
+            }
+        }
+        window.syncDataFromSupabase = syncDataFromSupabase;
+
         // Sinais de bloqueio contra Race Conditions (execuções simultâneas duplicadas)
         let isSyncing = false;
         let isRendering = false;
