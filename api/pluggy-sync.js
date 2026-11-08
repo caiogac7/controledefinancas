@@ -1128,6 +1128,7 @@ async function handler(req, res) {
         if (!itemId || !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
             return res.status(400).json({ ok: false, step: currentStep, error: 'Identificador de conexão (itemId) inválido', erro: 'Identificador de conexão (itemId) inválido' });
         }
+        const effectiveSyncMode = String(syncMode || (fullSync ? 'total' : 'delta')).toLowerCase();
 
         currentStep = 'supabase_auth';
         const supabase = createSupabaseRestClient(SUPABASE_URL, SUPABASE_KEY, jwt);
@@ -1377,7 +1378,6 @@ async function handler(req, res) {
             // 1. 'delta' (padrão ultra-rápido): busca apenas novidades das últimas 48h (D-2 para cobrir hoje e ontem)
             // 2. '7d': busca os últimos 7 dias
             // 3. 'total': busca todo o histórico disponível na instituição
-            const effectiveSyncMode = String(syncMode || (fullSync ? 'total' : 'delta')).toLowerCase();
             let dateFrom = undefined;
 
             if (effectiveSyncMode === 'total') {
