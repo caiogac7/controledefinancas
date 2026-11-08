@@ -4285,6 +4285,12 @@ function openBankModal() {
                 return roundCurrency(Math.max(0, b.vaultBalance));
             }
 
+            // Se o saldo já é o valor oficial fornecido pela Pluggy (ex: R$ 25,00 e não resíduo antigo > 1500)
+            const explicit = Number(b.vaultBalance ?? b.vault_balance ?? b.reservedBalance ?? 0);
+            if (explicit > 0 && explicit < 1500) {
+                return roundCurrency(explicit);
+            }
+
             const bId = String(b.id || '');
             const bName = String(b.name || '');
             const curMonthKey = MONTHS[currentMonthIndex]?.key || '2026-11';
@@ -4299,7 +4305,7 @@ function openBankModal() {
             allItems.forEach(item => {
                 if (!item) return;
                 const iMonth = normalizeMonthKey(item.month, '2026-11');
-                if (iMonth !== curMonthKey) return; // Limita rigorosamente ao mês ativo (ex: Nov 2026 = R$ 50,00)
+                if (iMonth !== curMonthKey) return; // Limita rigorosamente ao mês ativo (ex: Nov 2026)
 
                 const iBankId = String(item.bankId || item.accountId || '');
                 const iBank = String(item.bank || '');
@@ -4349,10 +4355,6 @@ function openBankModal() {
                 return computed;
             }
 
-            const explicit = Number(b.vaultBalance ?? b.vault_balance ?? b.reservedBalance ?? 0);
-            if (explicit > 0 && explicit < 1500) {
-                return roundCurrency(explicit);
-            }
             return 0;
         }
 

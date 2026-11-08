@@ -42,8 +42,9 @@
 ### 7. Exibição de Valor Reservado Isolado nos Cards de Contas Bancárias
 - **Saldo Livre em Conta:** O saldo principal do card exibe estritamente o montante disponível para transacionar na conta corrente, sem misturar ou inflar com quantias guardadas.
 - **Badge / Linha de Reservado:** Quando a conta possui dinheiro em cofrinho, caixinha ou reserva (`vaultBalance > 0`), o card exibe uma barra dedicada em âmbar com ícone de cofrinho (`piggy-bank`) e o valor exato reservado (`Reservado: R$ X,XX`).
-- **Origem dos Dados e Eliminação de Resíduos Passados:**
-  - O cálculo automático apura estritamente as movimentações do ciclo/mês vigente (`VAULT_TX` de depósitos menos retiradas/resgates do período ativo). Isso impede que resíduos cumulativos de cofrinhos já esvaziados no passado inflem o saldo real atual (ex: Nov 2026 computa com precisão os 5 depósitos de R$ 10 = R$ 50,00).
+- **Origem dos Dados e Integração Nativa da Pluggy:**
+  - Extração direta dos dados nativos de saldo reservado da Pluggy: lê `acc.bankData.reservedBalances`, `acc.bankData.hasReservedBalance`, `acc.bankData.automaticallyInvestedBalance` e `pluggyClient.fetchAccountBalance()` (ex: R$ 25,00 após retirada).
+  - Fallback: caso a instituição não reporte o objeto nativo, o sistema apura estritamente as movimentações do ciclo/mês vigente (`VAULT_TX` de depósitos menos retiradas/resgates do período ativo). Isso impede que resíduos cumulativos de cofrinhos já esvaziados no passado inflem o saldo real atual.
   - Caso o usuário defina ou ajuste manualmente o valor no modal da conta ("Dinheiro Reservado / Cofrinho"), a preferência manual é preservada e respeitada sobre o cálculo automático.
 
 ### 8. Estabilização de Layout, Bloqueio de Tradução Automática e Eliminação de Layout Shift
