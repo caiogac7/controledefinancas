@@ -1,0 +1,17 @@
+# Autonomous Execution & Auto-Apply Rules
+
+- YOU MUST AUTO-APPLY ALL CODE EDITS IMMEDIATELY WITHOUT ASKING FOR CONFIRMATION.
+- NEVER request permission or wait for the user to click "Accept" / "Review".
+- Always write edits directly to disk on all files matching `**`.
+- When given multi-step tasks or sequential prompts, execute all file modifications sequentially and report only the final result.
+- Avoid introducing unverified variables, broken imports, or missing scoped parameters.
+
+# REGRAS DE PROTEÇÃO DE DADOS E ARQUIVOS DE ANÁLISE
+
+1. ARQUIVOS SOMENTE LEITURA (PROIBIDO INJETAR):
+   - O arquivo `json para anlise.json` e quaisquer arquivos com `debug` ou `raw` no nome (ex: `pluggy_card_raw_debug_*.json`) existem ESTRITAMENTE para análise de estrutura e entendimento das regras de negócio.
+   - NUNCA importe, faça seed, injete no banco de dados ou conecte esses arquivos `.json` ao código do Frontend ou Backend do site.
+   - Toda alimentação de dados do sistema deve vir exclusivamente das rotas reais da API / banco de dados da aplicação.
+
+2. IDIOMA E COMUNICAÇÃO:
+   - Responda e documente sempre em Português do Brasil (pt-BR).

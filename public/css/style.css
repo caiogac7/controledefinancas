@@ -1,0 +1,385 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --pluggy-red-start: #FF2E4D;
+    --pluggy-red-end: #E61937;
+    --pluggy-red-glow: rgba(255, 46, 77, 0.35);
+    --pluggy-dark-bg: #07080c;
+    --pluggy-dark-card: #0f121a;
+    --pluggy-light-bg: #f8fafc;
+    --pluggy-light-card: #ffffff;
+
+    /* Safe Area Insets Nativas iOS & Android */
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+}
+
+html, body {
+    max-width: 100vw;
+    overflow-x: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+body {
+    font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+/* ==========================================================================
+   TEMA DARK FINTECH PLUGGY (PADRÃO ABSOLUTO COM DETALHES VERMELHOS)
+   ========================================================================== */
+
+/* 1. MODO DARK (PADRÃO DEFINITIVO DA APLICAÇÃO) */
+body {
+    background-color: #07080c !important;
+    background-image: 
+        radial-gradient(circle at 50% -10%, rgba(255, 46, 77, 0.08) 0%, transparent 50%),
+        radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px) !important;
+    background-size: 100% 100%, 24px 24px !important;
+    background-attachment: fixed !important;
+    color: #f1f5f9;
+}
+
+/* ==========================================================================
+   CONTAINERS DE PERSPECTIVA E EFEITO 3D NOS CARDS (COM AJUSTE TOUCH MOBILE)
+   ========================================================================== */
+/* ==========================================================================
+   CARDS FINTECH (NITIDEZ TOTAL DE GPU, SEM TEXTO EMBAÇADO, BORDAS SÓLIDAS)
+   ========================================================================== */
+.perspective-container {
+    perspective: none !important;
+}
+
+/* CARDS PADRÃO PLUGGY (NITIDEZ ABSOLUTA, SEM ROTAÇÃO 3D QUE BORRE FONTES) */
+.pluggy-card, .card, [data-card] {
+    position: relative;
+    border-radius: 1rem;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    transform-style: flat !important;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transform: translateZ(0);
+    will-change: auto;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    background: #0f121a !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4) !important;
+    color: #f1f5f9;
+}
+
+.pluggy-card:hover, .card:hover, [data-card]:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 46, 77, 0.35) !important;
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.55), 0 0 12px rgba(255, 46, 77, 0.15) !important;
+}
+
+/* CARDS DOS BANCOS (NITIDEZ CRISTALINA, SEM DISTORÇÃO SUBPIXEL) */
+.pluggy-bank-card {
+    position: relative;
+    overflow: hidden;
+    border-radius: 1.25rem;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    transform-style: flat !important;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transform: translateZ(0);
+    will-change: auto;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    background: linear-gradient(135deg, #121520 0%, #0c0e15 100%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 6px 20px -4px rgba(0, 0, 0, 0.5) !important;
+    color: #f1f5f9;
+}
+
+.pluggy-bank-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #FF2E4D, #FF6B81, #FF2E4D) !important;
+    opacity: 0.9;
+    transition: opacity 0.25s ease;
+}
+
+.pluggy-bank-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 46, 77, 0.4) !important;
+    box-shadow: 0 10px 28px -6px rgba(0, 0, 0, 0.65), 0 0 14px rgba(255, 46, 77, 0.18) !important;
+}
+
+/* 2. MODO LIGHT (APENAS SE O USUÁRIO ATIVAR EXPLICITAMENTE .theme-light OU html.light) */
+html.light body {
+    background-color: #f8fafc !important;
+    background-image: 
+        radial-gradient(circle at 50% -10%, rgba(255, 46, 77, 0.05) 0%, transparent 50%),
+        radial-gradient(circle, rgba(15, 23, 42, 0.06) 1px, transparent 1px) !important;
+    color: #0f172a !important;
+}
+
+html.light .pluggy-card {
+    background: #ffffff !important;
+    border: 1px solid rgba(226, 232, 240, 0.85) !important;
+    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.04) !important;
+    color: #0f172a !important;
+}
+
+html.light .pluggy-card .text-white,
+html.light .pluggy-card .text-slate-100,
+html.light .pluggy-card .text-slate-200 {
+    color: #0f172a !important;
+}
+
+html.light .pluggy-card .text-slate-400,
+html.light .pluggy-card .text-slate-300 {
+    color: #64748b !important;
+}
+
+html.light .pluggy-card .border-white\/5,
+html.light .pluggy-card .border-white\/10 {
+    border-color: rgba(226, 232, 240, 0.85) !important;
+}
+
+html.light .pluggy-bank-card {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+    border: 1px solid rgba(226, 232, 240, 0.9) !important;
+    box-shadow: 0 6px 24px -4px rgba(15, 23, 42, 0.06), 0 2px 6px -1px rgba(15, 23, 42, 0.03) !important;
+    color: #0f172a !important;
+}
+
+html.light .pluggy-bank-card .text-white,
+html.light .pluggy-bank-card .text-slate-100,
+html.light .pluggy-bank-card .text-slate-200 {
+    color: #0f172a !important;
+}
+
+html.light .pluggy-bank-card .text-slate-400,
+html.light .pluggy-bank-card .text-slate-300 {
+    color: #64748b !important;
+}
+
+html.light .pluggy-bank-card .bg-slate-950\/70,
+html.light .pluggy-bank-card .bg-slate-900\/60,
+html.light .pluggy-bank-card .bg-slate-800 {
+    background-color: #f1f5f9 !important;
+    border-color: rgba(226, 232, 240, 0.9) !important;
+}
+
+html.light .pluggy-bank-card .w-full.bg-slate-800 {
+    background-color: #e2e8f0 !important;
+}
+
+/* ==========================================================================
+   OTIMIZAÇÃO MOBILE TOUCH (SEM ROTAÇÃO FALSA NO DEDO, FEEDBACK TÁTIL NATIVO)
+   ========================================================================== */
+@media (hover: none) and (pointer: coarse) {
+    .pluggy-card, .pluggy-bank-card {
+        transform: none !important;
+    }
+    .pluggy-card:active, .pluggy-bank-card:active {
+        transform: scale(0.98) !important;
+    }
+}
+
+/* BADGES FLUTUANTES EM RELEVO 3D */
+.badge-3d, [data-3d-badge] {
+    transform: translateZ(30px);
+    transition: transform 0.25s ease;
+}
+
+/* CHIP INTELIGENTE DE CARTÃO */
+.pluggy-chip {
+    width: 28px;
+    height: 20px;
+    border-radius: 5px;
+    background: linear-gradient(135deg, #d4af37 0%, #f3e5ab 50%, #aa771c 100%);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.2);
+    position: relative;
+    flex-shrink: 0;
+}
+
+.pluggy-chip::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* LIVE PULSE OPEN FINANCE */
+.pluggy-live-pulse {
+    display: inline-flex;
+    position: relative;
+    width: 8px;
+    height: 8px;
+}
+
+.pluggy-live-pulse .ping {
+    animation: pluggyPing 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+    position: absolute;
+    display: inline-flex;
+    height: 100%;
+    width: 100%;
+    border-radius: 9999px;
+    background-color: #10B981;
+    opacity: 0.75;
+}
+
+.pluggy-live-pulse .dot {
+    position: relative;
+    display: inline-flex;
+    border-radius: 9999px;
+    height: 8px;
+    width: 8px;
+    background-color: #10B981;
+}
+
+@keyframes pluggyPing {
+    75%, 100% {
+        transform: scale(2.2);
+        opacity: 0;
+    }
+}
+
+/* ==========================================================================
+   BOTÃO DE AÇÃO PRINCIPAL PLUGGY DUAL-THEME (DEGRADÊ VERMELHO DA MARCA)
+   ========================================================================== */
+.pluggy-btn-action {
+    background: linear-gradient(135deg, #FF2E4D 0%, #D91B3A 100%);
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 4px 14px rgba(255, 46, 77, 0.35);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    border-radius: 0.875rem;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pluggy-btn-action:hover {
+    background: linear-gradient(135deg, #E61937 0%, #B8142E 100%);
+    box-shadow: 0 6px 20px rgba(255, 46, 77, 0.45);
+    transform: translateY(-1.5px);
+}
+
+.pluggy-btn-action:active {
+    transform: translateY(0.5px);
+    box-shadow: 0 2px 8px rgba(255, 46, 77, 0.25);
+}
+
+/* ==========================================================================
+   BLINDAGEM CONTRA RESQUÍCIOS AZULADOS NO MODO DARK (CORES FINTECH PURAS)
+   ========================================================================== */
+html.dark .dark\:bg-slate-900,
+html.dark [class*="dark:bg-slate-900"] {
+    background-color: #0f121a !important;
+}
+
+html.dark .dark\:bg-slate-800,
+html.dark [class*="dark:bg-slate-800"] {
+    background-color: #151922 !important;
+}
+
+html.dark .dark\:border-slate-800,
+html.dark [class*="dark:border-slate-800"] {
+    border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+html.dark .dark\:border-slate-700,
+html.dark [class*="dark:border-slate-700"] {
+    border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* ==========================================================================
+   LINHAS DE TRANSAÇÕES E ELEMENTOS INTERATIVOS
+   ========================================================================== */
+.pluggy-tx-row {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease, background-color 0.2s ease;
+}
+
+@media (min-width: 768px) {
+    .pluggy-tx-row:hover {
+        transform: translateX(3px);
+    }
+}
+
+/* TIPOGRAFIA FINANCEIRA E HIERARQUIA DE VALORES */
+.currency-symbol {
+    opacity: 0.7;
+    font-size: 0.82em;
+    font-weight: 500;
+    margin-right: 0.125rem;
+    letter-spacing: normal;
+}
+
+/* SAFE AREA RESPIROS (iOS NOTCH & HOME INDICATOR) */
+.safe-top {
+    padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+}
+
+.safe-bottom {
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #232530;
+}
+
+.avatar-hd {
+    image-rendering: -webkit-optimize-contrast;
+    backface-visibility: hidden;
+}
+
+@media print {
+    aside, header, nav, .no-print { display: none !important; }
+    main { margin-left: 0 !important; padding: 0 !important; }
+    body { background: #ffffff !important; color: #000000 !important; }
+}
+
+/* ==========================================================================
+   BLINDAGEM MOBILE-FIRST (iOS & ANDROID) & SAFE AREAS
+   ========================================================================== */
+html, body {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+    width: 100% !important;
+}
+
+@media (max-width: 640px) {
+    /* Impede o zoom automático indesejado do iOS Safari ao focar inputs */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+}
+
+button, [role="button"], a {
+    touch-action: manipulation;
+}

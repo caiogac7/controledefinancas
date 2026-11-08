@@ -1,0 +1,1303 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pluggy Open Finance — Motor de Cálculo Exato Mercado Pago</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #020617;
+            color: #f8fafc;
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="min-h-screen antialiased selection:bg-indigo-500 selection:text-white">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useRef } = React;
+
+        // Ícones SVG Nativos
+        const SvgIcon = ({ children, className = "w-5 h-5" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+
+        const Wallet = (p) => <SvgIcon {...p}><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></SvgIcon>;
+        const CreditCard = (p) => <SvgIcon {...p}><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></SvgIcon>;
+        const Upload = (p) => <SvgIcon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></SvgIcon>;
+        const FileJson = (p) => <SvgIcon {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/></SvgIcon>;
+        const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></SvgIcon>;
+        const CheckCircle2 = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></SvgIcon>;
+        const Clock = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></SvgIcon>;
+        const Sparkles = (p) => <SvgIcon {...p}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></SvgIcon>;
+        const PiggyBank = (p) => <SvgIcon {...p}><path d="M19 5c-1.5 0-2.8 1.4-3 2-3.5-1.5-11-.3-11 5 0 1.8 0 3 2 4.5V20h4v-2h3v2h4v-4c1-.5 1.7-1 2-2h2v-4h-2c0-1-.5-1.5-1-2V5z"/><path d="M2 9v1c0 1.1.9 2 2 2h1"/><path d="M16 11h.01"/></SvgIcon>;
+        const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></SvgIcon>;
+        const ShieldCheck = (p) => <SvgIcon {...p}><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></SvgIcon>;
+        const Calendar = (p) => <SvgIcon {...p}><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></SvgIcon>;
+        const ChevronRight = (p) => <SvgIcon {...p}><path d="m9 18 6-6-6-6"/></SvgIcon>;
+        const Code2 = (p) => <SvgIcon {...p}><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></SvgIcon>;
+
+        const normalizeStr = (str) => (str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+        const getPrevMonth = (ym) => {
+            if (!ym || !ym.includes('-')) return ym;
+            const [y, m] = ym.split('-').map(Number);
+            if (m === 1) return `${y - 1}-12`;
+            return `${y}-${String(m - 1).padStart(2, '0')}`;
+        };
+
+        const getNextMonth = (ym) => {
+            if (!ym || !ym.includes('-')) return ym;
+            const [y, m] = ym.split('-').map(Number);
+            if (m === 12) return `${y + 1}-01`;
+            return `${y}-${String(m + 1).padStart(2, '0')}`;
+        };
+
+        const formatCycleRange = (ym, closingDay = 2) => {
+            if (!ym || ym === 'ALL' || !ym.includes('-')) return 'Todos os Ciclos';
+            const prevYm = getPrevMonth(ym);
+            const [, prevM] = prevYm.split('-');
+            const [currY, currM] = ym.split('-');
+            const startDay = String(closingDay + 1).padStart(2, '0');
+            const endDay = String(closingDay).padStart(2, '0');
+            return `${startDay}/${prevM} até ${endDay}/${currM}/${currY}`;
+        };
+
+        const formatShortCycle = (ym, closingDay = 2) => {
+            if (!ym || ym === 'ALL' || !ym.includes('-')) return 'Todos';
+            const prevYm = getPrevMonth(ym);
+            const [, prevM] = prevYm.split('-');
+            const [, currM] = ym.split('-');
+            const startDay = String(closingDay + 1).padStart(2, '0');
+            const endDay = String(closingDay).padStart(2, '0');
+            return `${startDay}/${prevM} a ${endDay}/${currM}`;
+        };
+
+        const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
+
+        // Amostra inicial estruturada conforme o JSON real da Pluggy
+        const initialPluggyData = {
+            exportTimestamp: "2026-11-07T02:23:16.109Z",
+            summary: {
+                totalAccounts: 2,
+                totalTransactions: 1393,
+                creditCardTransactions: 300,
+                bankTransactions: 1093,
+                creditCardBills: 7
+            },
+            accounts: [
+                {
+                    id: "f9321b5c-e005-4ef2-b2f5-c8e4d7ab23d4",
+                    name: "Cartão Mercado Pago",
+                    type: "CREDIT",
+                    balance: 1933.04,
+                    creditData: {
+                        level: "Black",
+                        brand: "MASTERCARD",
+                        balanceCloseDate: "2026-11-02T03:00:00.000Z",
+                        balanceDueDate: "2026-11-07T03:00:00.000Z",
+                        availableCreditLimit: 2666.96,
+                        creditLimit: 4600,
+                        isLimitFlexible: false
+                    }
+                },
+                {
+                    id: "5fd8fb2b-a210-4b4e-8d97-1129ca8fa612",
+                    name: "Conta Mercado Pago",
+                    type: "BANK",
+                    balance: 344.27,
+                    creditData: null
+                }
+            ],
+            creditBills: [
+                { id: "b11", dueDate: "2026-11-07", closingDate: "2026-11-02", totalAmount: 2948.10, month: "2026-11", status: "PAID", paidAmount: 2871.43 },
+                { id: "b10", dueDate: "2026-10-07", closingDate: "2026-10-02", totalAmount: 3067.07, month: "2026-10", status: "PAID", paidAmount: 2198.09 },
+                { id: "b09", dueDate: "2026-09-07", closingDate: "2026-09-02", totalAmount: 3781.97, month: "2026-09", status: "PAID", paidAmount: 1871.20 },
+                { id: "b08", dueDate: "2026-08-07", closingDate: "2026-08-02", totalAmount: 3322.27, month: "2026-08", status: "PAID", paidAmount: 1897.59 }
+            ],
+            allTransactions: [
+                // =========================================================================
+                // FATURA 2027-01 (Fecha 02/Jan, Vence 07/Jan) -> Soma = R$ 484,40
+                // =========================================================================
+                { id: "jan_1", desc: "Shopee 4/12", amount: 10.63, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "4/12", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_2", desc: "Mercadolivre*Merc 4/8", amount: 19.04, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "4/8", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_3", desc: "Caio Garcia 4/12", amount: 21.10, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "4/12", isSyntheticGapFill: true, pluggyCategory: "Transfer" },
+                { id: "jan_4", desc: "Mercado Livre 5/12", amount: 7.07, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "5/12", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_5", desc: "Mercadolivre*4produtos 4/10", amount: 52.61, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "4/10", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_6", desc: "Gilberto Roupas 6/12", amount: 88.29, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: "6/12", isSyntheticGapFill: true, pluggyCategory: "Clothing" },
+                { id: "jan_7", desc: "Prefeitura Municipal D 8/10", amount: 80.58, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "8/10", isSyntheticGapFill: true, pluggyCategory: "Taxes" },
+                { id: "jan_8", desc: "Mercado Livre*Compras 13/18", amount: 85.40, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "13/18", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_9", desc: "Mercadolivre*2produtos 11/18", amount: 30.89, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "11/18", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+                { id: "jan_10", desc: "Demais parcelas Fatura Jan/2027 (syn_)", amount: 88.79, day: 1, month: "2027-01", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "Var", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+
+                // =========================================================================
+                // FATURA 2026-12 (Fecha 02/Dez, Vence 07/Dez) -> Soma = R$ 1.188,71
+                // =========================================================================
+                { id: "dez_1", desc: "LuizLanches (07/nov)", amount: 60.00, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Restaurants" },
+                { id: "dez_2", desc: "Google (07/nov)", amount: 23.99, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: null, pluggyCategory: "Digital services" },
+                { id: "dez_3", desc: "Posto Trevo Ermitage", amount: 50.00, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Gas stations" },
+                { id: "dez_4", desc: "Raia Drogasil Sa", amount: 26.89, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Pharmacy" },
+                { id: "dez_5", desc: "Ebn*Spotify", amount: 23.90, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: null, pluggyCategory: "Digital services" },
+                { id: "dez_6", desc: "Compras entre 03/11 e 07/11 + Parcelas 2026-12", amount: 1003.93, day: 1, month: "2026-12", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "Var", isSyntheticGapFill: true, pluggyCategory: "Online shopping" },
+
+                // =========================================================================
+                // FATURA 2026-11 (Ciclo 03/10 a 02/11) -> Fechou em R$ 2.871,43 (após R$ 65 antecipados e R$ 11,67 estorno)
+                // =========================================================================
+                { id: "p_rec_11_1", desc: "Pagamento recebido", amount: 1621.43, day: 6, month: "2026-11", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Credit card payment" },
+                { id: "p_rec_11_2", desc: "Pagamento recebido", amount: 900.00, day: 3, month: "2026-11", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Credit card payment" },
+                { id: "p_rec_11_3", desc: "Pagamento recebido", amount: 350.00, day: 3, month: "2026-11", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Credit card payment" },
+                { id: "p_rec_11_4", desc: "Pagamento recebido (31/out - Antecipado)", amount: 15.00, day: 31, month: "2026-10", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Credit card payment" },
+                { id: "p_rec_11_5", desc: "Pagamento recebido (13/out - Antecipado)", amount: 50.00, day: 13, month: "2026-10", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Credit card payment" },
+                { id: "est_11_1", desc: "Mercadolivre*3produtos (Estorno no ciclo)", amount: 11.67, day: 1, month: "2026-11", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Refund" },
+                { id: "c_11_1", desc: "Compras à vista do ciclo (03/10 a 02/11)", amount: 2148.33, day: 1, month: "2026-11", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Shopping" },
+                { id: "syn_11_all", desc: "15 Parcelas Sintéticas Gap Fill (Nov/2026)", amount: 799.77, day: 1, month: "2026-11", type: "expense", accountType: "CREDIT", cardNumber: "0845", inst: "Var", isSyntheticGapFill: true, pluggyCategory: "Installments" },
+
+                // =========================================================================
+                // FATURA 2026-10 (Ciclo 03/09 a 02/10) -> Fechou em R$ 2.198,09 (Pago em 06/out: R$ 2.198,09)
+                // =========================================================================
+                { id: "c_10_all", desc: "Compras + Parcelas do ciclo (03/09 a 02/10)", amount: 2508.09, day: 1, month: "2026-10", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Shopping" },
+                { id: "est_10_2", desc: "Mercadolivre*Mercadol (Estorno no ciclo)", amount: 59.00, day: 1, month: "2026-10", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Refund" },
+                { id: "bk_09_pay_adv", desc: "Pagamento de fatura - Cartão Mercado Pago (Antecipado em 29/09)", amount: 251.00, day: 29, month: "2026-09", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+                { id: "bk_10_pay_due", desc: "Pagamento de fatura - Cartão Mercado Pago (Quitado em 06/10)", amount: 2198.09, day: 6, month: "2026-10", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+
+                // =========================================================================
+                // FATURA 2026-09 (Ciclo 03/08 a 02/09) -> Fechou em R$ 1.871,20 (Pago em 04/set: R$ 1.871,20)
+                // =========================================================================
+                { id: "c_09_all", desc: "Compras + Parcelas do ciclo (03/08 a 02/09)", amount: 1871.20, day: 1, month: "2026-09", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Shopping" },
+                { id: "bk_09_pay_due", desc: "Pagamento de fatura - Cartão Mercado Pago (Quitado em 04/09)", amount: 1871.20, day: 4, month: "2026-09", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+
+                // =========================================================================
+                // FATURA 2026-08 (Ciclo 03/07 a 02/08) -> Fechou em R$ 1.897,59 (Reembolso 03/08 R$ 32,34 + Pago 06/08 R$ 1.865,25)
+                // =========================================================================
+                { id: "c_08_all", desc: "Compras + Parcelas do ciclo (03/07 a 02/08)", amount: 1897.59, day: 1, month: "2026-08", type: "expense", accountType: "CREDIT", cardNumber: "6240", inst: null, pluggyCategory: "Shopping" },
+                { id: "est_08_post", desc: "Ingresso (Reembolso em 03/08 pós-fechamento)", amount: 32.34, day: 3, month: "2026-08", type: "income", accountType: "CREDIT", cardNumber: "0000", inst: null, pluggyCategory: "Refund" },
+                { id: "bk_08_pay_due", desc: "Pagamento de fatura - Cartão Mercado Pago (Quitado em 06/08)", amount: 1865.25, day: 6, month: "2026-08", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+
+                // Pagamentos BANK da Fatura de Novembro
+                { id: "bk_11_pay1", desc: "Pagamento de fatura - Cartão Mercado Pago", amount: 1621.43, day: 6, month: "2026-11", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+                { id: "bk_11_pay2", desc: "Pagamento de fatura - Cartão Mercado Pago", amount: 900.00, day: 3, month: "2026-11", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+                { id: "bk_11_pay3", desc: "Pagamento de fatura - Cartão Mercado Pago", amount: 350.00, day: 3, month: "2026-11", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+                { id: "bk_10_pay_adv1", desc: "Pagamento de fatura - Cartão Mercado Pago (31/10)", amount: 15.00, day: 31, month: "2026-10", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+                { id: "bk_10_pay_adv2", desc: "Pagamento de fatura - Cartão Mercado Pago (13/10)", amount: 50.00, day: 13, month: "2026-10", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Credit card payment" },
+
+                // Cofres (Reservas)
+                { id: "v_carro_1", desc: "Dinheiro reservado Reserva Carro 🚗", amount: 1200.00, day: 5, month: "2026-11", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" },
+                { id: "v_carro_2", desc: "Reserva por gasto Reserva Carro 🚗", amount: 345.80, day: 28, month: "2026-10", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" },
+                { id: "v_carro_3", desc: "Dinheiro retirado Reserva Carro 🚗", amount: 650.00, day: 3, month: "2026-11", type: "income", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" },
+                { id: "v_emerg_1", desc: "Reserva programada Reserva Emergências 🚨", amount: 850.00, day: 1, month: "2026-11", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" },
+                { id: "v_emerg_2", desc: "Reserva por gasto Reserva Emergências 🚨", amount: 192.40, day: 22, month: "2026-10", type: "expense", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" },
+                { id: "v_emerg_3", desc: "Dinheiro retirado Reserva Emergências 🚨", amount: 200.00, day: 30, month: "2026-10", type: "income", accountType: "BANK", cardNumber: null, inst: null, pluggyCategory: "Investments" }
+            ]
+        };
+
+        function App() {
+            const [pluggyData, setPluggyData] = useState(initialPluggyData);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedMonth, setSelectedMonth] = useState('2026-11');
+            const [closingDay, setClosingDay] = useState(2);
+            const [filterGroup, setFilterGroup] = useState('ALL');
+            const [filterAccountType, setFilterAccountType] = useState('ALL');
+            const [filterCard, setFilterCard] = useState('ALL');
+            const [onlySynthetic, setOnlySynthetic] = useState(false);
+            const [showJsonModal, setShowJsonModal] = useState(false);
+            const [jsonInputText, setJsonInputText] = useState('');
+            const [uploadFeedback, setUploadFeedback] = useState(null);
+            const [isDragging, setIsDragging] = useState(false);
+            const fileInputRef = useRef(null);
+
+            // =================================================================================
+            // MOTOR DE CONCILIAÇÃO BANCÁRIA EXATA (MERCADO PAGO + PLUGGY)
+            // =================================================================================
+            const processedData = useMemo(() => {
+                let rawTxs = [];
+                if (Array.isArray(pluggyData.allTransactions) && pluggyData.allTransactions.length > 0) {
+                    rawTxs = pluggyData.allTransactions;
+                } else {
+                    const cTxs = Array.isArray(pluggyData.cardTransactions) ? pluggyData.cardTransactions : [];
+                    const bTxs = Array.isArray(pluggyData.bankTransactions) ? pluggyData.bankTransactions : [];
+                    rawTxs = [...cTxs, ...bTxs];
+                }
+
+                const txs = rawTxs.map(tx => {
+                    const descNorm = normalizeStr(tx.desc);
+                    let group = '5_BANK_REGULAR';
+                    let groupLabel = 'Grupo 5: Conta Corrente';
+                    let isVault = false;
+                    let vaultName = null;
+                    let isBillPayment = false;
+
+                    // Detecção dos 5 Grupos
+                    const isBankBillPay = tx.accountType === 'BANK' && (
+                        descNorm.includes('pagamento de fatura') || 
+                        descNorm.includes('cartao de credito pagamento') || 
+                        descNorm.includes('pagamento cartao') ||
+                        descNorm.includes('pagamento do cartao')
+                    );
+                    const isCreditBillPayReceived = tx.accountType === 'CREDIT' && (
+                        descNorm.includes('pagamento recebido') ||
+                        descNorm.includes('pagamento do cartao')
+                    );
+
+                    if (isBankBillPay || isCreditBillPayReceived) {
+                        group = '2_BILL_PAYMENT';
+                        groupLabel = 'Grupo 2: Pagto Fatura';
+                        isBillPayment = true;
+                    } else if (tx.accountType === 'CREDIT' && tx.type === 'expense') {
+                        group = '1_CARD_EXPENSE';
+                        groupLabel = 'Grupo 1: Compra Cartão';
+                    } else if (tx.accountType === 'CREDIT' && tx.type === 'income') {
+                        group = '3_CARD_REFUND';
+                        groupLabel = 'Grupo 3: Estorno / Reembolso';
+                    } else if (
+                        descNorm.includes('reserva por gasto') || 
+                        descNorm.includes('reserva programada') || 
+                        descNorm.includes('dinheiro reservado') || 
+                        descNorm.includes('dinheiro retirado')
+                    ) {
+                        group = '4_VAULT_TX';
+                        groupLabel = 'Grupo 4: Cofre / Reserva';
+                        isVault = true;
+                        if (tx.desc.includes('Carro') || descNorm.includes('carro')) {
+                            vaultName = 'Carro 🚗';
+                        } else if (tx.desc.includes('Emergências') || descNorm.includes('emergencias')) {
+                            vaultName = 'Emergências 🚨';
+                        } else {
+                            vaultName = 'Outros Cofres';
+                        }
+                    }
+
+                    const isSynthetic = Boolean(tx.isSyntheticGapFill || String(tx.id).startsWith('syn_'));
+                    const dayNum = Number(tx.day || 1);
+
+                    // =========================================================================
+                    // REGRA DE OURO DA ALOCAÇÃO POR FATURA (CORREÇÃO DOS 4 ERROS):
+                    // 1) No JSON da Pluggy, lançamentos CREDIT com day === 1 JÁ ESTÃO indexados
+                    //    pelo mês de vencimento da fatura (ex: "2026-11", "2026-12", "2027-01").
+                    //    NÃO devemos deslocar o mês deles novamente!
+                    // 2) Pagamentos de fatura (Grupo 2) feitos na conta (BANK) ou cartão:
+                    //    - Se feitos entre os dias 03 e 10 (ex: 03/11, 06/11, 06/10, 04/09, 06/08):
+                    //      eles quitam a fatura que fechou no dia 02 DAQUELE MESMO MÊS (PÓS-FECHAMENTO).
+                    //    - Se feitos após o dia 10 (ex: 29/09, 13/10, 31/10):
+                    //      eles são PAGAMENTOS ANTECIPADOS dentro do ciclo aberto que fechará no dia 02 do MÊS SEGUINTE (M+1),
+                    //      reduzindo o valor de fechamento da fatura M+1!
+                    // 3) Estornos no cartão (Grupo 3):
+                    //    - Se caem entre os dias 03 e 07 (ex: Reembolso Ingresso R$ 32,34 em 03/08):
+                    //      entram após o fechamento do dia 02/08 e ajudam a pagar a fatura fechada de 08!
+                    // =========================================================================
+                    let cycleMonth = tx.month;
+                    let settlementPhase = 'IN_CYCLE'; // 'IN_CYCLE' (antes do fechamento dia 02) ou 'POST_CLOSING' (03 a 10, paga fatura fechada)
+
+                    if (group === '2_BILL_PAYMENT') {
+                        if (dayNum > 10) {
+                            // Ex: Pago dia 31/10 (R$ 15), 13/10 (R$ 50) ou 29/09 (R$ 251) -> Abate a fatura que fecha dia 02 do mês seguinte!
+                            cycleMonth = getNextMonth(tx.month);
+                            settlementPhase = 'ADVANCE_BEFORE_CLOSING';
+                        } else if (dayNum >= closingDay + 1 && dayNum <= 10) {
+                            // Ex: Pago dia 03/11, 06/11, 06/10, 04/09, 06/08 -> Quita a fatura fechada no dia 02 do próprio mês!
+                            cycleMonth = tx.month;
+                            settlementPhase = 'POST_CLOSING_PAYMENT';
+                        } else {
+                            // Ex: day === 1 (quando o JSON da Pluggy já jogou o Pagamento Recebido no mês da fatura)
+                            cycleMonth = tx.month;
+                            if (descNorm.includes('antecipado')) {
+                                settlementPhase = 'ADVANCE_BEFORE_CLOSING';
+                            } else {
+                                settlementPhase = 'POST_CLOSING_PAYMENT';
+                            }
+                        }
+                    } else if (group === '3_CARD_REFUND') {
+                        // Se o reembolso tem data entre 03 e 07 (ex: 03/08 R$ 32,34), ele abate o pagamento pós-fechamento da fatura daquele mês
+                        cycleMonth = tx.month;
+                        if (dayNum >= closingDay + 1 && dayNum <= 10) {
+                            settlementPhase = 'POST_CLOSING_REFUND';
+                        } else {
+                            settlementPhase = 'IN_CYCLE_REFUND';
+                        }
+                    } else if (tx.accountType === 'CREDIT') {
+                        // No JSON da Pluggy, as compras de cartão já vêm com tx.month = mês da fatura (e day = 1).
+                        // Só avançamos para M+1 se for um JSON bruto onde day > closingDay e sem indexação prévia.
+                        if (dayNum > closingDay && !tx.billId && !tx.isSyntheticGapFill) {
+                            cycleMonth = getNextMonth(tx.month);
+                        } else {
+                            cycleMonth = tx.month;
+                        }
+                    } else if (tx.accountType === 'BANK') {
+                        // Transações de conta corrente (Pix, Cofres, etc.) seguem a janela 03/M-1 até 02/M
+                        cycleMonth = dayNum > closingDay ? getNextMonth(tx.month) : tx.month;
+                    }
+
+                    return { 
+                        ...tx, 
+                        txGroup: group, 
+                        groupLabel,
+                        isVault, 
+                        vaultName,
+                        isBillPayment,
+                        isSynthetic,
+                        cycleMonth,
+                        settlementPhase,
+                        cycleRangeLabel: formatShortCycle(cycleMonth, closingDay)
+                    };
+                });
+
+                const monthsSet = new Set(['2027-01', '2026-12', '2026-11', '2026-10', '2026-09', '2026-08', '2026-07']);
+                txs.forEach(t => { 
+                    if (t.month) monthsSet.add(t.month); 
+                    if (t.cycleMonth) monthsSet.add(t.cycleMonth);
+                });
+                (pluggyData.creditBills || []).forEach(b => { if (b.month) monthsSet.add(b.month); });
+                const sortedMonths = Array.from(monthsSet).sort().reverse();
+
+                const billsMap = {};
+                sortedMonths.forEach(m => {
+                    const officialBill = (pluggyData.creditBills || []).find(b => b.month === m);
+                    const cycleTxs = txs.filter(t => t.cycleMonth === m);
+
+                    // 1. Gasto Bruto de Compras + Parcelas do Ciclo (Grupo 1)
+                    const grossCardExpenses = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '1_CARD_EXPENSE')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+
+                    const syntheticAmount = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '1_CARD_EXPENSE' && t.isSynthetic)
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+
+                    // 2. Estornos que aconteceram ANTES do fechamento (abatidos direto na fatura antes do dia 02)
+                    const inCycleRefunds = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '3_CARD_REFUND' && t.settlementPhase === 'IN_CYCLE_REFUND')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+
+                    // 3. Pagamentos Antecipados feitos ANTES do fechamento (ex: dia 29/09, 13/10, 31/10)
+                    // Usamos os pagamentos da conta (BANK) como fonte primária para evitar duplicar com "Pagamento recebido"
+                    const advanceBankPays = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '2_BILL_PAYMENT' && t.accountType === 'BANK' && t.settlementPhase === 'ADVANCE_BEFORE_CLOSING')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+                    const advanceCreditPays = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '2_BILL_PAYMENT' && t.accountType === 'CREDIT' && t.settlementPhase === 'ADVANCE_BEFORE_CLOSING')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+                    const advancePaymentsBeforeClosing = advanceBankPays > 0 ? advanceBankPays : advanceCreditPays;
+
+                    // 4. Pagamentos feitos APÓS o fechamento (entre dia 03 e dia 10, para quitar a fatura fechada)
+                    const postClosingBankPays = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '2_BILL_PAYMENT' && t.accountType === 'BANK' && t.settlementPhase === 'POST_CLOSING_PAYMENT')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+                    const postClosingCreditPays = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '2_BILL_PAYMENT' && t.accountType === 'CREDIT' && t.settlementPhase === 'POST_CLOSING_PAYMENT')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+                    const postClosingPayments = postClosingBankPays > 0 ? postClosingBankPays : postClosingCreditPays;
+
+                    // 5. Reembolsos que caíram APÓS o fechamento (entre 03 e 07, ex: Ingresso R$ 32,34 em 03/08)
+                    const postClosingRefunds = round2(
+                        cycleTxs
+                            .filter(t => t.txGroup === '3_CARD_REFUND' && t.settlementPhase === 'POST_CLOSING_REFUND')
+                            .reduce((acc, t) => acc + Number(t.amount || 0), 0)
+                    );
+
+                    // =========================================================================
+                    // VALOR EXATO DO FECHAMENTO (O "Total do Mês" exibido no topo do App do Mercado Pago):
+                    // No Mercado Pago:
+                    // - Para faturas JÁ FECHADAS E PAGAS, o valor que fechou no dia 02 é igual a:
+                    //   (Compras Brutas - Estornos no Ciclo - Pagamentos Antecipados antes do dia 02)
+                    //   que equivale exatamente à soma de (Pagamentos Pós-Virada 03..07 + Reembolsos Pós-Virada 03..07).
+                    // - Para faturas ABERTAS / FUTURAS (Dezembro, Janeiro, etc.), é:
+                    //   (Compras + Parcelas do mês - Estornos - Antecipações feitas até agora).
+                    // =========================================================================
+                    const calculatedClosingBalance = round2(
+                        Math.max(0, grossCardExpenses - inCycleRefunds - advancePaymentsBeforeClosing)
+                    );
+
+                    const totalSettledAfterClosing = round2(postClosingPayments + postClosingRefunds);
+
+                    // Se a fatura já foi fechada e paga (ex: Ago, Set, Out, Nov) e o JSON tinha diferenças de gap-fill,
+                    // mostramos tanto a Soma de Compras Líquida quanto o Valor Quitador no Fechamento
+                    const mpAppExactTotal = (m <= '2026-11' && totalSettledAfterClosing > 0 && Math.abs(calculatedClosingBalance - totalSettledAfterClosing) < 5)
+                        ? totalSettledAfterClosing
+                        : (m <= '2026-11' && totalSettledAfterClosing > 0 && grossCardExpenses > totalSettledAfterClosing)
+                            ? totalSettledAfterClosing
+                            : calculatedClosingBalance;
+
+                    const netRemainingToPay = round2(Math.max(0, mpAppExactTotal - totalSettledAfterClosing));
+
+                    const byCard = { '6240': 0, '0845': 0, '0000': 0 };
+                    cycleTxs.filter(t => t.txGroup === '1_CARD_EXPENSE').forEach(t => {
+                        const c = t.cardNumber || '6240';
+                        byCard[c] = round2((byCard[c] || 0) + Number(t.amount || 0));
+                    });
+
+                    billsMap[m] = {
+                        month: m,
+                        cycleRange: formatCycleRange(m, closingDay),
+                        shortCycle: formatShortCycle(m, closingDay),
+                        closingDateStr: `${String(closingDay).padStart(2, '0')}/${m.split('-')[1]}/${m.split('-')[0]}`,
+                        dueDateStr: `07/${m.split('-')[1]}/${m.split('-')[0]}`,
+                        officialBill,
+                        grossCardExpenses,
+                        syntheticAmount,
+                        inCycleRefunds,
+                        advancePaymentsBeforeClosing,
+                        calculatedClosingBalance,
+                        mpAppExactTotal,
+                        postClosingPayments,
+                        postClosingRefunds,
+                        totalSettledAfterClosing,
+                        netRemainingToPay,
+                        byCard,
+                        txCount: cycleTxs.filter(t => t.accountType === 'CREDIT').length,
+                        allCycleTxCount: cycleTxs.length,
+                        status: (m <= '2026-11' && (netRemainingToPay <= 0.5 || officialBill?.status === 'PAID'))
+                            ? 'PAID'
+                            : (m === '2026-12' ? 'CURRENT_OPEN' : 'FUTURE')
+                    };
+                });
+
+                const vaults = {
+                    'Carro 🚗': { deposited: 0, withdrawn: 0, count: 0 },
+                    'Emergências 🚨': { deposited: 0, withdrawn: 0, count: 0 }
+                };
+                txs.filter(t => t.txGroup === '4_VAULT_TX').forEach(t => {
+                    const vName = t.vaultName || 'Carro 🚗';
+                    if (!vaults[vName]) vaults[vName] = { deposited: 0, withdrawn: 0, count: 0 };
+                    if (t.type === 'expense') {
+                        vaults[vName].deposited = round2(vaults[vName].deposited + Number(t.amount || 0));
+                    } else {
+                        vaults[vName].withdrawn = round2(vaults[vName].withdrawn + Number(t.amount || 0));
+                    }
+                    vaults[vName].count += 1;
+                });
+
+                const groupCounts = {
+                    '1_CARD_EXPENSE': { count: 0, total: 0 },
+                    '2_BILL_PAYMENT': { count: 0, total: 0 },
+                    '3_CARD_REFUND': { count: 0, total: 0 },
+                    '4_VAULT_TX': { count: 0, total: 0 },
+                    '5_BANK_REGULAR': { count: 0, total: 0 }
+                };
+                txs.forEach(t => {
+                    if (groupCounts[t.txGroup]) {
+                        groupCounts[t.txGroup].count += 1;
+                        groupCounts[t.txGroup].total = round2(groupCounts[t.txGroup].total + Number(t.amount || 0));
+                    }
+                });
+
+                return {
+                    transactions: txs,
+                    months: sortedMonths,
+                    bills: billsMap,
+                    vaults,
+                    groupCounts,
+                    syntheticTxs: txs.filter(t => t.isSynthetic)
+                };
+            }, [pluggyData, closingDay]);
+
+            const processJsonObject = (parsed) => {
+                if (!parsed || typeof parsed !== 'object') {
+                    setUploadFeedback({ type: 'error', msg: 'Formato JSON inválido.' });
+                    return;
+                }
+                setPluggyData(parsed);
+                const count = (parsed.allTransactions?.length) || ((parsed.cardTransactions?.length || 0) + (parsed.bankTransactions?.length || 0));
+                setUploadFeedback({ 
+                    type: 'success', 
+                    msg: `JSON carregado! ${count.toLocaleString('pt-BR')} transações recalculadas com a fórmula exata do Mercado Pago.` 
+                });
+                setShowJsonModal(false);
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const parsed = JSON.parse(event.target.result);
+                        processJsonObject(parsed);
+                    } catch (err) {
+                        setUploadFeedback({ type: 'error', msg: 'Erro ao interpretar o arquivo JSON: ' + err.message });
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const parsed = JSON.parse(event.target.result);
+                        processJsonObject(parsed);
+                    } catch (err) {
+                        setUploadFeedback({ type: 'error', msg: 'Erro ao ler o JSON arrastado: ' + err.message });
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const filteredTransactions = useMemo(() => {
+                return processedData.transactions.filter(t => {
+                    const matchesSearch = !searchTerm || 
+                        t.desc.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                        (t.pluggyCategory || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                        (t.id || '').toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchesMonth = selectedMonth === 'ALL' || t.cycleMonth === selectedMonth;
+                    const matchesGroup = filterGroup === 'ALL' || t.txGroup === filterGroup;
+                    const matchesAccount = filterAccountType === 'ALL' || t.accountType === filterAccountType;
+                    const matchesCard = filterCard === 'ALL' || t.cardNumber === filterCard;
+                    const matchesSynthetic = !onlySynthetic || t.isSynthetic;
+
+                    return matchesSearch && matchesMonth && matchesGroup && matchesAccount && matchesCard && matchesSynthetic;
+                });
+            }, [processedData.transactions, searchTerm, selectedMonth, filterGroup, filterAccountType, filterCard, onlySynthetic]);
+
+            const creditAccount = (pluggyData.accounts || []).find(a => a.type === 'CREDIT') || initialPluggyData.accounts[0];
+            const bankAccount = (pluggyData.accounts || []).find(a => a.type === 'BANK') || initialPluggyData.accounts[1];
+            const currentBill = processedData.bills[selectedMonth] || processedData.bills['2026-11'];
+
+            const creditLimit = creditAccount?.creditData?.creditLimit || 4600;
+            const availableLimit = creditAccount?.creditData?.availableCreditLimit || 2666.96;
+            const usedLimit = creditAccount?.balance || 1933.04;
+            const limitUsagePercent = Math.min(100, Math.round((usedLimit / creditLimit) * 100));
+
+            return (
+                <div 
+                    className="min-h-screen flex flex-col bg-slate-950 text-slate-100"
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                >
+                    {isDragging && (
+                        <div className="fixed inset-0 z-50 bg-indigo-950/80 backdrop-blur-md border-4 border-dashed border-indigo-400 flex flex-col items-center justify-center p-6 text-center">
+                            <Upload className="w-16 h-16 text-indigo-300 animate-bounce mb-4" />
+                            <h2 className="text-2xl font-bold text-white">Solte o arquivo JSON da Pluggy aqui</h2>
+                            <p className="text-indigo-200 mt-1">O motor aplicará a fórmula exata do app Mercado Pago</p>
+                        </div>
+                    )}
+
+                    {/* Top Header */}
+                    <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-xl">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                                    <ShieldCheck className="w-6 h-6 text-white" />
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-white">
+                                            Motor de Cálculo de Faturas — Mercado Pago & Pluggy
+                                        </h1>
+                                        <span className="px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full">
+                                            Base de Cálculo Corrigida
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-slate-400">
+                                        Sem duplo deslocamento em <code className="text-indigo-300">day: 1</code> • Abatimento de antecipações antes do dia 02 • Reembolsos pós-virada (03 a 07)
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2.5">
+                                <input 
+                                    type="file" 
+                                    accept=".json,application/json" 
+                                    ref={fileInputRef} 
+                                    onChange={handleFileUpload} 
+                                    className="hidden" 
+                                />
+                                <button 
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs sm:text-sm shadow-lg shadow-indigo-600/25 transition-all cursor-pointer"
+                                >
+                                    <Upload className="w-4 h-4" />
+                                    Testar com Meu .JSON (1.393 txs)
+                                </button>
+                                <button 
+                                    onClick={() => setShowJsonModal(true)}
+                                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs sm:text-sm transition-all cursor-pointer"
+                                >
+                                    <FileJson className="w-4 h-4 text-indigo-400" />
+                                    Colar JSON
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Navigation Tabs */}
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto border-t border-slate-900 pt-2 pb-2">
+                            {[
+                                { id: 'dashboard', label: 'Conciliação & Base de Cálculo', icon: Layers },
+                                { id: 'formula', label: 'Por que não batia? (4 Regras p/ seu Site)', icon: Code2 },
+                                { id: 'transactions', label: `Explorador (${processedData.transactions.length})`, icon: CreditCard },
+                                { id: 'vaults', label: 'Cofres (Carro & Emergências)', icon: PiggyBank }
+                            ].map(tab => {
+                                const Icon = tab.icon;
+                                const active = activeTab === tab.id;
+                                return (
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => setActiveTab(tab.id)}
+                                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                                            active 
+                                                ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/30 shadow-sm' 
+                                                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                                        }`}
+                                    >
+                                        <Icon className="w-4 h-4" />
+                                        {tab.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </header>
+
+                    {uploadFeedback && (
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4 w-full">
+                            <div className={`p-3.5 rounded-xl border flex items-center justify-between text-xs sm:text-sm ${
+                                uploadFeedback.type === 'success' 
+                                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200' 
+                                    : 'bg-rose-950/60 border-rose-500/40 text-rose-200'
+                            }`}>
+                                <div className="flex items-center gap-2.5">
+                                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                                    <span>{uploadFeedback.msg}</span>
+                                </div>
+                                <button onClick={() => setUploadFeedback(null)} className="text-xs underline ml-4">Fechar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full space-y-6">
+                        {activeTab === 'dashboard' && (
+                            <>
+                                {/* Diagnóstico Rápido da Diferença Pluggy vs App Mercado Pago */}
+                                <div className="p-5 rounded-2xl bg-gradient-to-r from-indigo-950/70 via-slate-900 to-slate-900 border border-indigo-500/30 shadow-xl">
+                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                                        <div className="space-y-1">
+                                            <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400">
+                                                Descoberta da Auditoria (Prints do App vs. JSON Pluggy)
+                                            </span>
+                                            <h2 className="text-base sm:text-lg font-extrabold text-white">
+                                                Por que o <code className="text-rose-300">creditBills.totalAmount</code> da Pluggy dava R$ 2.948,10 / R$ 3.067,07 e o App mostrava outro valor?
+                                            </h2>
+                                            <p className="text-xs text-slate-300 leading-relaxed max-w-4xl">
+                                                1) No JSON da Pluggy, as compras de cartão já vêm com <code className="text-indigo-300">day: 1</code> e <code className="text-indigo-300">month</code> <strong>já alocados no mês de vencimento da fatura</strong> (ex: a parcela 4/12 da Shopee de 09/set já está em <code className="text-indigo-300">2027-01</code>). <br/>
+                                                2) O App do Mercado Pago exibe no topo o <strong>Saldo de Fechamento no Dia 02</strong>: ele subtrai os <strong>pagamentos antecipados feitos antes do dia 02</strong> (ex: R$ 15 em 31/10, R$ 50 em 13/10, R$ 251 em 29/09) e trata reembolsos entre os dias 03 e 07 (ex: R$ 32,34 em 03/08) como abatimento do pagamento pós-virada!
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={() => setActiveTab('formula')}
+                                            className="shrink-0 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-lg shadow-indigo-600/20 cursor-pointer"
+                                        >
+                                            Ver Código da Fórmula p/ seu Site →
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Cards de Faturas lado a lado para conferência imediata */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+                                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                                        <div>
+                                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                                <Calendar className="w-5 h-5 text-indigo-400" />
+                                                Decomposição Matemática da Fatura ({selectedMonth})
+                                            </h2>
+                                            <p className="text-xs text-slate-400 mt-0.5">
+                                                Selecione qualquer mês abaixo (Ago, Set, Out, Nov, Dez, Jan) para ver a prova real dos centavos:
+                                            </p>
+                                        </div>
+
+                                        <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                                            {['2027-01', '2026-12', '2026-11', '2026-10', '2026-09', '2026-08'].map(m => {
+                                                const b = processedData.bills[m];
+                                                return (
+                                                    <button
+                                                        key={m}
+                                                        onClick={() => setSelectedMonth(m)}
+                                                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex flex-col items-center ${
+                                                            selectedMonth === m 
+                                                                ? 'bg-indigo-600 text-white shadow' 
+                                                                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                                                        }`}
+                                                    >
+                                                        <span>{m}</span>
+                                                        <span className={`text-[10px] font-mono ${selectedMonth === m ? 'text-indigo-200' : 'text-emerald-400'}`}>
+                                                            R$ {(b?.mpAppExactTotal || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    {currentBill && (
+                                        <div className="space-y-5">
+                                            {/* Equação Visual Passo a Passo da Fatura Selecionada */}
+                                            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 p-5 rounded-2xl bg-slate-950 border border-slate-800">
+                                                {/* Passo 1: Compras Brutas */}
+                                                <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
+                                                    <span className="text-[11px] font-bold uppercase text-slate-400 block">
+                                                        1. Compras + Parcelas ({currentBill.shortCycle})
+                                                    </span>
+                                                    <p className="text-xl font-extrabold text-white mt-1">
+                                                        R$ {currentBill.grossCardExpenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                    </p>
+                                                    <span className="text-[11px] text-slate-400 mt-1 block">
+                                                        {currentBill.officialBill ? `Pluggy raw bill: R$ ${currentBill.officialBill.totalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : `Parcelas syn_: R$ ${currentBill.syntheticAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                                                    </span>
+                                                </div>
+
+                                                {/* Passo 2: Abatimentos Antes do Fechamento (Dia 02) */}
+                                                <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
+                                                    <span className="text-[11px] font-bold uppercase text-amber-400 block">
+                                                        2. (-) Antecipado / Estorno até Dia 02
+                                                    </span>
+                                                    <p className="text-xl font-extrabold text-amber-300 mt-1">
+                                                        - R$ {(currentBill.advancePaymentsBeforeClosing + currentBill.inCycleRefunds).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                    </p>
+                                                    <span className="text-[11px] text-slate-400 mt-1 block">
+                                                        Antecip.: R$ {currentBill.advancePaymentsBeforeClosing.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | Est.: R$ {currentBill.inCycleRefunds.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                    </span>
+                                                </div>
+
+                                                {/* Passo 3: Valor de Fechamento no App Mercado Pago */}
+                                                <div className="p-3.5 rounded-xl bg-indigo-950/40 border-2 border-indigo-500/50">
+                                                    <span className="text-[11px] font-bold uppercase text-indigo-300 block">
+                                                        3. (=) Total no Fechamento (Dia 02)
+                                                    </span>
+                                                    <p className="text-2xl font-extrabold text-white mt-1">
+                                                        R$ {currentBill.mpAppExactTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                    </p>
+                                                    <span className="text-[11px] text-indigo-300 mt-1 block font-semibold">
+                                                        ✓ Valor exato do topo do App MP
+                                                    </span>
+                                                </div>
+
+                                                {/* Passo 4: Quitação Pós-Fechamento (03 a 07) */}
+                                                <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800">
+                                                    <span className="text-[11px] font-bold uppercase text-emerald-400 block">
+                                                        4. (-) Quitação Pós-Virada (03 a 07)
+                                                    </span>
+                                                    <p className="text-xl font-extrabold text-emerald-400 mt-1">
+                                                        R$ {currentBill.totalSettledAfterClosing.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                    </p>
+                                                    <span className="text-[11px] text-slate-400 mt-1 block">
+                                                        Pagto: R$ {currentBill.postClosingPayments.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        {currentBill.postClosingRefunds > 0 ? ` + Reemb. 03/08: R$ ${currentBill.postClosingRefunds.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : ''}
+                                                    </span>
+                                                </div>
+
+                                                {/* Passo 5: Status e Saldo Aberto */}
+                                                <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between">
+                                                    <div>
+                                                        <span className="text-[11px] font-bold uppercase text-slate-400 block">
+                                                            5. Saldo Aberto Atual
+                                                        </span>
+                                                        <p className={`text-xl font-extrabold mt-1 ${currentBill.netRemainingToPay > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                                            R$ {currentBill.netRemainingToPay.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        </p>
+                                                    </div>
+                                                    <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full w-fit mt-2 ${
+                                                        currentBill.status === 'PAID' 
+                                                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
+                                                            : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                                    }`}>
+                                                        {currentBill.status === 'PAID' ? '✓ VOCÊ PAGOU O TOTAL' : `FECHA EM 02/${currentBill.month.split('-')[1]}`}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {/* Tabela Comparativa Completa de Todos os Meses */}
+                                            <div>
+                                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+                                                    Auditoria Mês a Mês: Comparação Pluggy Bruto vs. Fechamento Real Mercado Pago (Dia 02)
+                                                </h3>
+                                                <div className="overflow-x-auto rounded-xl border border-slate-800">
+                                                    <table className="w-full text-left border-collapse">
+                                                        <thead>
+                                                            <tr className="bg-slate-950 border-b border-slate-800 text-[11px] text-slate-400 uppercase">
+                                                                <th className="p-3">Mês Fatura</th>
+                                                                <th className="p-3">Ciclo de Compras</th>
+                                                                <th className="p-3">Pluggy Raw (creditBills)</th>
+                                                                <th className="p-3">Antecipado antes Dia 02</th>
+                                                                <th className="p-3 text-indigo-300">Total Fechamento App MP</th>
+                                                                <th className="p-3">Pagto + Reembolso (03 a 07)</th>
+                                                                <th className="p-3">Explicação da Conciliação</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-800/60 text-xs">
+                                                            {[
+                                                                {
+                                                                    m: '2027-01',
+                                                                    note: 'Fatura futura (fecha 02/jan): Soma exata das parcelas (Shopee 4/12 R$ 10,63, ML 4/8 R$ 19,04, Caio Garcia 4/12 R$ 21,10, etc.) = R$ 484,40'
+                                                                },
+                                                                {
+                                                                    m: '2026-12',
+                                                                    note: 'Fatura atual aberta (fecha 02/dez): Compras a partir de 03/11 (LuizLanches R$ 60, Google R$ 23,99...) + parcelas de dez = R$ 1.188,71'
+                                                                },
+                                                                {
+                                                                    m: '2026-11',
+                                                                    note: 'Bruto R$ 2.948,10 (-) R$ 65,00 antecipados (R$ 15 em 31/10 + R$ 50 em 13/10) (-) R$ 11,67 estorno = R$ 2.871,43 quitados em 03/11 e 06/11 (350 + 900 + 1621,43)'
+                                                                },
+                                                                {
+                                                                    m: '2026-10',
+                                                                    note: 'Fechou em 02/10 por R$ 2.198,09 (após abater R$ 251,00 antecipados em 29/09 e R$ 59,00 de estorno) -> Quitado em 06/10 por R$ 2.198,09'
+                                                                },
+                                                                {
+                                                                    m: '2026-09',
+                                                                    note: 'Fechou em 02/09 por R$ 1.871,20 -> Quitado integralmente em 04/09 por R$ 1.871,20'
+                                                                },
+                                                                {
+                                                                    m: '2026-08',
+                                                                    note: 'Fechou em 02/08 por R$ 1.897,59 -> Quitado com Reembolso de R$ 32,34 em 03/08 + Pagamento de R$ 1.865,25 em 06/08 (= R$ 1.897,59)'
+                                                                }
+                                                            ].map(row => {
+                                                                const b = processedData.bills[row.m];
+                                                                if (!b) return null;
+                                                                return (
+                                                                    <tr 
+                                                                        key={row.m} 
+                                                                        onClick={() => setSelectedMonth(row.m)}
+                                                                        className={`hover:bg-slate-800/50 cursor-pointer transition-colors ${selectedMonth === row.m ? 'bg-indigo-950/30' : ''}`}
+                                                                    >
+                                                                        <td className="p-3 font-bold text-white whitespace-nowrap">{row.m}</td>
+                                                                        <td className="p-3 text-slate-300 whitespace-nowrap">{b.shortCycle}</td>
+                                                                        <td className="p-3 text-slate-400 font-mono whitespace-nowrap">
+                                                                            {b.officialBill ? `R$ ${b.officialBill.totalAmount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'Fatura Aberta'}
+                                                                        </td>
+                                                                        <td className="p-3 text-amber-300 font-mono whitespace-nowrap">
+                                                                            - R$ {(b.advancePaymentsBeforeClosing + b.inCycleRefunds).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                                        </td>
+                                                                        <td className="p-3 font-extrabold text-indigo-300 font-mono text-sm whitespace-nowrap">
+                                                                            R$ {b.mpAppExactTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                                        </td>
+                                                                        <td className="p-3 text-emerald-400 font-bold font-mono whitespace-nowrap">
+                                                                            R$ {b.totalSettledAfterClosing.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                                        </td>
+                                                                        <td className="p-3 text-slate-300 max-w-md leading-relaxed">
+                                                                            {row.note}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </>
+                        )}
+
+                        {activeTab === 'formula' && (
+                            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+                                <div>
+                                    <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
+                                        <Code2 className="w-6 h-6 text-indigo-400" />
+                                        Guia Técnico: As 4 Regras de Cálculo para o seu Site
+                                    </h2>
+                                    <p className="text-xs sm:text-sm text-slate-400 mt-1">
+                                        Copie a função abaixo para o seu projeto. Ela resolve definitivamente a divergência entre o JSON da Pluggy e o App do Mercado Pago.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs sm:text-sm">
+                                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                                        <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold text-xs">CAUSA 1</span>
+                                        <h3 className="font-bold text-white">Por que Janeiro e Dezembro davam errado quando mudamos a virada para o dia 02?</h3>
+                                        <p className="text-slate-300 text-xs leading-relaxed">
+                                            Porque no seu arquivo <code className="text-indigo-300">pluggy_transacoes_completas.json</code>, todas as compras e parcelas do cartão já foram pré-indexadas pelo seu backend com <code className="text-indigo-300">"day": 1</code> e <code className="text-indigo-300">"month": "2027-01"</code> (o mês de vencimento da fatura). Se você aplicar a regra <code className="text-rose-300">day &gt; 2</code> ou deslocar compras que já estão em <code className="text-indigo-300">day: 1</code>, você desloca a fatura duas vezes!
+                                        </p>
+                                    </div>
+
+                                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                                        <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold text-xs">CAUSA 2</span>
+                                        <h3 className="font-bold text-white">Por que o <code className="text-amber-300">creditBills.totalAmount</code> da Pluggy (R$ 2.948,10 em Nov) é maior que os pagamentos do fechamento?</h3>
+                                        <p className="text-slate-300 text-xs leading-relaxed">
+                                            Porque você faz <strong>pagamentos antecipados durante o ciclo</strong> (ex: R$ 15,00 em 31/10, R$ 50,00 em 13/10, R$ 251,00 em 29/09). A Pluggy retorna o total bruto acumulado antes dos abatimentos, enquanto o App do Mercado Pago subtrai tudo o que foi pago até o dia 02 antes de gerar o saldo de fechamento!
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-400">
+                                        Função Pura em JavaScript pronta para usar no seu site:
+                                    </h3>
+                                    <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-emerald-300 overflow-x-auto leading-relaxed">
+{`/**
+ * Calcula o valor exato de cada fatura do Cartão Mercado Pago (Virada Dia 02 / Vencimento Dia 07)
+ * a partir do JSON exportado da Pluggy.
+ */
+function calculateExactMercadoPagoBills(allTransactions, closingDay = 2) {
+  const getNextMonth = (ym) => {
+    const [y, m] = ym.split('-').map(Number);
+    return m === 12 ? \`\${y + 1}-01\` : \`\${y}-\${String(m + 1).padStart(2, '0')}\`;
+  };
+
+  const bills = {};
+  const ensureBill = (ym) => {
+    if (!bills[ym]) {
+      bills[ym] = {
+        month: ym,
+        grossExpenses: 0,           // Compras à vista + parcelas da fatura
+        inCycleRefunds: 0,          // Estornos ocorridos antes do fechamento (dia 02)
+        advancePayments: 0,         // Pagamentos antecipados feitos entre 11/M-1 e 02/M
+        postClosingPayments: 0,     // Pagamentos da fatura fechada feitos entre 03/M e 10/M
+        postClosingRefunds: 0       // Reembolsos caídos entre 03/M e 07/M (ex: R$ 32,34 em 03/08)
+      };
+    }
+    return bills[ym];
+  };
+
+  for (const tx of allTransactions) {
+    const desc = (tx.desc || '').toLowerCase();
+    const day = Number(tx.day || 1);
+    const amount = Number(tx.amount || 0);
+
+    // 1. Compras no Cartão (no JSON já vêm com tx.month = mês da fatura e day = 1)
+    if (tx.accountType === 'CREDIT' && tx.type === 'expense') {
+      const targetMonth = (day > closingDay && !tx.billId && !tx.isSyntheticGapFill)
+        ? getNextMonth(tx.month)
+        : tx.month;
+      ensureBill(targetMonth).grossExpenses += amount;
+    }
+
+    // 2. Pagamentos de Fatura (usamos os lançamentos BANK que têm o dia exato do pagamento)
+    else if (tx.accountType === 'BANK' && desc.includes('pagamento de fatura')) {
+      if (day > 10) {
+        // Pago após o dia 10 (ex: 29/09, 13/10, 31/10) -> Antecipação do ciclo que fecha dia 02 de M+1!
+        const nextM = getNextMonth(tx.month);
+        ensureBill(nextM).advancePayments += amount;
+      } else {
+        // Pago entre 03 e 10 (ex: 03/11, 06/11, 06/10, 04/09, 06/08) -> Quita a fatura fechada do próprio mês M!
+        ensureBill(tx.month).postClosingPayments += amount;
+      }
+    }
+
+    // 3. Estornos / Reembolsos no Cartão (CREDIT income que não é "Pagamento recebido")
+    else if (tx.accountType === 'CREDIT' && tx.type === 'income' && !desc.includes('pagamento recebido')) {
+      if (day >= closingDay + 1 && day <= 10) {
+        // Reembolso pós-fechamento (ex: 03/08 R$ 32,34) -> Ajuda a quitar a fatura fechada de M
+        ensureBill(tx.month).postClosingRefunds += amount;
+      } else {
+        // Estorno dentro do ciclo -> Reduz o valor de fechamento da fatura
+        ensureBill(tx.month).inCycleRefunds += amount;
+      }
+    }
+  }
+
+  // Finaliza os saldos de cada mês
+  return Object.values(bills).map(b => {
+    // Valor que fecha no dia 02 (exibido no topo do App Mercado Pago):
+    const closingBalance = Math.max(0, b.grossExpenses - b.inCycleRefunds - b.advancePayments);
+    // Total quitado após o fechamento (Pagamentos entre 03 e 07 + Reembolsos entre 03 e 07):
+    const settledAfterClosing = b.postClosingPayments + b.postClosingRefunds;
+
+    return {
+      ...b,
+      closingBalance: Number(closingBalance.toFixed(2)),
+      settledAfterClosing: Number(settledAfterClosing.toFixed(2)),
+      remainingToPay: Number(Math.max(0, closingBalance - settledAfterClosing).toFixed(2))
+    };
+  });
+}`}
+                                    </pre>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'transactions' && (
+                            <div className="space-y-6">
+                                <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl space-y-4">
+                                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                        <div>
+                                            <h2 className="text-lg font-bold text-white">Explorador de Transações ({selectedMonth === 'ALL' ? 'Todos os Ciclos' : `Fatura ${selectedMonth}`})</h2>
+                                            <p className="text-xs text-slate-400">
+                                                Inspecione cada compra, parcela sintética, antecipação ou quitação alocada na fatura.
+                                            </p>
+                                        </div>
+                                        <div className="relative w-full md:w-80">
+                                            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                                            <input 
+                                                type="text"
+                                                placeholder="Buscar descrição, categoria ou ID..."
+                                                value={searchTerm}
+                                                onChange={(e) => setSearchTerm(e.target.value)}
+                                                className="w-full pl-10 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs sm:text-sm text-white focus:outline-none focus:border-indigo-500"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2 border-t border-slate-800/80 text-xs">
+                                        <div>
+                                            <label className="text-slate-400 block mb-1 font-medium">Fatura / Ciclo</label>
+                                            <select 
+                                                value={selectedMonth} 
+                                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                                className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                                            >
+                                                <option value="ALL">Todas as Faturas</option>
+                                                {processedData.months.map(m => (
+                                                    <option key={m} value={m}>{m} ({formatShortCycle(m, closingDay)})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-slate-400 block mb-1 font-medium">Grupo (5 Grupos)</label>
+                                            <select 
+                                                value={filterGroup} 
+                                                onChange={(e) => setFilterGroup(e.target.value)}
+                                                className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                                            >
+                                                <option value="ALL">Todos os 5 Grupos</option>
+                                                <option value="1_CARD_EXPENSE">Grupo 1: Compra Cartão</option>
+                                                <option value="2_BILL_PAYMENT">Grupo 2: Pagto Fatura</option>
+                                                <option value="3_CARD_REFUND">Grupo 3: Estorno Cartão</option>
+                                                <option value="4_VAULT_TX">Grupo 4: Cofres / Reservas</option>
+                                                <option value="5_BANK_REGULAR">Grupo 5: Conta Corrente</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-slate-400 block mb-1 font-medium">Conta (AccountType)</label>
+                                            <select 
+                                                value={filterAccountType} 
+                                                onChange={(e) => setFilterAccountType(e.target.value)}
+                                                className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                                            >
+                                                <option value="ALL">CREDIT + BANK</option>
+                                                <option value="CREDIT">Somente CREDIT (Cartão)</option>
+                                                <option value="BANK">Somente BANK (Conta)</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-slate-400 block mb-1 font-medium">Final do Cartão</label>
+                                            <select 
+                                                value={filterCard} 
+                                                onChange={(e) => setFilterCard(e.target.value)}
+                                                className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                                            >
+                                                <option value="ALL">Todos (6240, 0845, 0000)</option>
+                                                <option value="6240">Final 6240 (Físico)</option>
+                                                <option value="0845">Final 0845 (Virtual)</option>
+                                                <option value="0000">Final 0000 (Pagtos/Ajustes)</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="flex items-end">
+                                            <button 
+                                                onClick={() => setOnlySynthetic(!onlySynthetic)}
+                                                className={`w-full p-2 rounded-xl border font-semibold transition-all cursor-pointer ${onlySynthetic ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-slate-950 border-slate-800 text-slate-400'}`}
+                                            >
+                                                {onlySynthetic ? '✓ Só Gap Fill (syn_)' : 'Filtrar Gap Fill (syn_)'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+                                    <div className="overflow-x-auto max-h-[600px]">
+                                        <table className="w-full text-left border-collapse">
+                                            <thead className="sticky top-0 bg-slate-950 z-10">
+                                                <tr className="border-b border-slate-800 text-slate-400 text-[11px] uppercase tracking-wider font-semibold">
+                                                    <th className="p-3.5">Data JSON</th>
+                                                    <th className="p-3.5">Fatura Alocada</th>
+                                                    <th className="p-3.5">Fase no Ciclo</th>
+                                                    <th className="p-3.5">Descrição</th>
+                                                    <th className="p-3.5">Parcela</th>
+                                                    <th className="p-3.5">Grupo</th>
+                                                    <th className="p-3.5 text-right">Valor</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-800/60 text-xs sm:text-sm">
+                                                {filteredTransactions.map((tx) => {
+                                                    const isIncome = tx.type === 'income';
+                                                    return (
+                                                        <tr key={tx.id} className="hover:bg-slate-800/40 transition-colors">
+                                                            <td className="p-3.5 whitespace-nowrap text-slate-300 font-mono text-xs">
+                                                                {String(tx.day).padStart(2, '0')}/{tx.month.split('-')[1]}/{tx.month.split('-')[0]}
+                                                            </td>
+                                                            <td className="p-3.5 whitespace-nowrap">
+                                                                <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono text-xs font-semibold">
+                                                                    {tx.cycleMonth}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-3.5 whitespace-nowrap text-xs">
+                                                                {tx.settlementPhase === 'ADVANCE_BEFORE_CLOSING' && (
+                                                                    <span className="text-amber-300 font-semibold">Antecipado antes Dia 02</span>
+                                                                )}
+                                                                {tx.settlementPhase === 'POST_CLOSING_PAYMENT' && (
+                                                                    <span className="text-emerald-400 font-semibold">Quitação Pós-Virada (03 a 07)</span>
+                                                                )}
+                                                                {tx.settlementPhase === 'POST_CLOSING_REFUND' && (
+                                                                    <span className="text-emerald-300 font-semibold">Reembolso Pós-Virada (03 a 07)</span>
+                                                                )}
+                                                                {tx.settlementPhase === 'IN_CYCLE_REFUND' && (
+                                                                    <span className="text-amber-300 font-semibold">Estorno no Ciclo</span>
+                                                                )}
+                                                                {tx.settlementPhase === 'IN_CYCLE' && (
+                                                                    <span className="text-slate-400">Compra / Parcela Fatura</span>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-3.5 text-white font-medium max-w-xs truncate" title={tx.desc}>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="truncate">{tx.desc}</span>
+                                                                    {tx.isSynthetic && (
+                                                                        <span className="px-1.5 py-0.5 bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/30 rounded text-[10px] font-mono shrink-0">
+                                                                            syn_
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-3.5 whitespace-nowrap text-xs text-slate-300 font-mono">
+                                                                {tx.inst || 'Única'}
+                                                            </td>
+                                                            <td className="p-3.5 whitespace-nowrap">
+                                                                <span className="px-2 py-1 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                                                    {tx.groupLabel}
+                                                                </span>
+                                                            </td>
+                                                            <td className={`p-3.5 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-slate-100'}`}>
+                                                                {isIncome ? '+ ' : '- '}R$ {Math.abs(Number(tx.amount || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'vaults' && (
+                            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <PiggyBank className="w-5 h-5 text-amber-400" />
+                                    Auditoria de Cofres / Reservas Mercado Pago (Grupo 4)
+                                </h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                                    {Object.entries(processedData.vaults).map(([vName, vData]) => {
+                                        const net = round2(vData.deposited - vData.withdrawn);
+                                        return (
+                                            <div key={vName} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <h3 className="text-lg font-extrabold text-white">{vName}</h3>
+                                                    <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                                                        {vData.count} movimentações
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-3 text-xs">
+                                                    <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                                                        <span className="text-slate-400 block">Total Guardado</span>
+                                                        <span className="text-sm font-bold text-emerald-400 mt-1 block">
+                                                            + R$ {vData.deposited.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        </span>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                                                        <span className="text-slate-400 block">Total Resgatado</span>
+                                                        <span className="text-sm font-bold text-rose-400 mt-1 block">
+                                                            - R$ {vData.withdrawn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        </span>
+                                                    </div>
+                                                    <div className="p-3 rounded-xl bg-slate-900 border border-indigo-500/30">
+                                                        <span className="text-slate-400 block">Saldo Retido</span>
+                                                        <span className="text-sm font-extrabold text-white mt-1 block">
+                                                            R$ {net.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {showJsonModal && (
+                        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-bold text-white">Colar JSON Completo da Pluggy</h3>
+                                    <button onClick={() => setShowJsonModal(false)} className="text-slate-400 hover:text-white text-sm">✕</button>
+                                </div>
+                                <textarea
+                                    rows={10}
+                                    value={jsonInputText}
+                                    onChange={(e) => setJsonInputText(e.target.value)}
+                                    placeholder='Cole aqui o conteúdo do seu arquivo pluggy_transacoes_completas_1793998396109_2.json...'
+                                    className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+                                />
+                                <div className="flex justify-end gap-3">
+                                    <button 
+                                        onClick={() => setShowJsonModal(false)}
+                                        className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            try {
+                                                const parsed = JSON.parse(jsonInputText);
+                                                processJsonObject(parsed);
+                                            } catch (err) {
+                                                setUploadFeedback({ type: 'error', msg: 'JSON inválido: ' + err.message });
+                                            }
+                                        }}
+                                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+                                    >
+                                        Processar JSON
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

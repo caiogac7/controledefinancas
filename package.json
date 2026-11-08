@@ -1,0 +1,16 @@
+{
+  "name": "finan",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.0.0",
+    "mercadopago": "^2.0.0",
+    "pluggy-sdk": "^0.93.0"
+  },
+  "devDependencies": {
+    "vercel": "^65.12.1"
+  }
+}

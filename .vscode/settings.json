@@ -1,0 +1,9 @@
+{
+  "chat.editor.autoAccept": true,
+  "chat.tools.autoApprove": true,
+  "antigravity.agent.autoAcceptDiffs": true,
+  "antigravity.agent.autoApproveFileWrites": true,
+  "cursor.composer.autoApply": true,
+  "files.autoSave": "afterDelay"
+}
+
