@@ -10001,27 +10001,59 @@ function openBankModal() {
             const count = selectedTxIds.size;
             const paidDate = dateStr ? dateStr.slice(0, 10) : getSaoPauloDateYYYYMMDD();
             const nowTs = getSaoPauloTimestamp();
+            const realTotal = Number(realAmt || 0);
+
+            // Coleta os itens selecionados e seus valores originais planejados
+            const itemsToReconcile = [];
+            let plannedSum = 0;
 
             transactions.forEach(t => {
                 if (selectedTxIds.has(Number(t.id))) {
-                    const inferredOrig = inferOriginalTransactionAmount(t);
-                    if (typeof t.originalAmount !== 'number' || isNaN(t.originalAmount)) {
-                        t.originalAmount = inferredOrig;
+                    const orig = inferOriginalTransactionAmount(t);
+                    if (typeof t.originalAmount !== 'number' || isNaN(t.originalAmount) || t.originalAmount <= 0) {
+                        t.originalAmount = orig;
                     }
-                    // Se o item havia sido conciliado sozinho antes (ex: assumindo o valor cheio do Pix) e agora faz parte de um lote, restaura o valor original da parcela!
-                    if (t.reconciledWithStatement && inferredOrig > 0 && inferredOrig !== Number(t.amount)) {
-                        t.amount = inferredOrig;
+                    plannedSum += Number(t.originalAmount || t.amount || 0);
+                    itemsToReconcile.push(t);
+                }
+            });
+
+            // Se o valor real no extrato diferir da soma planejada dos títulos (diferença maior que 5 centavos),
+            // distribui o valor real proporcionalmente (rateio proporcional) entre os itens para que a soma bata exatamente com o extrato!
+            const diffFromExtrato = Math.abs(realTotal - plannedSum);
+            const shouldProRate = realTotal > 0 && plannedSum > 0 && diffFromExtrato > 0.05;
+
+            if (shouldProRate) {
+                let allocatedSoFar = 0;
+                itemsToReconcile.forEach((t, idx) => {
+                    if (idx === itemsToReconcile.length - 1) {
+                        // O último item absorve qualquer arredondamento de centavo para fechar a soma com precisão perfeita
+                        t.amount = Number((realTotal - allocatedSoFar).toFixed(2));
+                    } else {
+                        const proportion = Number(t.originalAmount || t.amount || 0) / plannedSum;
+                        const allocated = Number((realTotal * proportion).toFixed(2));
+                        t.amount = allocated;
+                        allocatedSoFar += allocated;
                     }
-                    t.paid = true;
-                    t.paidAt = paidDate;
-                    t.reconciledWithStatement = true;
-                    t.reconciledFitid = String(fitid);
-                    t.reconciledAt = nowTs;
-                    t.bankId = chosenBankId;
-                    t.cardId = '';
-                    if (!t.fitid || String(t.fitid).startsWith('pluggy_')) {
-                        t.fitid = 'manual_reconciled_' + (t.id || Date.now());
-                    }
+                });
+            } else {
+                // Se a soma bate exatamente, cada item mantém o seu valor original exato
+                itemsToReconcile.forEach(t => {
+                    t.amount = Number(t.originalAmount || t.amount);
+                });
+            }
+
+            // Atualiza status e metadados de conciliação
+            itemsToReconcile.forEach(t => {
+                t.paid = true;
+                t.paidAt = paidDate;
+                t.reconciledWithStatement = true;
+                t.reconciledFitid = String(fitid);
+                t.reconciledAt = nowTs;
+                t.bankId = chosenBankId;
+                t.cardId = '';
+                if (!t.fitid || String(t.fitid).startsWith('pluggy_')) {
+                    t.fitid = 'manual_reconciled_' + (t.id || Date.now());
                 }
             });
 
@@ -10029,12 +10061,46 @@ function openBankModal() {
             clearTxSelection();
             renderAll();
 
+            showActionToast(`🎉 ${count} títulos quitados e conciliados ao débito de ${formatBRL(realAmt)}!`);
+
+            // Sincronização ultra-otimizada: persiste em background sem travar a interface do usuário
             if (currentUser) {
                 currentUser.transactions_json = transactions;
-                await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
-            }
+                (async () => {
+                    try {
+                        // Persistência rápida direta no perfil do usuário
+                        await supabaseClient.from('profiles').update({
+                            transactions_json: transactions,
+                            updated_at: getSaoPauloTimestamp()
+                        }).eq('id', currentUser.id);
 
-            showActionToast(`🎉 ${count} títulos quitados e conciliados ao débito de ${formatBRL(realAmt)}!`);
+                        // Atualiza as linhas específicas na tabela transactions em batch
+                        const updatedRows = itemsToReconcile.map(t => ({
+                            id: Number(t.id),
+                            user_id: currentUser.id,
+                            month: String(t.month),
+                            day: Number(t.day) || 1,
+                            type: t.type === 'income' ? 'income' : 'expense',
+                            description: String(t.desc || 'Lançamento'),
+                            amount: Number(t.amount) || 0,
+                            category: String(t.cat || 'Compras'),
+                            installment: String(t.inst || 'Fixa'),
+                            bank_id: String(t.bankId || 'bank_geral'),
+                            card_id: String(t.cardId || ''),
+                            fitid: String(t.fitid || ''),
+                            reconciled_with_statement: true,
+                            reconciled_fitid: String(t.reconciledFitid || ''),
+                            paid: true,
+                            paid_at: t.paidAt ? `${t.paidAt}T12:00:00-03:00` : null,
+                            updated_at: nowTs
+                        }));
+                        await supabaseClient.from('transactions').upsert(updatedRows, { onConflict: 'id' });
+                    } catch (syncErr) {
+                        console.warn('[Sync Otimizado] Falha ao atualizar transactions no banco:', syncErr);
+                        await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                    }
+                })().catch(() => {});
+            }
         }
         window.confirmBatchQuickPayReconciled = confirmBatchQuickPayReconciled;
 
