@@ -49,9 +49,15 @@
                 localStorage.setItem(key, value);
             } catch (err) {
                 console.warn(`[LocalStorage] Não foi possível salvar ${key} (cota excedida ou restrito):`, err?.message);
-                // Limpeza preventiva de dados pesados de debug que esgotam os 5MB do celular
+                // Limpeza preventiva de dados pesados de debug e backups volumosos que esgotam os 5MB do celular
                 try {
                     localStorage.removeItem('pluggy_card_raw_debug.json');
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && (k.startsWith('financas_backup_') || k.startsWith('financas_last_summary_') || k.includes('debug'))) {
+                            localStorage.removeItem(k);
+                        }
+                    }
                     if (!key.includes('raw_debug') && !key.includes('backup_')) {
                         localStorage.setItem(key, value);
                     }
@@ -5420,11 +5426,14 @@ function openBankModal() {
                         </div>
                         ${accSummaryHtml}
                         <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
-                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: false, triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Conecta ao banco via Open Finance para atualizar saldos e extratos de hoje">
-                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Atualizar com o Banco
+                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: 'delta', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza apenas as novidades das últimas 48h (ultra rápido, sem pesar o celular)">
+                                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Novidades (48h)
                             </button>
-                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, fullSync: true, triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
-                                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Histórico Completo
+                            <button type="button" id="btn-sync-7d-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: '7d', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza os últimos 7 dias">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 7 Dias
+                            </button>
+                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: 'total', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
+                                <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-200"></i> Total
                             </button>
                             <button type="button" onclick="openPluggyConnect('${escapeHtml(item.id)}')" class="px-2.5 py-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition" title="Atualizar credenciais">
                                 Reconectar
@@ -5475,7 +5484,15 @@ function openBankModal() {
         let isSyncingAllPluggyInProgress = false;
         const activeSyncingItemIds = new Set();
 
-        async function syncAllPluggyItems(fullSync = false, force = false) {
+        async function syncAllPluggyItems(syncModeOrFullSync = 'delta', force = false) {
+            // Normaliza o modo de sincronização: 'delta' (48h - padrão ultra rápido), '7d' ou 'total'
+            let mode = 'delta';
+            if (syncModeOrFullSync === true || syncModeOrFullSync === 'total') mode = 'total';
+            else if (syncModeOrFullSync === '7d') mode = '7d';
+            else mode = 'delta';
+
+            const isTotal = mode === 'total';
+
             // 1. TRAVA RÍGIDA DE CLIQUE (FRONTEND): Impede disparos concorrentes por duplo clique/touch
             if (isSyncingAllPluggyInProgress) {
                 console.warn('[OpenFinance] Sincronização geral já em andamento. Disparo duplicado ignorado.');
@@ -5488,10 +5505,10 @@ function openBankModal() {
             }
 
             // 2. COOLDOWN TEMPORÁRIO (DEBOUNCE NO CLIENT): Evita que cliques repetidos estourem a cota da Pluggy
-            const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos de cooldown
+            const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutos de cooldown
             const lastSyncAt = Number(safeLocalStorageGet('finan_last_pluggy_sync_at', 0));
             const elapsed = Date.now() - lastSyncAt;
-            if (!force && !fullSync && lastSyncAt > 0 && elapsed < COOLDOWN_MS) {
+            if (!force && !isTotal && lastSyncAt > 0 && elapsed < COOLDOWN_MS) {
                 const waitSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
                 alert(`⏳ Seus dados foram sincronizados há pouco tempo.\n\nAguarde mais ${waitSec} segundos para nova consulta, evitando sobrecarga na cota do Open Finance.`);
                 return;
@@ -5499,13 +5516,14 @@ function openBankModal() {
 
             isSyncingAllPluggyInProgress = true;
 
-            const btn7d = document.getElementById('btn-sync-all-pluggy');
+            const btnDelta = document.getElementById('btn-sync-all-pluggy');
+            const btn7d = document.getElementById('btn-sync-all-pluggy-7d');
             const btnTotal = document.getElementById('btn-sync-all-pluggy-total');
-            const activeBtn = fullSync ? btnTotal : btn7d;
+            const activeBtn = isTotal ? btnTotal : (mode === '7d' ? btn7d : btnDelta);
             const origHtml = activeBtn ? activeBtn.innerHTML : '';
 
-            // Bloqueio visual e tátil estrito em ambos os botões para desarmar eventos de touch do mobile
-            [btn7d, btnTotal].forEach(b => {
+            // Bloqueio visual e tátil estrito em todos os botões para desarmar eventos de touch do mobile
+            [btnDelta, btn7d, btnTotal].forEach(b => {
                 if (b) {
                     b.disabled = true;
                     b.style.pointerEvents = 'none';
@@ -5515,7 +5533,7 @@ function openBankModal() {
             });
 
             if (activeBtn) {
-                activeBtn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando... por favor aguarde';
+                activeBtn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Sincronizando...';
                 if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
             }
 
@@ -5528,14 +5546,25 @@ function openBankModal() {
                 for (let i = 0; i < pluggyItems.length; i++) {
                     const item = pluggyItems[i];
 
-                    // Espaçamento de segurança de 2 segundos entre conexões
+                    // Espaçamento de segurança entre conexões
                     if (i > 0) {
-                        await new Promise(r => setTimeout(r, 2000));
+                        await new Promise(r => setTimeout(r, 1800));
                     }
 
-                    const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: true, fullSync, isBatch: true });
+                    const res = await syncPluggyItem(item.id, {
+                        silent: true,
+                        triggerUpdate: true,
+                        syncMode: mode,
+                        fullSync: isTotal,
+                        isBatch: true
+                    });
+
                     if (!res || res.ok === false) {
-                        failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
+                        if (res?.isQuota) {
+                            failedErrors.push(`${item.connectorName || item.id}: Cota diária da instituição atingida (dados mantidos)`);
+                        } else {
+                            failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
+                        }
                     } else {
                         successCount++;
                         if (res.importedCount) totalImported += res.importedCount;
@@ -5547,11 +5576,16 @@ function openBankModal() {
                 renderAll();
                 renderPluggyConnections();
 
-                const syncTypeLabel = fullSync ? 'Histórico Completo' : 'Últimos 7 Dias';
+                const syncTypeLabel = isTotal ? 'Histórico Completo' : (mode === '7d' ? 'Últimos 7 Dias' : 'Novidades (48h)');
                 if (failedErrors.length > 0 && successCount === 0) {
-                    alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões) (${syncTypeLabel}):\n• ${failedErrors.join('\n• ')}`);
+                    const allQuota = failedErrors.every(e => e.includes('Cota'));
+                    if (allQuota) {
+                        alert(`ℹ️ Limite de consultas no Open Finance atingido temporariamente pelas instituições bancárias hoje.\n\nSeus dados, extratos e saldos salvos continuam intactos e protegidos! Tente uma nova atualização mais tarde.`);
+                    } else {
+                        alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões) (${syncTypeLabel}):\n• ${failedErrors.join('\n• ')}`);
+                    }
                 } else if (failedErrors.length > 0) {
-                    alert(`⚠️ Sincronização parcial (${successCount} sucesso, ${failedErrors.length} falha) - ${syncTypeLabel}:\n• ${totalImported} novo(s) registro(s) sincronizado(s).\n\nMotivo:\n• ${failedErrors.join('\n• ')}`);
+                    alert(`⚠️ Sincronização parcial (${successCount} sucesso, ${failedErrors.length} aviso) - ${syncTypeLabel}:\n• ${totalImported} novo(s) registro(s) sincronizado(s).\n\nDetalhes:\n• ${failedErrors.join('\n• ')}`);
                 } else {
                     alert(`✅ Sincronização de ${successCount} conexão(ões) concluída com sucesso (${syncTypeLabel})!\n• ${totalImported} novo(s) registro(s) sincronizado(s).`);
                 }
@@ -5560,7 +5594,7 @@ function openBankModal() {
                 alert('Erro durante a sincronização: ' + (err?.message || 'Erro inesperado'));
             } finally {
                 isSyncingAllPluggyInProgress = false;
-                [btn7d, btnTotal].forEach(b => {
+                [btnDelta, btn7d, btnTotal].forEach(b => {
                     if (b) {
                         b.disabled = false;
                         b.style.pointerEvents = '';
@@ -5741,7 +5775,7 @@ function openBankModal() {
 
             const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false, isBatch = false } = options;
 
-            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemIdStr}`) || document.getElementById(`btn-sync-total-${itemIdStr}`);
+            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemIdStr}`) || document.getElementById(`btn-sync-7d-${itemIdStr}`) || document.getElementById(`btn-sync-total-${itemIdStr}`);
             const origHtml = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
@@ -5755,31 +5789,43 @@ function openBankModal() {
             }
 
             try {
+                const effectiveSyncMode = options.syncMode || (fullSync ? 'total' : 'delta');
                 const headers = await getAuthHeaders(true);
                 const resp = await fetch('/api/pluggy-sync', {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ itemId: itemIdStr, triggerUpdate, fullSync })
+                    body: JSON.stringify({
+                        itemId: itemIdStr,
+                        triggerUpdate,
+                        fullSync,
+                        syncMode: effectiveSyncMode
+                    })
                 });
 
                 if (!resp.ok) {
                     const errData = await resp.json().catch(() => ({}));
                     const stepInfo = errData.step ? ` [etapa: ${errData.step}]` : '';
                     const rawMsg = String(errData.error || errData.erro || `Erro HTTP ${resp.status} ao sincronizar dados da Pluggy.`);
-                    const friendlyMsg = rawMsg.toLowerCase().includes('quota')
-                        ? 'Cota temporária de consultas atingida no Open Finance. Aguarde alguns minutos antes de consultar novamente.'
+                    const isQuotaErr = rawMsg.toLowerCase().includes('quota') || rawMsg.toLowerCase().includes('exceeded');
+                    const friendlyMsg = isQuotaErr
+                        ? 'Cota temporária de consultas atingida no Open Finance. Seus dados e saldos continuam ativos.'
                         : (rawMsg + stepInfo);
-                    throw new Error(friendlyMsg);
+                    const e = new Error(friendlyMsg);
+                    if (isQuotaErr) e.isQuota = true;
+                    throw e;
                 }
 
                 const data = await resp.json();
                 if (data && data.ok === false) {
                     const stepInfo = data.step ? ` [etapa: ${data.step}]` : '';
                     const rawMsg = String(data.error || data.erro || 'Erro ao sincronizar dados da Pluggy.');
-                    const friendlyMsg = rawMsg.toLowerCase().includes('quota')
-                        ? 'Cota temporária de consultas atingida no Open Finance. Aguarde alguns minutos antes de consultar novamente.'
+                    const isQuotaErr = rawMsg.toLowerCase().includes('quota') || rawMsg.toLowerCase().includes('exceeded');
+                    const friendlyMsg = isQuotaErr
+                        ? 'Cota temporária de consultas atingida no Open Finance. Seus dados e saldos continuam ativos.'
                         : (rawMsg + stepInfo);
-                    throw new Error(friendlyMsg);
+                    const e = new Error(friendlyMsg);
+                    if (isQuotaErr) e.isQuota = true;
+                    throw e;
                 }
 
                 const itemInfo = data.item || {};
@@ -6281,11 +6327,23 @@ function openBankModal() {
                     importedCount: addedMonthlyCount + addedStmtCount
                 };
             } catch (err) {
-                const errMsg = err?.message || 'Falha ao sincronizar com a Pluggy.';
+                const isQuota = Boolean(
+                    err?.isQuota ||
+                    err?.name === 'QuotaExceededError' ||
+                    String(err?.message || '').toLowerCase().includes('quota') ||
+                    String(err?.message || '').toLowerCase().includes('exceeded')
+                );
+                const errMsg = isQuota
+                    ? 'Limite diário de consultas Open Finance atingido na instituição bancária. Seus dados e saldos salvos foram preservados com segurança.'
+                    : (err?.message || 'Falha ao sincronizar com a Pluggy.');
                 if (!silent) {
-                    alert(errMsg);
+                    if (isQuota) {
+                        alert(`ℹ️ ${errMsg}`);
+                    } else {
+                        alert(errMsg);
+                    }
                 }
-                return { ok: false, error: errMsg };
+                return { ok: false, isQuota: Boolean(isQuota), error: errMsg };
             } finally {
                 activeSyncingItemIds.delete(itemIdStr);
                 if (btn) {

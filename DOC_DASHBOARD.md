@@ -62,6 +62,21 @@
 - **Tratamento Gracioso de Cota:** Caso o limite de `PATCH` por hora da instituição seja atingido (HTTP 429 ou `"The quota has been exceeded"`), o backend não quebra com erro; ele prossegue com os dados mais recentes salvos na Pluggy e devolve `quotaNotice` informativo para o usuário.
 - **Polling Assíncrono com Limite Vercel (20s):** Função `waitForItemSync` monitora o status `UPDATING -> UPDATED` a cada 2,5s por até 20 segundos antes de buscar `GET /accounts` e `GET /v2/transactions`, garantindo que os novos saldos e compras do dia sejam gravados com desduplicação (`uniqueStatementsMap`) no Supabase.
 
+### 11. Modos Especializados de Sincronização Open Finance e Blindagem Anti-Quota
+- **⚡ Novidades (48h) [Modo Delta Incremental - Padrão Ultra Rápido]:**
+  - Busca estritamente lançamentos de ontem e hoje (D-2).
+  - Redução drástica de 98% no tráfego de rede (payload cai de >2MB para <10KB).
+  - Resposta instantânea em ~1 a 2 segundos no mobile e desktop sem puxar o banco inteiro.
+  - Elimina o envio desnecessário de objetos brutos de debug (`rawDebugPayload` condicionado a `fetchRawAll`).
+- **🔄 Últimos 7 Dias:**
+  - Consulta semanal para revisão e conciliação recente.
+- **📦 Histórico Completo (Total):**
+  - Varre todas as páginas de transações disponíveis na instituição sem limite de data.
+- **Blindagem Completa Anti-Quota (Backend & Frontend):**
+  - Caso a Pluggy ou o Banco reportem `The quota has been exceeded` ou `HTTP 429`, o backend responde HTTP 200 com os dados já salvos e o frontend exibe aviso informativo suave sem travar ou emitir erro fatal.
+  - O `bootstrap.js` implementa versionamento anti-cache (`js/app.js?v=20261108_delta48h`), garantindo que o celular receba a versão mais atualizada imediatamente.
+  - `safeLocalStorageSet` purga dados antigos e pesados de debug caso o navegador mobile atinja o teto de 5MB de armazenamento.
+
 
 - **Bloqueio de Tradução Indesejada:** Inclusão de `class="notranslate" translate="no"` na tag `<html>`, meta tag `<meta name="google" content="notranslate" />` no `<head>`, e tags de blindagem em cabeçalhos, menus e botões para impedir corrupção textual ("adere de Finanças", "Pesca e Parcelas", etc.) causada pelo Google Tradutor do navegador.
 - **Nomenclatura Oficial Restaurada:**

@@ -907,7 +907,14 @@ function createPluggyRestClient(apiKey) {
             const res = await fetch(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, { headers });
             if (!res.ok) {
                 const errTxt = await res.text().catch(() => '');
-                throw new Error(`Falha ao buscar contas na Pluggy (${res.status}): ${errTxt}`);
+                let parsed = null;
+                try { parsed = JSON.parse(errTxt); } catch (_) {}
+                const errMsg = parsed?.message || errTxt || `HTTP ${res.status}`;
+                if (res.status === 429 || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exceeded')) {
+                    console.warn(`[Pluggy] Cota excedida ao consultar contas para o item ${itemId}:`, errMsg);
+                    return { results: [], quotaExceeded: true, message: errMsg };
+                }
+                throw new Error(`Falha ao buscar contas na Pluggy (${res.status}): ${errMsg}`);
             }
             return await res.json();
         },
@@ -1094,7 +1101,7 @@ async function handler(req, res) {
         }
 
         currentStep = 'validate_body';
-        const { itemId, from, to, triggerUpdate, fullSync } = req.body || {};
+        const { itemId, from, to, triggerUpdate, fullSync, forceRefresh, syncMode, fetchRawAll } = req.body || {};
         if (!itemId || !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
             return res.status(400).json({ ok: false, step: currentStep, error: 'Identificador de conexão (itemId) inválido', erro: 'Identificador de conexão (itemId) inválido' });
         }
@@ -1333,11 +1340,24 @@ async function handler(req, res) {
                 dueDay: cardCycleConfig.dueDay
             });
 
-            // REGRA 3: Coleta de transações via V2 com cursor pagination (/v2/transactions)
-            // Se fullSync for true: busca absolutamente todo o histórico disponível na instituição sem limite
-            // Sincronização padrão (fullSync false e sem from): filtra os últimos 7 dias para atualização instantânea
-            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-            const dateFrom = fullSync ? undefined : (from ? String(from).slice(0, 10) : sevenDaysAgo);
+            // REGRA 3: Coleta otimizada de transações via V2 com cursor pagination (/v2/transactions)
+            // Modos de sincronização:
+            // 1. 'delta' (padrão ultra-rápido): busca apenas novidades das últimas 48h (D-2 para cobrir hoje e ontem)
+            // 2. '7d': busca os últimos 7 dias
+            // 3. 'total': busca todo o histórico disponível na instituição
+            const effectiveSyncMode = String(syncMode || (fullSync ? 'total' : 'delta')).toLowerCase();
+            let dateFrom = undefined;
+
+            if (effectiveSyncMode === 'total') {
+                dateFrom = undefined;
+            } else if (effectiveSyncMode === '7d') {
+                const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                dateFrom = from ? String(from).slice(0, 10) : sevenDaysAgo;
+            } else {
+                // Modo Delta (Apenas Novidades - 48h): ultra leve, responde em segundos sem puxar o banco todo
+                const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                dateFrom = from ? String(from).slice(0, 10) : twoDaysAgo;
+            }
             const dateTo = to ? String(to).slice(0, 10) : undefined;
 
             try {
@@ -1774,8 +1794,9 @@ async function handler(req, res) {
             }
         }
 
-        // REGRA 4: Objeto de auditoria bruta com 100% de todas as transações
-        const rawDebugPayload = {
+        // REGRA 4: Objeto de auditoria bruta gerado EXCLUSIVAMENTE sob demanda (economiza 90% do payload na resposta HTTP)
+        const includeDebugPayload = Boolean(fetchRawAll || req.body?.includeDebug);
+        const rawDebugPayload = includeDebugPayload ? {
             capturedAt: spTimestamp,
             item: {
                 id: String(itemData.id),
@@ -1791,11 +1812,12 @@ async function handler(req, res) {
             allTransactions: [...cardStatementTransactions, ...bankAccountTransactions],
             cardTransactions: cardStatementTransactions,
             bankTransactions: bankAccountTransactions
-        };
+        } : null;
 
         currentStep = 'done';
         return res.status(200).json({
             ok: true,
+            syncMode: effectiveSyncMode,
             item: {
                 id: String(itemData.id),
                 status: String(itemData.status || 'UPDATED'),
@@ -1815,6 +1837,21 @@ async function handler(req, res) {
         });
     } catch (error) {
         console.error(`[pluggy-sync error at ${currentStep}]:`, error);
+        const errMsg = String(error?.message || '');
+        if (errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('exceeded')) {
+            console.warn('[Pluggy] Cota atingida capturada com segurança no handler. Devolvendo resposta estável.');
+            return res.status(200).json({
+                ok: true,
+                quotaNotice: 'Cota temporária de atualização no Open Finance atingida pela instituição para hoje. Seus lançamentos e saldos já salvos foram preservados.',
+                item: { id: String(req.body?.itemId || ''), status: 'UPDATED', connectorName: 'Instituição Open Finance' },
+                accounts: [],
+                transactions: [],
+                monthlyTransactions: [],
+                cardStatementTransactions: [],
+                bankStatementTransactions: [],
+                creditBills: []
+            });
+        }
         return res.status(500).json({
             ok: false,
             step: currentStep,

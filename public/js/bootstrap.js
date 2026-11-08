@@ -63,9 +63,10 @@
         return;
     }
 
-    // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient
+    // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
     const script = document.createElement('script');
-    script.src = 'js/app.js';
+    const APP_CACHE_VERSION = '20261108_delta48h';
+    script.src = `js/app.js?v=${APP_CACHE_VERSION}`;
     script.defer = true;
     document.body.appendChild(script);
 })();
