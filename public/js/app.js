@@ -2006,6 +2006,7 @@
                             richTxRows.push({
                                 ...baseRow,
                                 transaction_date: txDateIso,
+                                transferred_at: t.transferred_at || t.purchase_date || paidAtIso || null,
                                 paid_at: paidAtIso,
                                 series_id: sId,
                                 entry_kind: eKind,
@@ -2056,6 +2057,7 @@
                                 raw_data: s.raw_data || null,
                                 raw_description: s.raw_description || null,
                                 purchase_date: s.purchase_date || null,
+                                transferred_at: s.transferred_at || s.purchase_date || s.rawPurchaseDate || s.raw_data?.date || null,
                                 installment_number: s.installment_number ?? null,
                                 total_installments: s.total_installments ?? null,
                                 bill_id: s.bill_id || null,
@@ -5361,16 +5363,15 @@ function openBankModal() {
 
                 if (!resp.ok) {
                     const errData = await resp.json().catch(() => ({}));
-                    const rawErr = errData.error || errData.erro || errData.details || `Erro HTTP ${resp.status}`;
                     const stepInfo = errData.step ? ` [etapa: ${errData.step}]` : '';
-                    throw new Error(`${rawErr}${stepInfo}`);
+                    const friendlyMsg = (errData.error || errData.erro || `Erro HTTP ${resp.status} ao sincronizar dados da Pluggy.`) + stepInfo;
+                    throw new Error(friendlyMsg);
                 }
 
-                const data = await resp.json().catch(() => ({}));
+                const data = await resp.json();
                 if (data && data.ok === false) {
-                    const rawErr = data.error || data.erro || 'Falha na sincronização Pluggy.';
                     const stepInfo = data.step ? ` [etapa: ${data.step}]` : '';
-                    throw new Error(`${rawErr}${stepInfo}`);
+                    throw new Error((data.error || data.erro || 'Erro ao sincronizar dados da Pluggy.') + stepInfo);
                 }
 
                 const itemInfo = data.item || {};
@@ -5857,9 +5858,9 @@ function openBankModal() {
                     importedCount: addedMonthlyCount + addedStmtCount
                 };
             } catch (err) {
-                const errMsg = err.message || 'Falha ao sincronizar com a Pluggy.';
+                const errMsg = err?.message || 'Falha ao sincronizar com a Pluggy.';
                 if (!silent) {
-                    alert(`❌ ${errMsg}`);
+                    alert(errMsg);
                 }
                 return { ok: false, error: errMsg };
             }

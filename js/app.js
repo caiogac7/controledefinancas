@@ -2006,6 +2006,7 @@
                             richTxRows.push({
                                 ...baseRow,
                                 transaction_date: txDateIso,
+                                transferred_at: t.transferred_at || t.purchase_date || paidAtIso || null,
                                 paid_at: paidAtIso,
                                 series_id: sId,
                                 entry_kind: eKind,
@@ -2056,6 +2057,7 @@
                                 raw_data: s.raw_data || null,
                                 raw_description: s.raw_description || null,
                                 purchase_date: s.purchase_date || null,
+                                transferred_at: s.transferred_at || s.purchase_date || s.rawPurchaseDate || s.raw_data?.date || null,
                                 installment_number: s.installment_number ?? null,
                                 total_installments: s.total_installments ?? null,
                                 bill_id: s.bill_id || null,
