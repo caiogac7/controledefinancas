@@ -12678,15 +12678,17 @@ Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
 }
 
 
-// Modelos oficiais da família 2.5 / 2.0 (principal + fallbacks homologados)
+// Modelos oficiais da série 3.x (com fallback automático contra 503/404)
 const GEMINI_CANDIDATE_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash'
+    'gemini-3.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-3.8-flash',
+    'gemini-flash-latest'
 ];
 
 async function resolveGeminiModel(apiKey) {
-    return 'gemini-2.5-flash';
+    return 'gemini-3.5-flash';
 }
 
 async function queryGeminiApi(systemInstruction, userPromptText) {
