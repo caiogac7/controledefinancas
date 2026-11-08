@@ -12580,6 +12580,434 @@ let currentSimData = null;
 let currentSimContext = null;
 let currentSimActiveScenario = 'jogadaDeMestreIA';
 
+// =========================================================================
+// SIMULADOR IA v2 — INÍCIO (helpers)
+// Princípio: o CÓDIGO calcula (juros, taxa implícita, impacto no caixa de cada opção);
+// a IA só JULGA (o que é o item, vida útil, essencial?, qual opção escolher) e escreve o texto.
+// =========================================================================
+const SIM_CDI_MENSAL = 0.0085;
+const SIM_DECISOES_VALIDAS = ['PAGAR_A_VISTA', 'PARCELAR_COMO_SIMULADO', 'NEGOCIAR_E_PARCELAR', 'ENTRADA_E_PARCELAS', 'ADIAR_COMPRA', 'REPROVAR'];
+
+function simRound2(n) {
+    return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function simMonthLabel(key) {
+    const k = String(key || '');
+    return /^\d{4}-\d{2}$/.test(k) ? `${k.slice(5, 7)}/${k.slice(0, 4)}` : (k || '-');
+}
+
+/** Meses entre a data da compra e o vencimento da 1ª parcela (mín. 0,25). Sem cartão: 1. */
+function computeFirstInstallmentDelayMonths(simDateStr, cardInfo) {
+    try {
+        if (!cardInfo || !cardInfo.isCredit || !cardInfo.firstBillMonthKey) return 1;
+        const [y, m, d] = String(simDateStr || '').split('-').map(Number);
+        const [fy, fm] = String(cardInfo.firstBillMonthKey).split('-').map(Number);
+        if (!y || !m || !d || !fy || !fm) return 1;
+        const purchase = Date.UTC(y, m - 1, d);
+        const due = Date.UTC(fy, fm - 1, Number(cardInfo.dueDay) || 1);
+        const months = (due - purchase) / (1000 * 60 * 60 * 24 * 30.4375);
+        return Math.max(0.25, Math.min(months, 4));
+    } catch (_) {
+        return 1;
+    }
+}
+
+/**
+ * Taxa de juros mensal IMPLÍCITA no parcelamento: acha i tal que o valor presente das parcelas
+ * (descontadas a i, com a 1ª parcela daqui a `delay` meses) seja igual ao preço à vista.
+ * Retorna 0 se não há juros.
+ */
+function computeImplicitMonthlyRate(cashPrice, installmentValue, n, delay) {
+    if (!(cashPrice > 0) || !(installmentValue > 0) || !(n >= 1)) return 0;
+    const d = Number.isFinite(delay) ? delay : 1;
+    const pv = (i) => {
+        let s = 0;
+        for (let k = 0; k < n; k++) s += installmentValue / Math.pow(1 + i, d + k);
+        return s;
+    };
+    if (pv(0) <= cashPrice + 0.005) return 0;
+    let lo = 0, hi = 1;
+    for (let it = 0; it < 80; it++) {
+        const mid = (lo + hi) / 2;
+        if (pv(mid) > cashPrice) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+}
+
+/**
+ * Teto justo de negociação: o MAIOR total parcelado que ainda não perde para deixar o dinheiro
+ * rendendo no CDI. Leva em conta que as parcelas são pagas ao longo do tempo (não tudo no final).
+ */
+function computeFairInstallmentTotal(cashPrice, n, rate, delay) {
+    const d = Number.isFinite(delay) ? delay : 1;
+    let annuity = 0;
+    for (let k = 0; k < n; k++) annuity += 1 / Math.pow(1 + rate, d + k);
+    return simRound2(n * (cashPrice / annuity));
+}
+
+/** Média das despesas dos últimos meses (para não superestimar a sobra de meses futuros ainda sem lançamentos). */
+function computeHistoricalMonthlyExpense(startMonthKey, monthsBack = 3) {
+    try {
+        if (typeof getHomeVisibleTransactions !== 'function' || typeof addMonthsToKey !== 'function') return 0;
+        const totals = [];
+        for (let k = 1; k <= monthsBack; k++) {
+            const key = addMonthsToKey(startMonthKey, -k);
+            const txs = getHomeVisibleTransactions(key) || [];
+            const total = txs
+                .filter(t => t && t.type === 'expense')
+                .reduce((a, b) => a + (b.isConsolidatedBill
+                    ? Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0)
+                    : Number(b.amount || 0)), 0);
+            if (total > 0) totals.push(total);
+        }
+        return totals.length ? simRound2(totals.reduce((a, b) => a + b, 0) / totals.length) : 0;
+    } catch (_) {
+        return 0;
+    }
+}
+
+/**
+ * Monta as opções reais que a IA pode escolher, cada uma com o impacto EXATO no caixa
+ * (mês atual e pior mês futuro). A IA nunca inventa número: ela escolhe uma destas.
+ */
+function buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaSobra) {
+    const startKey = ctx.curMonthKey;
+    const startOffset = Number(cardInfo?.startOffset || 0);
+    const sobraAtual = Number(base.sobraLivreMesAtual || 0);
+    const jurosTotais = Math.max(0, installmentTotal - cashPrice);
+    const byKey = {};
+    (projecao || []).forEach(m => { byKey[m.monthKey] = Number(m.sobraConservadora); });
+    const monthKeyOf = (offset) => (typeof addMonthsToKey === 'function' ? addMonthsToKey(startKey, offset) : startKey);
+
+    const build = (id, titulo, entrada, k, valorParcela, custoTotalFixo) => {
+        entrada = simRound2(entrada);
+        valorParcela = simRound2(valorParcela);
+        let impactoAtual = entrada;
+        let menor = null;
+        let mesMenor = null;
+        for (let j = 0; j < k; j++) {
+            const key = monthKeyOf(startOffset + j);
+            if (key === startKey) { impactoAtual += valorParcela; continue; }
+            const sobraMes = Object.prototype.hasOwnProperty.call(byKey, key) ? byKey[key] : mediaSobra;
+            const s = sobraMes - valorParcela;
+            if (menor === null || s < menor) { menor = s; mesMenor = key; }
+        }
+        const sobraMesAtualApos = simRound2(sobraAtual - impactoAtual);
+        const menorSobraFutura = menor === null ? null : simRound2(menor);
+        const custoTotal = simRound2(custoTotalFixo !== undefined ? custoTotalFixo : entrada + valorParcela * k);
+        return {
+            id,
+            titulo,
+            entrada,
+            parcelas: k,
+            valorParcela,
+            custoTotal,
+            jurosVsAVista: simRound2(custoTotal - cashPrice),
+            impactoMesAtual: simRound2(impactoAtual),
+            sobraMesAtualApos,
+            menorSobraFutura,
+            mesMenorSobra: mesMenor,
+            cabe: sobraMesAtualApos >= 0 && (menorSobraFutura === null || menorSobraFutura >= 0),
+            folgaSegura: sobraAtual > 0 && sobraMesAtualApos >= sobraAtual * 0.20
+        };
+    };
+
+    const opcoes = [];
+    opcoes.push(build('A_VISTA', 'Pagar 100% à vista (PIX/débito)', cashPrice, 0, 0, cashPrice));
+    opcoes.push(build(
+        'SIMULACAO',
+        `Parcelar como simulado (${numInst}x de ${formatSimMoney(installmentTotal / numInst)})`,
+        0, numInst, installmentTotal / numInst, installmentTotal
+    ));
+
+    [1, 2, 3, 4, 6, 10, 12]
+        .filter(k => k <= Math.max(numInst, 3))
+        .filter(k => !(k === numInst && jurosTotais <= 0.01))
+        .forEach(k => {
+            opcoes.push(build(
+                `NEGOCIAR_${k}X`,
+                k === 1
+                    ? '1x no cartão pelo preço à vista (negociar)'
+                    : `${k}x sem juros pelo preço à vista (negociar)`,
+                0, k, cashPrice / k, cashPrice
+            ));
+        });
+
+    const entradaH = Number(base.entradaSugerida || 0);
+    const kH = Math.max(1, Number(base.parcelasRecomendadas || 1));
+    if (entradaH > 0 && entradaH < cashPrice) {
+        opcoes.push(build(
+            `ENTRADA_${kH}X`,
+            `${formatSimMoney(entradaH)} de entrada + ${kH}x no cartão (sem juros)`,
+            entradaH, kH, (cashPrice - entradaH) / kH, cashPrice
+        ));
+    }
+    return opcoes;
+}
+
+/**
+ * Wrapper: usa o pré-cálculo original (computePurchaseFinancialPreMathBase) e acrescenta o que faltava:
+ * taxa implícita real, projeção conservadora do caixa e as opções com impacto exato.
+ */
+function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, installmentsCount, simDateStr, ctx, cardInfo, sixMonthsSummary, schedule) {
+    const base = computePurchaseFinancialPreMathBase(itemName, cashPrice, installmentTotal, installmentsCount, simDateStr, ctx, cardInfo, sixMonthsSummary, schedule);
+    const numInst = Math.max(1, installmentsCount || 1);
+    const parcela = installmentTotal / numInst;
+    const delay = computeFirstInstallmentDelayMonths(simDateStr, cardInfo);
+    const taxa = computeImplicitMonthlyRate(cashPrice, parcela, numInst, delay);
+
+    const hist = computeHistoricalMonthlyExpense(ctx.curMonthKey);
+    const projecao = (sixMonthsSummary || []).map(m => ({
+        ...m,
+        despesaHistoricaMedia: hist,
+        sobraConservadora: simRound2(Number(m.rec || 0) - Math.max(Number(m.desp || 0), hist))
+    }));
+    const mediaConservadora = projecao.length
+        ? simRound2(projecao.reduce((a, m) => a + m.sobraConservadora, 0) / projecao.length)
+        : base.mediaSobraFutura;
+
+    const opcoes = buildPurchaseDecisionOptions(cashPrice, installmentTotal, numInst, ctx, cardInfo, projecao, base, mediaConservadora);
+
+    return {
+        ...base,
+        mediaSobraFuturaRegistrada: base.mediaSobraFutura,
+        // A partir daqui toda a UI, o banco e a IA usam a média CONSERVADORA (considera o gasto histórico).
+        // Para voltar ao comportamento antigo, troque por: mediaSobraFutura: base.mediaSobraFutura
+        mediaSobraFutura: mediaConservadora,
+        taxaImplicitaMes: Number((taxa * 100).toFixed(3)),
+        delayPrimeiraParcelaMeses: Number(delay.toFixed(2)),
+        despesaHistoricaMedia: hist,
+        projecaoConservadora: projecao,
+        opcoes
+    };
+}
+
+function buildSimulationResponseSchema(preMath) {
+    const ids = (preMath.opcoes || []).map(o => o.id).concat(['NENHUMA']);
+    const itemProps = {
+        categoria: { type: 'STRING' },
+        essencial: { type: 'BOOLEAN' },
+        vidaUtilMeses: { type: 'INTEGER' },
+        exigeInstalacao: { type: 'BOOLEAN' },
+        custoInstalacaoMin: { type: 'NUMBER' },
+        custoInstalacaoMax: { type: 'NUMBER' },
+        observacao: { type: 'STRING' }
+    };
+    const order = [
+        'raciocinio', 'item', 'decisao', 'opcaoEscolhidaId', 'vereditoTitulo', 'vereditoResumo',
+        'observacaoAVista', 'observacaoSimulacao', 'explicacaoJogada',
+        'scriptBarganhaBalcao', 'alertaSazonalidade', 'alertaCustoAcoplado'
+    ];
+    return {
+        type: 'OBJECT',
+        properties: {
+            raciocinio: { type: 'STRING', description: 'Raciocínio passo a passo (5 a 8 frases). Preencha antes de decidir.' },
+            item: { type: 'OBJECT', properties: itemProps, required: Object.keys(itemProps), propertyOrdering: Object.keys(itemProps) },
+            decisao: { type: 'STRING', enum: SIM_DECISOES_VALIDAS },
+            opcaoEscolhidaId: { type: 'STRING', enum: ids },
+            vereditoTitulo: { type: 'STRING' },
+            vereditoResumo: { type: 'STRING' },
+            observacaoAVista: { type: 'STRING' },
+            observacaoSimulacao: { type: 'STRING' },
+            explicacaoJogada: { type: 'STRING' },
+            scriptBarganhaBalcao: { type: 'STRING' },
+            alertaSazonalidade: { type: 'STRING' },
+            alertaCustoAcoplado: { type: 'STRING' }
+        },
+        required: order,
+        propertyOrdering: order
+    };
+}
+
+function parseAiDecisionResponse(rawText) {
+    if (!rawText || typeof rawText !== 'string') return null;
+    const clean = rawText.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const a = clean.indexOf('{');
+    const b = clean.lastIndexOf('}');
+    if (a === -1 || b <= a) return null;
+    try {
+        const parsed = JSON.parse(clean.slice(a, b + 1));
+        return (parsed && typeof parsed === 'object' && parsed.decisao) ? parsed : null;
+    } catch (err) {
+        console.warn('Falha no JSON.parse da decisão da IA:', err, clean);
+        return null;
+    }
+}
+
+function simDecisionFromOptionId(id) {
+    const s = String(id || '');
+    if (s === 'A_VISTA') return 'PAGAR_A_VISTA';
+    if (s === 'SIMULACAO') return 'PARCELAR_COMO_SIMULADO';
+    if (s.startsWith('NEGOCIAR_')) return 'NEGOCIAR_E_PARCELAR';
+    if (s.startsWith('ENTRADA_')) return 'ENTRADA_E_PARCELAS';
+    return null;
+}
+
+function simBestFeasibleOption(opcoes, vidaUtilMeses) {
+    let ok = (opcoes || []).filter(o => o.cabe);
+    if (vidaUtilMeses > 0) {
+        const dentroDoPrazo = ok.filter(o => o.parcelas / vidaUtilMeses <= 0.5);
+        if (dentroDoPrazo.length) ok = dentroDoPrazo;
+    }
+    if (!ok.length) return null;
+    const folga = (o) => (o.menorSobraFutura === null ? 1e12 : o.menorSobraFutura);
+    // 1º folga segura no mês atual, 2º menor custo total, 3º maior sobra no PIOR mês futuro
+    ok.sort((a, b) => (Number(b.folgaSegura) - Number(a.folgaSegura)) || (a.custoTotal - b.custoTotal) || (folga(b) - folga(a)));
+    return ok[0];
+}
+
+function computeSimulationScore(decisao, opcao, vidaUtilMeses, essencial, cashPrice) {
+    if (decisao === 'REPROVAR') return 15;
+    if (decisao === 'ADIAR_COMPRA') return 30;
+    if (!opcao) return 50;
+    let score = 100;
+    const jurosPct = cashPrice > 0 ? (Math.max(0, opcao.jurosVsAVista) / cashPrice) * 100 : 0;
+    score -= Math.min(40, jurosPct * 2);
+    if (!opcao.folgaSegura) score -= 15;
+    const pctVida = vidaUtilMeses > 0 ? opcao.parcelas / vidaUtilMeses : 0;
+    if (pctVida > 0.5) score -= 20; else if (pctVida > 0.35) score -= 8;
+    if (essencial === false) score -= 5;
+    return Math.max(5, Math.min(98, Math.round(score)));
+}
+
+/**
+ * Converte a decisão da IA (schema novo) para o formato que a UI já consome (cardsComparativos/analiseTatica),
+ * validando a escolha contra as opções reais. Devolve null se a resposta for inutilizável.
+ */
+function convertAiDecisionToSimulationResult(rawText, preMath, cashPrice, installmentTotal, installmentsCount) {
+    const ai = parseAiDecisionResponse(rawText);
+    if (!ai) return null;
+
+    const numInst = Math.max(1, installmentsCount || 1);
+    const opcoes = preMath.opcoes || [];
+    const item = (ai.item && typeof ai.item === 'object') ? ai.item : {};
+    const essencial = item.essencial !== false;
+    const notes = [];
+    const vidaUtil = Number(item.vidaUtilMeses) > 0 ? Number(item.vidaUtilMeses) : Number(preMath.vidaUtilMeses || 36);
+
+    let decisao = SIM_DECISOES_VALIDAS.includes(ai.decisao) ? ai.decisao : null;
+    let opcao = opcoes.find(o => o.id === ai.opcaoEscolhidaId) || null;
+    const semOpcao = decisao === 'ADIAR_COMPRA' || decisao === 'REPROVAR';
+    const melhor = simBestFeasibleOption(opcoes, vidaUtil);
+
+    if (decisao === 'REPROVAR' && melhor) {
+        // A IA reprovou, mas existe opção que cabe no caixa: incoerente com a regra 1.
+        notes.push(`Ajuste de segurança: existe uma opção que cabe no caixa (${melhor.titulo}).`);
+        decisao = null;
+        opcao = melhor;
+    }
+
+    if (decisao !== 'ADIAR_COMPRA' && decisao !== 'REPROVAR') {
+        if (!opcao) {
+            opcao = melhor;
+            if (opcao) notes.push(`Ajuste de segurança: a opção escolhida era inválida; usamos "${opcao.titulo}".`);
+        } else if (!opcao.cabe) {
+            if (melhor) {
+                const onde = opcao.sobraMesAtualApos < 0 ? 'o mês atual' : simMonthLabel(opcao.mesMenorSobra);
+                notes.push(`Ajuste de segurança: "${opcao.titulo}" deixaria ${onde} no negativo; trocamos por "${melhor.titulo}".`);
+                opcao = melhor;
+            } else {
+                decisao = essencial ? 'REPROVAR' : 'ADIAR_COMPRA';
+                opcao = null;
+            }
+        }
+        if (opcao && decisao !== 'ADIAR_COMPRA' && decisao !== 'REPROVAR') decisao = simDecisionFromOptionId(opcao.id);
+        if (!opcao && !decisao) decisao = essencial ? 'REPROVAR' : 'ADIAR_COMPRA';
+    }
+    if (!decisao) return null;
+
+    const prazoRef = opcao ? Math.max(opcao.parcelas, 0) : numInst;
+    const pctVida = Math.min(100, Math.round((prazoRef / vidaUtil) * 100));
+    const statusVidaUtil = pctVida <= 35
+        ? `Prazo Saudável (Quita em ${pctVida}% da vida útil)`
+        : (pctVida <= 65
+            ? `Atenção Moderada (Quita em ${pctVida}% da vida útil)`
+            : `Alerta: Comprometimento excessivo (${pctVida}% da vida útil)`);
+
+    const tagPorDecisao = {
+        PAGAR_A_VISTA: 'Economia Máxima à Vista',
+        PARCELAR_COMO_SIMULADO: (opcao && opcao.jurosVsAVista > 0.01) ? 'Parcelamento Aceitável' : 'Arbitragem de Lucro',
+        NEGOCIAR_E_PARCELAR: 'Estratégia Ideal',
+        ENTRADA_E_PARCELAS: 'Equilíbrio Perfeito',
+        ADIAR_COMPRA: 'Compra Adiada',
+        REPROVAR: 'Compra Reprovada'
+    };
+    const tituloSemOpcao = decisao === 'ADIAR_COMPRA' ? 'Adiar a compra' : 'Compra não recomendada agora';
+
+    const resumoBase = String(ai.vereditoResumo || '').trim();
+    return {
+        scoreEficiencia: computeSimulationScore(decisao, opcao, vidaUtil, item.essencial, cashPrice),
+        vereditoTitulo: String(ai.vereditoTitulo || '').trim() || undefined,
+        vereditoResumo: [resumoBase, ...notes].filter(Boolean).join(' ') || undefined,
+        cardsComparativos: {
+            aVista: { observacao: String(ai.observacaoAVista || '').trim() },
+            simulacaoUsuario: { observacao: String(ai.observacaoSimulacao || '').trim() },
+            jogadaDeMestreIA: {
+                tituloManobra: opcao ? opcao.titulo : tituloSemOpcao,
+                entradaAVista: opcao ? opcao.entrada : 0,
+                parcelasRecomendadas: opcao ? Math.max(1, opcao.parcelas) : 1,
+                custoTotalEstimado: opcao ? opcao.custoTotal : 0,
+                statusTag: tagPorDecisao[decisao],
+                explicacao: String(ai.explicacaoJogada || '').trim()
+            }
+        },
+        analiseTatica: {
+            vidaUtilMeses: vidaUtil,
+            statusVidaUtil,
+            scriptBarganhaBalcao: String(ai.scriptBarganhaBalcao || '').trim() || undefined,
+            alertaSazonalidade: String(ai.alertaSazonalidade || '').trim() || preMath.alertaSazonalidade,
+            alertaCustoAcoplado: String(ai.alertaCustoAcoplado || '').trim() || preMath.alertaCustoAcoplado
+        },
+        __meta: { decisao, opcaoId: opcao ? opcao.id : null, raciocinio: String(ai.raciocinio || ''), item, notes }
+    };
+}
+
+/** Depois do sanitize: força os números dos cards a serem exatamente os da opção escolhida. */
+function applyDecisionGuardrails(finalSimData, aiResult, preMath, cashPrice, installmentTotal) {
+    try {
+        const meta = aiResult && aiResult.__meta;
+        if (!meta || !finalSimData || !finalSimData.cardsComparativos) return finalSimData;
+        const opcoes = preMath.opcoes || [];
+        const opcao = opcoes.find(o => o.id === meta.opcaoId) || null;
+        const sim = opcoes.find(o => o.id === 'SIMULACAO') || null;
+        const cards = finalSimData.cardsComparativos;
+        const mestre = cards.jogadaDeMestreIA || (cards.jogadaDeMestreIA = {});
+
+        if (sim && cards.simulacaoUsuario) {
+            cards.simulacaoUsuario.sobraMensalFutura = sim.menorSobraFutura !== null ? sim.menorSobraFutura : preMath.mediaSobraFutura;
+        }
+
+        if (opcao) {
+            mestre.entradaAVista = opcao.entrada;
+            mestre.parcelasRecomendadas = Math.max(1, opcao.parcelas);
+            mestre.valorParcelaRecomendada = opcao.valorParcela;
+            mestre.custoTotalEstimado = opcao.custoTotal;
+            mestre.sobraMesAtualAposEntrada = opcao.sobraMesAtualApos;
+            mestre.sobraMensalFutura = opcao.menorSobraFutura !== null ? opcao.menorSobraFutura : preMath.mediaSobraFutura;
+            finalSimData.economiaGeradaReais = simRound2(Math.max(0, installmentTotal - opcao.custoTotal));
+        } else {
+            mestre.entradaAVista = 0;
+            mestre.parcelasRecomendadas = 1;
+            mestre.valorParcelaRecomendada = 0;
+            mestre.custoTotalEstimado = 0;
+            mestre.sobraMesAtualAposEntrada = simRound2(preMath.sobraLivreMesAtual);
+            mestre.sobraMensalFutura = simRound2(preMath.mediaSobraFutura);
+            finalSimData.economiaGeradaReais = 0;
+        }
+        finalSimData.scoreEficiencia = aiResult.scoreEficiencia;
+        finalSimData.decisao = meta.decisao;
+        finalSimData.opcaoEscolhidaId = meta.opcaoId;
+        finalSimData.raciocinioIA = meta.raciocinio;
+        finalSimData.itemAnalise = meta.item;
+        finalSimData.opcoesAvaliadas = opcoes;
+    } catch (err) {
+        console.warn('applyDecisionGuardrails falhou, mantendo resultado sem ajuste:', err);
+    }
+    return finalSimData;
+}
+// SIMULADOR IA v2 — FIM (helpers)
+
 /**
  * 1. PRÉ-CÁLCULO MATEMÁTICO FINANCEIRO NO JS (ANTES DA IA)
  * Implementa as 5 evoluções solicitadas:
@@ -12589,7 +13017,7 @@ let currentSimActiveScenario = 'jogadaDeMestreIA';
  * - Detecção de Custo Acoplado (Mão de Obra / Instalação)
  * - Estratégia Híbrida Automática (Entrada PIX + Menos Parcelas)
  */
-function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, installmentsCount, simDateStr, ctx, cardInfo, sixMonthsSummary, schedule) {
+function computePurchaseFinancialPreMathBase(itemName, cashPrice, installmentTotal, installmentsCount, simDateStr, ctx, cardInfo, sixMonthsSummary, schedule) {
     const numInst = Math.max(1, installmentsCount || 1);
     const actualInstallment = installmentTotal / numInst;
     
@@ -12603,7 +13031,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
 
     // 1. TETO MATEMÁTICO DE NEGOCIAÇÃO: valorAVista * (1 + 0.0085)^parcelas
     const taxaCdiMensal = 0.0085;
-    const valorMaximoJustoParcelado = Number((cashPrice * Math.pow(1 + taxaCdiMensal, numInst)).toFixed(2));
+    const valorMaximoJustoParcelado = computeFairInstallmentTotal(cashPrice, numInst, taxaCdiMensal, computeFirstInstallmentDelayMonths(simDateStr, cardInfo));
     const cobrandoJurosAcimaDoCdi = installmentTotal > valorMaximoJustoParcelado;
 
     // 2. ARBITRAGEM QUANDO FOR SEM JUROS: Rendimento Líquido do Valor à Vista a 0,85% a.m. com saques mensais
@@ -12632,7 +13060,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
 
     // 4. DETECÇÃO DE CUSTO ACOPLADO (MÃO DE OBRA / INSTALAÇÃO)
     const lowerItem = String(itemName || '').toLowerCase();
-    const regexMaoDeObra = /pneu|roda|freio|pastilha|oleo|óleo|amortecedor|suspens|mecanic|mecânic|moto|carro|revis|bateria|correia|radiador|filtro|ar[\\s-]condicionado|coifa|fog[aã]o|aquecedor|chuveiro|porcelan|piso|constru|instal|manuten/i;
+    const regexMaoDeObra = /pneu|roda|freio|pastilha|oleo|óleo|amortecedor|suspens|mecanic|mecânic|moto|carro|revis|bateria|correia|radiador|filtro|ar[\s-]condicionado|coifa|fog[aã]o|aquecedor|chuveiro|porcelan|piso|constru|instal|manuten/i;
     const temCustoAcoplado = regexMaoDeObra.test(lowerItem);
     const estimativaMaoDeObra = temCustoAcoplado ? Math.min(300, Math.max(60, Math.round(cashPrice * 0.15))) : 0;
     const alertaCustoAcoplado = temCustoAcoplado
@@ -12647,7 +13075,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
         vidaUtilMeses = 10;
     } else if (/celular|smartphone|capacete|bateria|jaqueta|[oó]culos|computador|notebook|tablet/i.test(lowerItem)) {
         vidaUtilMeses = 36;
-    } else if (/geladeira|fog[aã]o|m[aá]quina|ar[\\s-]condicionado|sof[aá]|m[oó]vel|tv|televis|cama/i.test(lowerItem)) {
+    } else if (/geladeira|fog[aã]o|m[aá]quina|ar[\s-]condicionado|sof[aá]|m[oó]vel|tv|televis|cama/i.test(lowerItem)) {
         vidaUtilMeses = 60;
     }
     const pctVidaUtil = Math.min(100, Math.round((numInst / vidaUtilMeses) * 100));
@@ -12771,80 +13199,40 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
 }
 
 
-const SYSTEM_PROMPT_FINANCIAL_ADVISOR = `Você é um Consultor Estrategista de Finanças Pessoais e Fluxo de Caixa. Sua função é analisar simulações de compra cruzando inteligência de caixa real, virada de fatura, vida útil do bem, arbitragem financeira e poder de negociação.
+// SIMULADOR IA v2 — INÍCIO (prompts)
+const SYSTEM_PROMPT_FINANCIAL_ADVISOR = `Você é um consultor financeiro pessoal sênior (crédito, fluxo de caixa e poder de compra no Brasil). Sua tarefa é DECIDIR se o usuário deve pagar à vista, parcelar como simulou, negociar, dar entrada, adiar ou desistir da compra.
 
-Você DEVE responder ESTRITAMENTE em formato JSON estruturado (sem texto antes ou depois, sem markdown adicional além do bloco json puro).
+COMO TRABALHAR
+- Todos os números (juros, taxa implícita, teto de negociação, impacto no caixa de cada opção) JÁ FORAM CALCULADOS pelo sistema. Use-os exatamente como estão. NÃO recalcule e NÃO invente valores.
+- O que o sistema NÃO sabe e você deve julgar: o que é o item, se é essencial, a vida útil realista, se exige instalação ou mão de obra (e quanto custa) e qual opção é a melhor.
+- Escolha APENAS entre as opções listadas, informando o ID em opcaoEscolhidaId. Use "NENHUMA" somente se a decisão for ADIAR_COMPRA ou REPROVAR.
+- Preencha "raciocinio" PRIMEIRO, em 5 a 8 frases, seguindo os passos abaixo. Só depois preencha as demais chaves.
 
-### 5 EVOLUÇÕES OBRIGATÓRIAS DO MOTOR DE CÁLCULO:
+PASSOS DO RACIOCÍNIO
+1. Item: o que é, para que serve, é essencial (saúde, trabalho, segurança, moradia, transporte) ou dispensável? Qual a vida útil realista em meses?
+2. Juros: a taxa implícita mensal está acima do CDI (0,85% a.m.)? Quanto custa a mais em reais?
+3. Caixa: quais opções cabem (cabe=SIM) e quais deixam folga segura (folga segura=SIM, ou seja, sobra >= 20% da sobra atual)?
+4. Prazo: quantas parcelas em relação à vida útil? Acima de 50% da vida útil é ruim.
+5. Custo acoplado: o item exige montagem, instalação, alinhamento, balanceamento ou serviço técnico? Estime a faixa em R$.
+6. Decisão pelas regras abaixo.
 
-1. CÁLCULO DE CONTRAPROPOSTA MÁXIMA (TETO MATEMÁTICO DE NEGOCIAÇÃO):
-- O Teto Justo de Negociação a 0,85% a.m. é calculado no JS por: valorMaximoJustoParcelado = valorAVista * (1 + 0.0085)^parcelas.
-- Se o valorTotalParcelado for MAIOR que o valorMaximoJustoParcelado, gere no campo "scriptBarganhaBalcao" um script curto de balcão/WhatsApp dizendo exatamente até qual valor em R$ vale a pena contrapropor ao vendedor para parcelar sem perder para o CDI.
+REGRAS DE DECISÃO (aplique na ordem; use a primeira que servir)
+1. Nenhuma opção cabe no caixa -> REPROVAR (opcaoEscolhidaId = NENHUMA). Se o item for essencial, diga como buscar alternativa (entrada menor, outro modelo, renda extra).
+2. Item dispensável e nenhuma opção deixa folga segura -> ADIAR_COMPRA (opcaoEscolhidaId = NENHUMA).
+3. Simulação sem juros (ou taxa implícita <= 0,85% a.m.), que cabe, com prazo <= 50% da vida útil -> PARCELAR_COMO_SIMULADO (opção SIMULACAO). O dinheiro rende no CDI enquanto parcela.
+4. Taxa implícita > 0,85% a.m. e a opção A_VISTA cabe com folga segura -> PAGAR_A_VISTA (opção A_VISTA).
+5. Taxa implícita > 0,85% a.m. e A_VISTA não cabe (ou não deixa folga segura) -> escolha, entre as opções NEGOCIAR_* e ENTRADA_* que cabem, a de menor custo total que respeite o prazo de vida útil. O scriptBarganhaBalcao é obrigatório.
+6. Se nenhuma regra anterior servir, escolha a opção que cabe com o menor custo total.
 
-2. ARBITRAGEM QUANDO FOR SEM JUROS (valorTotalParcelado === valorAVista):
-- O JS calcula quanto o valor à vista rende líquido no CDI a 0,85% a.m. deduzido mês a mês pelas parcelas.
-- Recomende o parcelamento máximo saudável dentro da vida útil do bem + sugira:
-  a) "Antecipação de Parcelas no App do Banco" (para ganhar desconto extra no cartão de crédito).
-  b) "Deixar Rendendo em Caixinha 100% CDI" para colher os rendimentos líquidos mês a mês.
-
-3. RADAR DE SAZONALIDADE DE CALENDÁRIO:
-- Se as parcelas atravessarem Janeiro, Fevereiro ou Março, emita no "alertaSazonalidade" um aviso sobre impostos/taxas de início de ano (IPVA, IPTU, matrícula escolar), recomendando quitar antes de Janeiro ou não comprometer a sobra.
-
-4. DETECÇÃO DE CUSTO ACOPLADO (MÃO DE OBRA / INSTALAÇÃO):
-- Analise o nome do Item. Se for peça automotiva/moto (ex: pneu, freio, óleo, relação, bateria), eletrodoméstico de instalação (ar condicionado, coifa, chuveiro, aquecedor) ou item que exija serviço técnico, adicione no "alertaCustoAcoplado" um lembrete deduzindo uma estimativa de mão de obra à vista no caixa do mês atual.
-
-5. PODER DE NEGOCIAÇÃO / ESTRATÉGIA HÍBRIDA:
-- Se valorAVista > sobraLivreMesAtual E jurosTotais > 0:
-  Recomende a Estratégia Híbrida: dar entrada sugerida (~65% da sobra do mês) e parcelar o saldo em prazo que caiba em até 60% da sobra futura.
-- Se valorAVista <= sobraLivreMesAtual E jurosPercentual >= 8%:
-  PROÍBA o parcelamento com juros! Recomende pagar 100% à vista (ou 1x no cartão após a virada) ou usar o Colchão Invertido (pagar o bem à vista e usar o cartão de crédito para despesas normais em 1x sem juros).
-- Regra da Virada da Fatura: se diaCompra >= diaFechamento, a 1ª parcela só cai no mês seguinte (impacto R$ 0,00 no mês atual).
-
-### SCHEMA DO JSON DE RETORNO OBRIGATÓRIO (NENHUM OUTRO TEXTO):
-{
-  "scoreEficiencia": 88,
-  "vereditoTitulo": "ESTRATÉGIA HÍBRIDA: R$ 500 À VISTA + 10x NO CARTÃO",
-  "vereditoResumo": "Não parcele tudo em 18x pagando R$ 500 de juros. Use R$ 500 da sua sobra de Novembro como entrada e parcele o restante em 10x (1ª só em Dezembro).",
-  "economiaGeradaReais": 300.00,
-  "cardsComparativos": {
-    "aVista": {
-      "viavelNoCaixaAtual": false,
-      "custoTotal": 3000.00,
-      "saldoRestanteMesAtual": -2255.80,
-      "statusTag": "Caixa Insuficiente em Nov",
-      "observacao": "Fura sua sobra livre de R$ 744,20 neste mês."
-    },
-    "simulacaoUsuario": {
-      "parcelas": 18,
-      "valorParcela": 194.44,
-      "custoTotal": 3500.00,
-      "jurosReais": 500.00,
-      "jurosPercentual": 16.7,
-      "sobraMensalFutura": 249.76,
-      "statusTag": "Juros Pesados (+16.7%)",
-      "observacao": "Cabe no mês, mas prende sua renda por 18 meses e perde R$ 500 para juros."
-    },
-    "jogadaDeMestreIA": {
-      "tituloManobra": "R$ 500 à vista + 10x R$ 270,00",
-      "entradaAVista": 500.00,
-      "parcelasRecomendadas": 10,
-      "valorParcelaRecomendada": 270.00,
-      "custoTotalEstimado": 3200.00,
-      "sobraMesAtualAposEntrada": 244.20,
-      "sobraMensalFutura": 174.20,
-      "statusTag": "Equilíbrio Perfeito",
-      "explicacao": "Mantém R$ 244,20 livres em Nov, aproveita a virada do cartão para jogar a 1ª parcela para Dez e quita 8 meses antes."
-    }
-  },
-  "analiseTatica": {
-    "vidaUtilMeses": 36,
-    "statusVidaUtil": "Prazo Saudável (Quita em 28% da vida útil)",
-    "tetoMaximoNegociacaoReais": 3266.00,
-    "scriptBarganhaBalcao": "Tenho R$ 500 agora no PIX de entrada. Fecho o restante se fizer em 10x sem passar de R$ 2.700 no cartão.",
-    "alertaSazonalidade": "Atravessa Jan/Fev (IPVA/IPTU). Evite parcelas que deixem menos de R$ 150 de folga.",
-    "alertaCustoAcoplado": "Reserve ~R$ 50 a R$ 100 para possíveis custos acessórios/instalação."
-  }
-}`;
+COMO ESCREVER
+- Português do Brasil, direto, citando o NOME do item e os números reais do sistema. É proibido texto genérico que serviria para qualquer compra.
+- vereditoTitulo: até 70 caracteres, em maiúsculas. vereditoResumo: 2 a 3 frases.
+- observacaoAVista e observacaoSimulacao: uma frase cada, coerente com os números (cabe/não cabe, juros).
+- explicacaoJogada: por que a opção escolhida é a melhor para ESTE item e ESTE caixa.
+- scriptBarganhaBalcao: frase pronta para falar no balcão ou no WhatsApp, citando valores do sistema (teto de negociação, preço à vista). Se a decisão for PAGAR_A_VISTA, peça desconto no PIX.
+- alertaSazonalidade: use o radar do sistema; se não atravessa Jan/Fev/Mar, diga que não há risco sazonal.
+- alertaCustoAcoplado: se o item exige instalação, informe a faixa em R$ e diga para reservar à vista; senão, diga que não há custo extra previsto.
+- Responda SOMENTE com o JSON do schema, sem markdown e sem texto fora do JSON.`;
 
 
 function buildUserPromptPayload(itemName, cashPrice, installmentTotal, installmentsCount, simDateStr, ctx, sixMonthsList, cardInfo, schedule, preMath) {
@@ -12854,67 +13242,73 @@ function buildUserPromptPayload(itemName, cashPrice, installmentTotal, installme
     const pctJuros = cashPrice > 0 ? ((diffReais / cashPrice) * 100).toFixed(2) : '0.00';
 
     const parts = (simDateStr || '').split('-');
-    const anoC = parts[0] || '2026';
-    const mesC = parts[1] || '11';
-    const diaC = parts[2] || '01';
-    const dataCompraFormatada = `${diaC}/${mesC}/${anoC}`;
+    const dataCompraFormatada = `${parts[2] || '01'}/${parts[1] || '11'}/${parts[0] || '2026'}`;
 
-    const sixMonthsStr = (sixMonthsList || []).map(m =>
-        `  * Mês +${m.idx} (${m.nome}): Receita R$ ${m.rec.toFixed(2)} | Despesas Fixas/Parcelas R$ ${m.desp.toFixed(2)} | Saldo Livre Previsto: R$ ${m.sobra.toFixed(2)}`
-    ).join('\\n');
+    const taxa = Number(preMath.taxaImplicitaMes || 0);
+    const veredictoTaxa = diffReais <= 0.01
+        ? 'SEM JUROS'
+        : (preMath.cobrandoJurosAcimaDoCdi ? 'ACIMA do CDI (juros abusivos)' : 'ABAIXO ou igual ao CDI (aceitável)');
 
-    let cardDetailsText = '';
+    const projecao = Array.isArray(preMath.projecaoConservadora) && preMath.projecaoConservadora.length
+        ? preMath.projecaoConservadora
+        : (sixMonthsList || []).map(m => ({ ...m, despesaHistoricaMedia: 0, sobraConservadora: m.sobra }));
+    const projecaoStr = projecao.map(m =>
+        `  * Mês +${m.idx} (${m.nome}): receita ${formatSimMoney(m.rec)} | despesa lançada ${formatSimMoney(m.desp)} | gasto médio histórico ${formatSimMoney(m.despesaHistoricaMedia)} | SOBRA CONSERVADORA ${formatSimMoney(m.sobraConservadora)}`
+    ).join('\n');
+
+    let cartaoTexto;
     if (cardInfo && cardInfo.isCredit) {
-        cardDetailsText = `- Forma de Pagamento: Cartão de Crédito (${cardInfo.cardName || 'Cartão'})
-- Dia de Fechamento da Fatura (Virada): Dia ${cardInfo.closingDay}
-- Dia de Vencimento da Fatura (Pagamento): Dia ${cardInfo.dueDay}
-- Cenário Aplicado: ${cardInfo.ruleDescription || (cardInfo.invoiceTurned ? 'Fatura Fechada (Virou)' : 'Fatura Aberta')}
-- Data de Vencimento da 1ª Parcela: ${cardInfo.firstBillDateStr || cardInfo.firstBillMonthLabel} (Mês: ${cardInfo.firstBillMonthLabel})`;
+        cartaoTexto = `- Cartão: ${cardInfo.cardName || 'Cartão'} | fecha dia ${cardInfo.closingDay} | vence dia ${cardInfo.dueDay}
+- Situação: ${cardInfo.ruleDescription || (cardInfo.invoiceTurned ? 'Fatura virou' : 'Fatura aberta')}
+- 1ª parcela vence em: ${cardInfo.firstBillDateStr || cardInfo.firstBillMonthLabel} (${cardInfo.firstBillMonthLabel}) — ${preMath.delayPrimeiraParcelaMeses} mês(es) após a compra`;
     } else {
-        cardDetailsText = `- Forma de Pagamento: À Vista / Pix / Débito / Dinheiro
-- Desembolso Integral: Imediato na data da compra (${dataCompraFormatada}, impacto em ${ctx.currentMonthLabel})`;
+        cartaoTexto = `- Pagamento à vista imediato na data da compra (${dataCompraFormatada}, impacto em ${ctx.currentMonthLabel})`;
     }
 
-    const scheduleListText = Array.isArray(schedule) && schedule.length > 0
-        ? schedule.map(s => `  * Parcela ${s.num}/${numInst}: Vencimento em ${s.dueDate} (${s.monthLabel}) -> R$ ${s.amount.toFixed(2)}`).join('\\n')
-        : `  * 1ª Parcela em ${cardInfo?.firstBillMonthLabel || ctx.currentMonthLabel} -> R$ ${actualInstallment.toFixed(2)}`;
+    const sim = (preMath.opcoes || []).find(o => o.id === 'SIMULACAO');
+    const opcoesStr = (preMath.opcoes || []).map(o => {
+        const pior = o.menorSobraFutura === null
+            ? 'sem parcelas futuras'
+            : `${formatSimMoney(o.menorSobraFutura)} em ${simMonthLabel(o.mesMenorSobra)}`;
+        const forma = o.parcelas > 0 && o.valorParcela > 0
+            ? `${o.parcelas}x de ${formatSimMoney(o.valorParcela)}`
+            : 'sem parcelas';
+        return `- [${o.id}] ${o.titulo} | entrada ${formatSimMoney(o.entrada)} | ${forma} | custo total ${formatSimMoney(o.custoTotal)} (juros vs à vista: ${formatSimMoney(o.jurosVsAVista)}) | sobra do mês atual após: ${formatSimMoney(o.sobraMesAtualApos)} | pior mês futuro: ${pior} | cabe: ${o.cabe ? 'SIM' : 'NÃO'} | folga segura: ${o.folgaSegura ? 'SIM' : 'NÃO'}`;
+    }).join('\n');
 
-    return `Analise e estruture a simulação no JSON oficial com base nos seguintes dados e pré-cálculos matemáticos já realizados:
+    return `Analise esta decisão de compra. Todos os números abaixo são do sistema; use-os sem recalcular.
 
-### 1. DADOS DA COMPRA:
-- Item: ${itemName}
-- Valor à Vista: R$ ${cashPrice.toFixed(2)}
-- Valor Total Parcelado: R$ ${installmentTotal.toFixed(2)}
-- Parcelas Simuladas: ${numInst}x de R$ ${actualInstallment.toFixed(2)}
-- Juros embutidos: R$ ${diffReais.toFixed(2)} (${pctJuros}% sobre o valor à vista)
-- Data da Compra: ${dataCompraFormatada}
+## 1. COMPRA
+- Item informado pelo usuário: "${itemName}"
+- Preço à vista: ${formatSimMoney(cashPrice)}
+- Simulação do usuário: ${numInst}x de ${formatSimMoney(actualInstallment)} = ${formatSimMoney(installmentTotal)} (juros de ${formatSimMoney(diffReais)}, ${pctJuros}% sobre o à vista)
+- Taxa de juros implícita: ${taxa.toFixed(2)}% ao mês (CDI de referência: 0,85% a.m.) -> ${veredictoTaxa}
+- Teto de negociação (maior total parcelado que ainda empata com o CDI): ${formatSimMoney(preMath.valorMaximoJustoParcelado)}
+- Data da compra: ${dataCompraFormatada}
 
-### 2. PRÉ-CÁLCULOS MATEMÁTICOS REALIZADOS NO CÓDIGO (USE COMO BASE):
-- Teto Máximo Justo de Negociação (0,85% a.m.): R$ ${preMath.valorMaximoJustoParcelado.toFixed(2)}
-- Veredito dos Juros vs CDI: ${preMath.cobrandoJurosAcimaDoCdi ? 'Juros abusivos (acima do CDI)' : (preMath.isZeroInterest ? 'Sem juros (Arbitragem limpa no CDI)' : 'Juros moderados')}
-- Rendimento Líquido Estimado no CDI (se Sem Juros): R$ ${preMath.rendimentoLiquidoArbitragem.toFixed(2)}
-- Radar de Sazonalidade: ${preMath.alertaSazonalidade}
-- Detecção de Custo Acoplado: ${preMath.alertaCustoAcoplado}
-- Estimativa de Vida Útil do Item: ${preMath.vidaUtilMeses} meses (${preMath.statusVidaUtil})
-- Estratégia Híbrida Pré-Calculada: Entrada de R$ ${preMath.entradaSugerida.toFixed(2)} + ${preMath.parcelasRecomendadas}x de R$ ${preMath.valorParcelaRecomendada.toFixed(2)}
-- Script de Barganha de Balcão Sugerido: "${preMath.scriptBarganha}"
+## 2. CARTÃO
+${cartaoTexto}
 
-### 3. MEU CONTEXTO FINANCEIRO REAL (FLUXO DE CAIXA):
-- Saldo Livre em Caixa Hoje: R$ ${ctx.totalBankBalance.toFixed(2)}
-- Receitas Pendentes a Entrar Neste Mês (${ctx.currentMonthLabel}): R$ ${ctx.pendingIncome.toFixed(2)}
-- Despesas Pendentes a Pagar Neste Mês (${ctx.currentMonthLabel}): R$ ${ctx.pendingExpense.toFixed(2)}
-- Sobra Livre Projetada para o Fim Deste Mês (antes da compra): R$ ${preMath.sobraLivreMesAtual.toFixed(2)}
-- Projeção dos Próximos 6 Meses:
-${sixMonthsStr}
+## 3. CAIXA DO USUÁRIO
+- Saldo em conta hoje: ${formatSimMoney(ctx.totalBankBalance)}
+- Receitas a entrar neste mês (${ctx.currentMonthLabel}): ${formatSimMoney(ctx.pendingIncome)}
+- Despesas a pagar neste mês: ${formatSimMoney(ctx.pendingExpense)}
+- SOBRA LIVRE PROJETADA NO FIM DESTE MÊS (antes da compra): ${formatSimMoney(preMath.sobraLivreMesAtual)}
+- Projeção dos próximos 6 meses (a sobra conservadora usa o maior entre a despesa já lançada e o gasto médio dos últimos meses, porque meses futuros ainda não têm todas as despesas lançadas):
+${projecaoStr}
+- Sobra média futura conservadora: ${formatSimMoney(preMath.mediaSobraFutura)}
 
-### 4. REGRAS DO CARTÃO:
-${cardDetailsText}
-- Cronograma das Parcelas:
-${scheduleListText}
+## 4. OPÇÕES DISPONÍVEIS (impacto exato no caixa; escolha uma pelo ID)
+${opcoesStr}
 
-Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
+## 5. RADAR DO SISTEMA
+- Sazonalidade: ${preMath.alertaSazonalidade}
+- Dica de custo acoplado (heurística por palavra-chave, pode estar errada; confirme pelo item): ${preMath.alertaCustoAcoplado}
+${sim ? `- A simulação do usuário ${sim.cabe ? 'CABE' : 'NÃO CABE'} no caixa.` : ''}
+
+Siga os passos do raciocínio e devolva o JSON do schema.`;
 }
-
+// SIMULADOR IA v2 — FIM (prompts)
 
 // Modelos oficiais da série 3.x (com fallback automático contra 503/404)
 const GEMINI_CANDIDATE_MODELS = [
@@ -12954,9 +13348,10 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
 
     const expectJson = Boolean(options.expectJson || systemInstruction.includes('SCHEMA DO JSON') || systemInstruction.includes('formato JSON'));
     const generationConfig = {
-        temperature: expectJson ? 0.1 : 0.2,
-        maxOutputTokens: 8192,
-        ...(expectJson ? { responseMimeType: 'application/json' } : {})
+        temperature: (typeof options.temperature === 'number') ? options.temperature : (expectJson ? 0.1 : 0.2),
+        maxOutputTokens: options.maxOutputTokens || 8192,
+        ...(expectJson ? { responseMimeType: 'application/json' } : {}),
+        ...(expectJson && options.responseSchema ? { responseSchema: options.responseSchema } : {})
     };
 
     const standardPayload = {
@@ -13036,6 +13431,10 @@ async function queryGeminiApi(systemInstruction, userPromptText, options = {}) {
                     message: rawErrMsg,
                     model
                 };
+                if (resp.status === 400 && generationConfig.responseSchema && /schema|propertyOrdering|response_schema|Unknown name/i.test(rawErrMsg)) {
+                    console.warn(`[Gemini ${model}] responseSchema recusado, repetindo sem schema:`, rawErrMsg);
+                    delete generationConfig.responseSchema;
+                }
             }
         } catch (directErr) {
             console.warn(`[Gemini Direct ${model}] Falha de rede/CSP, tentando próximo modelo ou rota serverless:`, directErr?.message || directErr);
@@ -14120,7 +14519,12 @@ async function runAiPurchaseSimulation() {
 
         let aiRawResponse = null;
         try {
-            aiRawResponse = await queryGeminiApi(SYSTEM_PROMPT_FINANCIAL_ADVISOR, userPromptText, { expectJson: true });
+            aiRawResponse = await queryGeminiApi(SYSTEM_PROMPT_FINANCIAL_ADVISOR, userPromptText, {
+                expectJson: true,
+                temperature: 0.2,
+                maxOutputTokens: 12288,
+                responseSchema: buildSimulationResponseSchema(preMath)
+            });
         } catch (apiErr) {
             console.warn('Chamada Gemini falhou, usando contingência analítica:', apiErr);
         }
@@ -14138,7 +14542,7 @@ async function runAiPurchaseSimulation() {
 
         let finalSimData = null;
         if (aiRawResponse) {
-            const parsedAi = parseAiJsonResponse(aiRawResponse);
+            const parsedAi = convertAiDecisionToSimulationResult(aiRawResponse, preMath, finalCashPrice, finalInstallmentTotal, installmentsCount);
             if (parsedAi) {
                 finalSimData = sanitizeAndReconcileAiSimulationResult(
                     parsedAi,
@@ -14149,6 +14553,7 @@ async function runAiPurchaseSimulation() {
                     ctx,
                     preMath
                 );
+                finalSimData = applyDecisionGuardrails(finalSimData, parsedAi, preMath, finalCashPrice, finalInstallmentTotal);
                 lastAiEngineUsed = 'Google Gemini (Inteligência Oficial Conectada - JSON Validado)';
             } else {
                 console.warn('Resposta da IA não continha JSON estruturado esperado, usando fallback.');
