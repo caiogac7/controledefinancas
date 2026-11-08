@@ -94,16 +94,10 @@
   - Remoção de event listeners contínuos de `mousemove` que aplicavam rotação 3D (`perspective`, `rotateX`, `rotateY`, `scale`) nos cards a cada pixel movido, eliminando trepidação e distorção de fontes.
   - Proteção de CSS contra injeção de barras de tradução com `body { top: 0px !important; }` e `.skiptranslate { display: none !important; }`.
 
-### 10. Atualização 1-Click Bank Refresh (Popup) no MeuPluggy & Resiliência a Restrições de API
-- **Detecção de Restrição da API Pluggy:** Conexões importadas ou gerenciadas via portal `MeuPluggy` retornam HTTP 400 (`"MeuPluggy item cant be updated"`) ao receber requisições de `PATCH /items/{id}` via API.
-- **Tratamento no Backend (`/api/pluggy-sync`):** A rota identifica conexões cujo conector seja `MeuPluggy` e pula automaticamente a chamada inútil de `PATCH`, evitando erros 400 e aguardando 0 segundos de polling desnecessário, executando diretamente a extração dos dados mais recentes (`fetchAccounts` e `fetchAllTransactionsV2`) com status 200 estável.
-- **Botão "⚡ Atualizar no Banco (Popup)" (Cabeçalho e Cards):**
-  - Abre uma janela popup centralizada de 520x720 apontando para o portal oficial do usuário:
-    `https://meu.pluggy.ai/connections/{itemId}` (ou `https://meu.pluggy.ai/` como visão geral).
-  - O usuário autentica / atualiza diretamente no portal com total suporte a biometria/MFA do banco e sem consumir limites de cota da API de desenvolvedor.
-  - O sistema grava timestamp de abertura (`pluggy_popup_opened_at`) e `pluggy_popup_item_id` no `localStorage`.
-- **Detecção Automática de Retorno (`window focus` & `document visibilitychange`):**
-  - Assim que o usuário conclui no portal MeuPluggy e retorna para a aba do aplicativo (nos últimos 3 minutos), o sistema detecta o retorno automaticamente.
-  - Exibe toast: `🔄 Você retornou do MeuPluggy! Sincronizando dados frescos com o Supabase...`.
-  - Dispara sincronização com `triggerUpdate: false`, trazendo saldos e transações atualizados pelo portal direto para o Supabase sem queimar cotas.
-  - Incremento da versão de cache em `bootstrap.js` para `20261108_popup_refresh_v2`.
+### 10. Simplificação dos Botões de Sincronização Open Finance (7 Dias & Geral)
+- **Eliminação de Modais/Popups e Redundâncias:** Removidos os botões de popup e de 48h, concentrando toda a experiência de sincronização em dois fluxos claros, diretos e objetivos:
+  1. **🔄 Últimos 7 Dias (`syncMode: '7d'`):** Sincronização rápida focada na última semana para conciliação contábil do dia a dia.
+  2. **📦 Sincronização Geral (`syncMode: 'total'`):** Varredura completa de todo o histórico disponível na instituição bancária.
+- **Limpeza Visual nos Cards de Conexão:** Cada instituição conectada exibe apenas os botões essenciais: `7 Dias`, `Geral`, `Reconectar` e `×` (Desvincular).
+- **Tratamento no Backend (`/api/pluggy-sync`):** Mantido o tratamento inteligente que detecta conexões `MeuPluggy` e ignora o `PATCH /items/{id}` (bloqueado pelo provedor), garantindo que tanto a consulta de 7 dias quanto a geral sejam concluídas em poucos segundos sem falhas ou erros 400.
+- **Versionamento de Cache:** `bootstrap.js` atualizado para `20261108_clean_sync_v3`.

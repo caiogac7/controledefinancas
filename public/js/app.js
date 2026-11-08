@@ -5433,17 +5433,11 @@ function openBankModal() {
                         </div>
                         ${accSummaryHtml}
                         <div class="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800">
-                            <button type="button" id="btn-popup-refresh-${escapeHtml(item.id)}" onclick="openMeuPluggyRefreshPopup('${escapeHtml(item.id)}')" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Abre a tela oficial do MeuPluggy para atualizar com o banco instantaneamente sem erro de cota. Ao voltar, sincroniza sozinho!">
-                                <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Atualizar no Banco (Popup)
-                            </button>
-                            <button type="button" id="btn-sync-item-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: 'delta', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza apenas as novidades das últimas 48h (ultra rápido, sem pesar o celular)">
-                                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i> Novidades (48h)
-                            </button>
-                            <button type="button" id="btn-sync-7d-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: '7d', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza os últimos 7 dias">
+                            <button type="button" id="btn-sync-7d-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: '7d', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Sincroniza os últimos 7 dias">
                                 <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 7 Dias
                             </button>
-                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: 'total', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-2.5 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
-                                <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-200"></i> Total
+                            <button type="button" id="btn-sync-total-${escapeHtml(item.id)}" onclick="syncPluggyItem('${escapeHtml(item.id)}', { silent: false, syncMode: 'total', triggerUpdate: true, buttonEl: this })" style="touch-action: manipulation;" class="px-3 py-1.5 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95 shadow-sm" title="Puxar absolutamente todo o histórico disponível na instituição">
+                                <i data-lucide="database" class="w-3.5 h-3.5 text-indigo-200"></i> Geral
                             </button>
                             <button type="button" onclick="openPluggyConnect('${escapeHtml(item.id)}')" class="px-2.5 py-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 text-[11px] font-bold transition" title="Atualizar credenciais">
                                 Reconectar
@@ -5480,95 +5474,6 @@ function openBankModal() {
             renderPluggyConnections();
         }
 
-        // ==========================================================
-        // 1-CLICK BANK REFRESH (POPUP) NO MEU.PLUGGY
-        // Abre o portal oficial do usuário para atualizar os bancos com biometria/MFA sem depender de cotas de API.
-        // Ao fechar ou voltar o foco, detecta automaticamente o retorno e sincroniza o Supabase!
-        // ==========================================================
-        function openMeuPluggyRefreshPopup(targetItemId = null) {
-            const rawId = (typeof targetItemId === 'string' && targetItemId.trim()) ? targetItemId.trim() : null;
-            const targetUrl = rawId ? `https://meu.pluggy.ai/connections/${encodeURIComponent(rawId)}` : 'https://meu.pluggy.ai/';
-
-            const width = 520;
-            const height = 720;
-            const screenLeft = window.screenLeft !== undefined ? window.screenLeft : window.screenX;
-            const screenTop = window.screenTop !== undefined ? window.screenTop : window.screenY;
-            const outerWidth = window.outerWidth || document.documentElement.clientWidth || screen.width;
-            const outerHeight = window.outerHeight || document.documentElement.clientHeight || screen.height;
-
-            const left = Math.max(0, Math.round(screenLeft + (outerWidth - width) / 2));
-            const top = Math.max(0, Math.round(screenTop + (outerHeight - height) / 2));
-
-            safeLocalStorageSet('pluggy_popup_opened_at', String(Date.now()));
-            safeLocalStorageSet('pluggy_popup_item_id', rawId || 'all');
-
-            const popupFeatures = `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,resizable=yes,status=no,location=no,toolbar=no,menubar=no`;
-            let popup = null;
-            try {
-                popup = window.open(targetUrl, 'MeuPluggyRefresh', popupFeatures);
-            } catch (popupErr) {
-                console.warn('[Popup] window.open bloqueado ou com falha:', popupErr);
-            }
-
-            if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-                // Fallback para smartphones ou navegadores móveis que bloqueiem popups de janela
-                window.open(targetUrl, '_blank');
-            }
-
-            if (typeof showActionToast === 'function') {
-                showActionToast('⚡ Portal MeuPluggy aberto! Clique em "Atualizar" na conta bancária. Ao retornar a esta tela, seus dados serão sincronizados automaticamente.', 'info');
-            }
-        }
-        window.openMeuPluggyRefreshPopup = openMeuPluggyRefreshPopup;
-
-        let isHandlingMeuPluggyPopupReturn = false;
-
-        async function checkAndTriggerPendingMeuPluggySync() {
-            if (isHandlingMeuPluggyPopupReturn) return;
-            const lastOpened = Number(safeLocalStorageGet('pluggy_popup_opened_at', 0));
-            if (!lastOpened || isNaN(lastOpened)) return;
-
-            const elapsed = Date.now() - lastOpened;
-            // Válido se o popup do MeuPluggy foi aberto nos últimos 3 minutos (180.000 ms)
-            if (elapsed > 0 && elapsed < 180000) {
-                isHandlingMeuPluggyPopupReturn = true;
-                const targetItemId = safeLocalStorageGet('pluggy_popup_item_id', 'all');
-                safeLocalStorageRemove('pluggy_popup_opened_at');
-                safeLocalStorageRemove('pluggy_popup_item_id');
-
-                console.log('🔄 Usuário retornou do portal MeuPluggy. Disparando sincronização com o Supabase...', { targetItemId, elapsed });
-                if (typeof showActionToast === 'function') {
-                    showActionToast('🔄 Você retornou do MeuPluggy! Sincronizando dados frescos com o Supabase...', 'info');
-                }
-
-                // Aguarda 1 segundo para garantir que o navegador estabilizou o foco
-                await new Promise(r => setTimeout(r, 1000));
-
-                try {
-                    if (targetItemId && targetItemId !== 'all') {
-                        await syncPluggyItem(targetItemId, { silent: false, syncMode: 'delta', triggerUpdate: false });
-                    } else {
-                        await syncAllPluggyItems('delta', true, false);
-                    }
-                } catch (syncErr) {
-                    console.error('Erro na sincronização pós-retorno do MeuPluggy:', syncErr);
-                } finally {
-                    isHandlingMeuPluggyPopupReturn = false;
-                }
-            }
-        }
-        window.checkAndTriggerPendingMeuPluggySync = checkAndTriggerPendingMeuPluggySync;
-
-        // Escuta tanto retorno de foco (desktop) quanto visibilidade de aba (mobile/smartphones)
-        window.addEventListener('focus', () => {
-            checkAndTriggerPendingMeuPluggySync().catch(() => {});
-        });
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                checkAndTriggerPendingMeuPluggySync().catch(() => {});
-            }
-        });
-
         async function linkManualPluggyItem() {
             const input = document.getElementById('pluggy-manual-item-id');
             const rawId = (input?.value || '').trim();
@@ -5583,13 +5488,9 @@ function openBankModal() {
         let isSyncingAllPluggyInProgress = false;
         const activeSyncingItemIds = new Set();
 
-        async function syncAllPluggyItems(syncModeOrFullSync = 'delta', force = false, triggerUpdate = true) {
-            // Normaliza o modo de sincronização: 'delta' (48h - padrão ultra rápido), '7d' ou 'total'
-            let mode = 'delta';
-            if (syncModeOrFullSync === true || syncModeOrFullSync === 'total') mode = 'total';
-            else if (syncModeOrFullSync === '7d') mode = '7d';
-            else mode = 'delta';
-
+        async function syncAllPluggyItems(syncModeOrFullSync = '7d', force = false) {
+            // Normaliza o modo de sincronização: '7d' (padrão) ou 'total' (geral)
+            const mode = (syncModeOrFullSync === true || syncModeOrFullSync === 'total') ? 'total' : '7d';
             const isTotal = mode === 'total';
 
             // 1. TRAVA RÍGIDA DE CLIQUE (FRONTEND): Impede disparos concorrentes por duplo clique/touch
@@ -5615,14 +5516,13 @@ function openBankModal() {
 
             isSyncingAllPluggyInProgress = true;
 
-            const btnDelta = document.getElementById('btn-sync-all-pluggy');
             const btn7d = document.getElementById('btn-sync-all-pluggy-7d');
             const btnTotal = document.getElementById('btn-sync-all-pluggy-total');
-            const activeBtn = isTotal ? btnTotal : (mode === '7d' ? btn7d : btnDelta);
+            const activeBtn = isTotal ? btnTotal : btn7d;
             const origHtml = activeBtn ? activeBtn.innerHTML : '';
 
             // Bloqueio visual e tátil estrito em todos os botões para desarmar eventos de touch do mobile
-            [btnDelta, btn7d, btnTotal].forEach(b => {
+            [btn7d, btnTotal].forEach(b => {
                 if (b) {
                     b.disabled = true;
                     b.style.pointerEvents = 'none';
@@ -5652,7 +5552,7 @@ function openBankModal() {
 
                     const res = await syncPluggyItem(item.id, {
                         silent: true,
-                        triggerUpdate: Boolean(triggerUpdate),
+                        triggerUpdate: true,
                         syncMode: mode,
                         fullSync: isTotal,
                         isBatch: true
@@ -5683,7 +5583,7 @@ function openBankModal() {
                     }
                 }
 
-                const syncTypeLabel = isTotal ? 'Histórico Completo' : (mode === '7d' ? 'Últimos 7 Dias' : 'Novidades (48h)');
+                const syncTypeLabel = isTotal ? 'Sincronização Geral' : 'Últimos 7 Dias';
                 if (failedErrors.length > 0 && successCount === 0) {
                     const allQuota = failedErrors.every(e => e.includes('Cota'));
                     if (allQuota) {
@@ -5701,7 +5601,7 @@ function openBankModal() {
                 alert('Erro durante a sincronização: ' + (err?.message || 'Erro inesperado'));
             } finally {
                 isSyncingAllPluggyInProgress = false;
-                [btnDelta, btn7d, btnTotal].forEach(b => {
+                [btn7d, btnTotal].forEach(b => {
                     if (b) {
                         b.disabled = false;
                         b.style.pointerEvents = '';
@@ -5882,7 +5782,7 @@ function openBankModal() {
 
             const { silent = false, triggerUpdate = false, fromAutoPoll = false, fullSync = false, isBatch = false } = options;
 
-            const btn = options.buttonEl || document.getElementById(`btn-sync-item-${itemIdStr}`) || document.getElementById(`btn-sync-7d-${itemIdStr}`) || document.getElementById(`btn-sync-total-${itemIdStr}`);
+            const btn = options.buttonEl || document.getElementById(`btn-sync-7d-${itemIdStr}`) || document.getElementById(`btn-sync-total-${itemIdStr}`);
             const origHtml = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
@@ -5896,7 +5796,7 @@ function openBankModal() {
             }
 
             try {
-                const effectiveSyncMode = options.syncMode || (fullSync ? 'total' : 'delta');
+                const effectiveSyncMode = options.syncMode || (fullSync ? 'total' : '7d');
                 const headers = await getAuthHeaders(true);
                 const resp = await fetch('/api/pluggy-sync', {
                     method: 'POST',
