@@ -12227,34 +12227,48 @@ function buildFinancialAiContext(targetDateStr) {
         }
     });
 
-    const effectiveTxs = (typeof getEffectiveTransactions === 'function') ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : []);
-    const monthTxs = effectiveTxs.filter(t => {
-        if (!t) return false;
-        const mKey = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, curMonthKey) : (t.month || curMonthKey);
-        return mKey === curMonthKey && !t.isInitialBalance && !t.isBalanceAdjustment;
-    });
+    // Utiliza exatamente a mesma fonte de lançamentos visíveis da Visão Mensal (sem duplicar compras de cartão com faturas consolidadas)
+    const monthTxs = (typeof getHomeVisibleTransactions === 'function')
+        ? getHomeVisibleTransactions(curMonthKey)
+        : ((typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : [])).filter(t => {
+            if (!t) return false;
+            const mKey = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, curMonthKey) : (t.month || curMonthKey);
+            return mKey === curMonthKey && !t.isInitialBalance && !t.isBalanceAdjustment;
+        }));
 
     const incomes = monthTxs.filter(t => t.type === 'income');
     const expenses = monthTxs.filter(t => t.type === 'expense');
 
-    const totalIncome = incomes.reduce((a, b) => a + Number(b.amount || 0), 0);
-    const totalExpense = expenses.reduce((a, b) => a + Number(b.amount || 0), 0);
+    const totalIncome = Number(incomes.reduce((a, b) => a + Number(b.amount || 0), 0).toFixed(2));
+    const totalExpense = Number(expenses.reduce((a, b) => {
+        if (b.isConsolidatedBill) {
+            return a + Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0);
+        }
+        return a + Number(b.amount || 0);
+    }, 0).toFixed(2));
 
-    const paidIncome = incomes.filter(t => t.paid).reduce((a, b) => a + Number(b.amount || 0), 0);
-    const paidExpense = expenses.filter(t => t.paid).reduce((a, b) => a + Number(b.amount || 0), 0);
+    const paidIncome = Number(incomes.filter(t => t.paid).reduce((a, b) => a + Number(b.amount || 0), 0).toFixed(2));
+    const paidExpense = Number(expenses.reduce((a, b) => {
+        if (b.isConsolidatedBill) {
+            const bTot = Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0);
+            const bPaid = Number(b.paid_amount ?? b.paidAmount ?? (b.paid ? bTot : 0));
+            return a + Math.min(bTot, Math.max(0, bPaid));
+        }
+        return a + (b.paid ? Number(b.amount || 0) : 0);
+    }, 0).toFixed(2));
 
-    const pendingIncome = totalIncome - paidIncome;
-    const pendingExpense = totalExpense - paidExpense;
+    const pendingIncome = Number(Math.max(0, totalIncome - paidIncome).toFixed(2));
+    const pendingExpense = Number(Math.max(0, totalExpense - paidExpense).toFixed(2));
 
-    // Saldo projetado correto: Saldo Realizado em Caixa + Receitas Pendentes - Despesas Pendentes
-    const projectedMonthBalance = totalBankBalance + pendingIncome - pendingExpense;
-    const monthlySurplus = totalIncome - totalExpense;
+    // Saldo projetado fim do mês (Sobra Livre Projetada) e Saldo Líquido Imediato Hoje em Conta
+    const projectedMonthBalance = Number((totalBankBalance + pendingIncome - pendingExpense).toFixed(2));
+    const monthlySurplus = Number((totalIncome - totalExpense).toFixed(2));
 
     return {
         curMonthKey,
         currentMonthLabel: (MONTHS.find(m => m.key === curMonthKey)?.label) || curMonthKey,
-        totalBankBalance,
-        totalReserveBalance,
+        totalBankBalance: Number(totalBankBalance.toFixed(2)),
+        totalReserveBalance: Number(totalReserveBalance.toFixed(2)),
         totalIncome,
         totalExpense,
         paidIncome,
@@ -12268,7 +12282,6 @@ function buildFinancialAiContext(targetDateStr) {
 
 // Projeção temporal levando em consideração a virada do cartão e o saldo projetado real
 function projectInstallmentTimeline(startMonthKey, installmentsCount, actualInstallment, startOffset = 0, initialProjectedBalance = null) {
-    const effectiveTxs = (typeof getEffectiveTransactions === 'function') ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : []);
     const timeline = [];
     const numInst = Math.max(1, installmentsCount || 1);
 
@@ -12280,22 +12293,27 @@ function projectInstallmentTimeline(startMonthKey, installmentsCount, actualInst
 
         const mObj = (Array.isArray(MONTHS) ? MONTHS.find(m => m.key === targetMonthKey) : null) || { key: targetMonthKey, label: targetMonthKey };
 
-        const mTxs = effectiveTxs.filter(t => {
-            if (!t) return false;
-            const mk = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, '2026-11') : t.month;
-            return mk === targetMonthKey && !t.isInitialBalance && !t.isBalanceAdjustment;
-        });
+        const mTxs = (typeof getHomeVisibleTransactions === 'function')
+            ? getHomeVisibleTransactions(targetMonthKey)
+            : ((typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : [])).filter(t => {
+                if (!t) return false;
+                const mk = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, '2026-11') : t.month;
+                return mk === targetMonthKey && !t.isInitialBalance && !t.isBalanceAdjustment;
+            }));
 
-        const monthIncome = mTxs.filter(t => t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0);
-        const monthExpense = mTxs.filter(t => t.type === 'expense').reduce((a, b) => a + Number(b.amount || 0), 0);
+        const monthIncome = Number(mTxs.filter(t => t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0).toFixed(2));
+        const monthExpense = Number(mTxs.filter(t => t.type === 'expense').reduce((a, b) => {
+            if (b.isConsolidatedBill) return a + Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0);
+            return a + Number(b.amount || 0);
+        }, 0).toFixed(2));
 
         // Para o mês atual (delta === 0), a sobra base é o SALDO PROJETADO REAL em caixa (considerando pagos vs pendentes)
         // Para os meses futuros (delta > 0), a sobra base é Receitas Previstas - Despesas Planejadas
         let baseSurplus = (delta === 0 && initialProjectedBalance !== null)
-            ? initialProjectedBalance
-            : (monthIncome - monthExpense);
+            ? Number(initialProjectedBalance.toFixed(2))
+            : Number((monthIncome - monthExpense).toFixed(2));
 
-        const surplusWithNewInstallment = baseSurplus - actualInstallment;
+        const surplusWithNewInstallment = Number((baseSurplus - actualInstallment).toFixed(2));
 
         timeline.push({
             installmentIndex: i + 1,
@@ -12304,7 +12322,7 @@ function projectInstallmentTimeline(startMonthKey, installmentsCount, actualInst
             monthIncome,
             monthExpense,
             baseSurplus,
-            newInstallment: actualInstallment,
+            newInstallment: Number(actualInstallment.toFixed(2)),
             surplusWithNewInstallment,
             isNegative: surplusWithNewInstallment < -0.01
         });
@@ -12313,27 +12331,36 @@ function projectInstallmentTimeline(startMonthKey, installmentsCount, actualInst
     return timeline;
 }
 
-// Projeção dos próximos 6 meses do usuário
-function getNextSixMonthsSummary(startMonthKey) {
-    const effectiveTxs = (typeof getEffectiveTransactions === 'function') ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : []);
+// Projeção dos próximos 6 meses do usuário com fallback de recorrência caso meses futuros ainda não tenham receitas lançadas
+function getNextSixMonthsSummary(startMonthKey, baseMonthContext = null) {
     const list = [];
     for (let i = 1; i <= 6; i++) {
         const targetKey = (typeof addMonthsToKey === 'function') ? addMonthsToKey(startMonthKey, i) : startMonthKey;
         if (typeof ensureMonthExists === 'function') ensureMonthExists(targetKey, true);
         const mObj = (Array.isArray(MONTHS) ? MONTHS.find(m => m.key === targetKey) : null) || { key: targetKey, label: targetKey };
 
-        const mTxs = effectiveTxs.filter(t => {
-            if (!t) return false;
-            const mk = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, '2026-11') : t.month;
-            return mk === targetKey && !t.isInitialBalance && !t.isBalanceAdjustment;
-        });
+        const mTxs = (typeof getHomeVisibleTransactions === 'function')
+            ? getHomeVisibleTransactions(targetKey)
+            : ((typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : [])).filter(t => {
+                if (!t) return false;
+                const mk = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, '2026-11') : t.month;
+                return mk === targetKey && !t.isInitialBalance && !t.isBalanceAdjustment;
+            }));
 
-        const rec = mTxs.filter(t => t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0);
-        const desp = mTxs.filter(t => t.type === 'expense').reduce((a, b) => a + Number(b.amount || 0), 0);
-        const sobra = rec - desp;
+        let rec = Number(mTxs.filter(t => t.type === 'income').reduce((a, b) => a + Number(b.amount || 0), 0).toFixed(2));
+        // Se o mês futuro ainda não tem receita cadastrada, projeta com base na receita recorrente do mês base para evitar sobra artificialmente negativa
+        if (rec === 0 && baseMonthContext && Number(baseMonthContext.totalIncome) > 0) {
+            rec = Number(baseMonthContext.totalIncome.toFixed(2));
+        }
+        const desp = Number(mTxs.filter(t => t.type === 'expense').reduce((a, b) => {
+            if (b.isConsolidatedBill) return a + Number(b.total_amount ?? b.invoiceTotal ?? b.amount ?? 0);
+            return a + Number(b.amount || 0);
+        }, 0).toFixed(2));
+        const sobra = Number((rec - desp).toFixed(2));
 
         list.push({
             idx: i,
+            monthKey: targetKey,
             nome: mObj.label,
             rec,
             desp,
@@ -12461,7 +12488,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
             }
         }
         valorParcelaRecomendada = Number((saldoRestante / parcelasRecomendadas).toFixed(2));
-        custoTotalEstimado = Number((entradaSugerida + (valorParcelaRecomendada * parcelasRecomendadas)).toFixed(2));
+        custoTotalEstimado = Number((entradaSugerida + saldoRestante).toFixed(2));
         tituloManobra = `${formatSimMoney(entradaSugerida)} à vista + ${parcelasRecomendadas}x ${formatSimMoney(valorParcelaRecomendada)}`;
         const sobraAposEntrada = Number((sobraLivreMesAtual - entradaSugerida).toFixed(2));
         explicacaoHibrida = `Mantém ${formatSimMoney(sobraAposEntrada)} livres em ${ctx.currentMonthLabel}, aproveita a virada do cartão para jogar a 1ª parcela e quita ${Math.max(0, numInst - parcelasRecomendadas)} meses antes economizando juros.`;
@@ -12492,7 +12519,7 @@ function computePurchaseFinancialPreMath(itemName, cashPrice, installmentTotal, 
         const saldoRestante = Math.max(0, cashPrice - entradaSugerida);
         parcelasRecomendadas = Math.max(1, Math.min(numInst, 6));
         valorParcelaRecomendada = Number((saldoRestante / parcelasRecomendadas).toFixed(2));
-        custoTotalEstimado = Number((entradaSugerida + (valorParcelaRecomendada * parcelasRecomendadas)).toFixed(2));
+        custoTotalEstimado = Number((entradaSugerida + saldoRestante).toFixed(2));
         tituloManobra = `${formatSimMoney(entradaSugerida)} à vista + ${parcelasRecomendadas}x ${formatSimMoney(valorParcelaRecomendada)}`;
         explicacaoHibrida = `Reduz o prazo de juros e assegura que a parcela caiba confortavelmente na sobra média mensal.`;
         scriptBarganha = cobrandoJurosAcimaDoCdi
@@ -12895,8 +12922,147 @@ function parseAiJsonResponse(rawText) {
 }
 
 /**
- * MOTOR FINANCEIRO ANALÍTICO DE CONTINGÊNCIA (GERA O MESMO JSON ESTRUTURADO DE FORMA PURA E PRECISA)
+ * Sanitiza e valida matematicamente o JSON retornado pela IA para garantir que nenhum centavo,
+ * saldo restante ou observação contradiga os números reais do fluxo de caixa do usuário.
  */
+function sanitizeAndReconcileAiSimulationResult(aiData, fallbackData, cashPrice, installmentTotal, installmentsCount, ctx, preMath) {
+    if (!aiData || typeof aiData !== 'object') return fallbackData;
+
+    const numInst = Math.max(1, installmentsCount || 1);
+    const exactUserInstallment = Number((installmentTotal / numInst).toFixed(2));
+    const exactDiffJuros = Number(Math.max(0, installmentTotal - cashPrice).toFixed(2));
+    const exactPctJuros = cashPrice > 0 ? Number(((exactDiffJuros / cashPrice) * 100).toFixed(1)) : 0;
+
+    // Saldo restante exato no mês atual se pagar 100% à vista
+    const exactSaldoRestanteAVista = Number((preMath.sobraLivreMesAtual - cashPrice).toFixed(2));
+    const exactAVistaViavel = exactSaldoRestanteAVista >= 0;
+
+    const fbCards = fallbackData.cardsComparativos || {};
+    const aiCards = aiData.cardsComparativos || {};
+
+    // 1. Card À Vista reconciliado
+    const rawAVista = aiCards.aVista || {};
+    let obsAVista = String(rawAVista.observacao || fbCards.aVista?.observacao || '').trim();
+    // Se a observação da IA contradisser a viabilidade real do caixa (ex: falar que sobra positivo quando o saldo é negativo, ou vice-versa), usa a observação exata
+    if ((!exactAVistaViavel && /sobram|mantendo.*livres|absorve/i.test(obsAVista)) || (exactAVistaViavel && /fura|insuficiente|negativo/i.test(obsAVista))) {
+        obsAVista = fbCards.aVista.observacao;
+    }
+
+    const reconciledAVista = {
+        viavelNoCaixaAtual: exactAVistaViavel,
+        custoTotal: Number(cashPrice.toFixed(2)),
+        saldoRestanteMesAtual: exactSaldoRestanteAVista,
+        statusTag: exactAVistaViavel ? '100% no Azul' : `Caixa Insuficiente em ${ctx.currentMonthLabel.slice(0, 3)}`,
+        observacao: obsAVista
+    };
+
+    // 2. Card Simulação do Usuário reconciliado
+    const rawSim = aiCards.simulacaoUsuario || {};
+    const exactSobraFuturaSim = Number((preMath.mediaSobraFutura - exactUserInstallment).toFixed(2));
+    const reconciledSim = {
+        parcelas: numInst,
+        valorParcela: exactUserInstallment,
+        custoTotal: Number(installmentTotal.toFixed(2)),
+        jurosReais: exactDiffJuros,
+        jurosPercentual: exactPctJuros,
+        sobraMensalFutura: exactSobraFuturaSim,
+        statusTag: exactDiffJuros > 0.01 ? (rawSim.statusTag || `Juros (${exactPctJuros}%)`) : 'Sem Juros',
+        observacao: rawSim.observacao || fbCards.simulacaoUsuario?.observacao || ''
+    };
+
+    // 3. Card Jogada de Mestre IA reconciliado (sem erro de arredondamento de centavos: 3 x 156,66 = 470,00 exatos)
+    const rawMestre = aiCards.jogadaDeMestreIA || {};
+    const mestreEntrada = typeof rawMestre.entradaAVista === 'number' && rawMestre.entradaAVista >= 0 && rawMestre.entradaAVista <= cashPrice
+        ? Number(rawMestre.entradaAVista.toFixed(2))
+        : Number(preMath.entradaSugerida.toFixed(2));
+    const mestreParcelas = Math.max(1, parseInt(rawMestre.parcelasRecomendadas || preMath.parcelasRecomendadas || numInst, 10));
+    const saldoFinanciadoMestre = Number(Math.max(0, cashPrice - mestreEntrada).toFixed(2));
+    const mestreValorParcela = mestreParcelas > 0 ? Number((saldoFinanciadoMestre / mestreParcelas).toFixed(2)) : 0;
+    // O custo total estimado sem juros na negociação de balcão é a soma exata de entrada + saldo financiado (evita perda de R$ 0,01 ou R$ 0,02 por dízima periódica)
+    const mestreCustoTotal = (typeof rawMestre.custoTotalEstimado === 'number' && Math.abs(rawMestre.custoTotalEstimado - (mestreEntrada + saldoFinanciadoMestre)) <= 0.05)
+        ? Number((mestreEntrada + saldoFinanciadoMestre).toFixed(2))
+        : Number((rawMestre.custoTotalEstimado || preMath.custoTotalEstimado || cashPrice).toFixed(2));
+    const exactSobraMesAposEntrada = Number((preMath.sobraLivreMesAtual - mestreEntrada).toFixed(2));
+    const exactSobraFuturaMestre = Number((preMath.mediaSobraFutura - mestreValorParcela).toFixed(2));
+
+    let explicacaoMestre = String(rawMestre.explicacao || fbCards.jogadaDeMestreIA?.explicacao || '').trim();
+    if (exactSobraMesAposEntrada < 0 && /livres|sobram/i.test(explicacaoMestre)) {
+        explicacaoMestre = fbCards.jogadaDeMestreIA.explicacao;
+    }
+
+    const reconciledMestre = {
+        tituloManobra: rawMestre.tituloManobra || preMath.tituloManobra,
+        entradaAVista: mestreEntrada,
+        parcelasRecomendadas: mestreParcelas,
+        valorParcelaRecomendada: mestreValorParcela,
+        custoTotalEstimado: mestreCustoTotal,
+        sobraMesAtualAposEntrada: exactSobraMesAposEntrada,
+        sobraMensalFutura: exactSobraFuturaMestre,
+        statusTag: rawMestre.statusTag || preMath.statusTagHibrida,
+        explicacao: explicacaoMestre
+    };
+
+    const rawTatica = aiData.analiseTatica || {};
+    const fbTatica = fallbackData.analiseTatica || {};
+
+    return {
+        scoreEficiencia: Number(aiData.scoreEficiencia || preMath.scoreEficiencia || 85),
+        vereditoTitulo: aiData.vereditoTitulo || fallbackData.vereditoTitulo,
+        vereditoResumo: aiData.vereditoResumo || fallbackData.vereditoResumo,
+        economiaGeradaReais: Number(Math.max(0, installmentTotal - mestreCustoTotal).toFixed(2)),
+        cardsComparativos: {
+            aVista: reconciledAVista,
+            simulacaoUsuario: reconciledSim,
+            jogadaDeMestreIA: reconciledMestre
+        },
+        analiseTatica: {
+            vidaUtilMeses: Number(rawTatica.vidaUtilMeses || preMath.vidaUtilMeses || 36),
+            statusVidaUtil: rawTatica.statusVidaUtil || fbTatica.statusVidaUtil,
+            tetoMaximoNegociacaoReais: Number(preMath.valorMaximoJustoParcelado.toFixed(2)),
+            scriptBarganhaBalcao: rawTatica.scriptBarganhaBalcao || fbTatica.scriptBarganhaBalcao,
+            alertaSazonalidade: rawTatica.alertaSazonalidade || fbTatica.alertaSazonalidade,
+            alertaCustoAcoplado: rawTatica.alertaCustoAcoplado || fbTatica.alertaCustoAcoplado
+        }
+    };
+}
+
+/**
+ * Persiste o registro estruturado da simulação na tabela public.purchase_simulations para histórico e auditoria
+ */
+async function persistPurchaseSimulationToDb(payload) {
+    try {
+        if (!currentUser?.id || typeof supabaseClient === 'undefined' || !supabaseClient) return;
+        await supabaseClient.from('purchase_simulations').insert({
+            user_id: currentUser.id,
+            item_name: payload.itemName,
+            cash_price: Number(payload.cashPrice.toFixed(2)),
+            installment_total: Number(payload.installmentTotal.toFixed(2)),
+            installments_count: payload.installmentsCount,
+            installment_value: Number((payload.installmentTotal / Math.max(1, payload.installmentsCount)).toFixed(2)),
+            purchase_date: payload.simDateStr,
+            payment_method: payload.selectedMethod || 'credit',
+            card_id: payload.cardId || null,
+            card_name: payload.cardInfo?.cardName || null,
+            closing_day: payload.cardInfo?.closingDay || null,
+            due_day: payload.cardInfo?.dueDay || null,
+            invoice_turned: Boolean(payload.cardInfo?.invoiceTurned),
+            first_bill_month: payload.cardInfo?.firstBillMonthKey || null,
+            useful_life_months: payload.preMath?.vidaUtilMeses || 36,
+            coupled_cost_estimate: Number((payload.preMath?.estimativaMaoDeObra || 0).toFixed(2)),
+            cdi_monthly_rate: 0.00850,
+            max_fair_installment_total: Number((payload.preMath?.valorMaximoJustoParcelado || payload.cashPrice).toFixed(2)),
+            current_month_free_surplus: Number((payload.preMath?.sobraLivreMesAtual || 0).toFixed(2)),
+            future_six_months_avg_surplus: Number((payload.preMath?.mediaSobraFutura || 0).toFixed(2)),
+            efficiency_score: Number(payload.finalSimData?.scoreEficiencia || 85),
+            engine_used: payload.engineUsed || 'Google Gemini',
+            pre_math_json: payload.preMath || {},
+            cashflow_projection_json: payload.sixMonthsSummary || [],
+            result_json: payload.finalSimData || {}
+        });
+    } catch (dbErr) {
+        console.warn('Aviso ao gravar histórico em purchase_simulations:', dbErr?.message || dbErr);
+    }
+}
 function calculateLocalFinancialVerdict(itemName, cashPrice, installmentTotal, installmentsCount, ctx, timeline, cardInfo, preMath) {
     const numInst = Math.max(1, installmentsCount || 1);
     const actualInstallment = installmentTotal / numInst;
@@ -13725,7 +13891,7 @@ async function runAiPurchaseSimulation() {
     try {
         const ctx = buildFinancialAiContext(simDateStr);
         const timeline = projectInstallmentTimeline(startMonthKey, installmentsCount, actualInstallment, startOffset, ctx.projectedMonthBalance);
-        const sixMonthsSummary = getNextSixMonthsSummary(startMonthKey);
+        const sixMonthsSummary = getNextSixMonthsSummary(startMonthKey, ctx);
 
         // Pré-cálculo financeiro completo das 5 evoluções
         const preMath = computePurchaseFinancialPreMath(
@@ -13773,9 +13939,18 @@ async function runAiPurchaseSimulation() {
 
         let finalSimData = null;
         if (aiRawResponse) {
-            finalSimData = parseAiJsonResponse(aiRawResponse);
-            if (finalSimData) {
-                lastAiEngineUsed = 'Google Gemini (Inteligência Oficial Conectada - JSON)';
+            const parsedAi = parseAiJsonResponse(aiRawResponse);
+            if (parsedAi) {
+                finalSimData = sanitizeAndReconcileAiSimulationResult(
+                    parsedAi,
+                    fallbackData,
+                    finalCashPrice,
+                    finalInstallmentTotal,
+                    installmentsCount,
+                    ctx,
+                    preMath
+                );
+                lastAiEngineUsed = 'Google Gemini (Inteligência Oficial Conectada - JSON Validado)';
             } else {
                 console.warn('Resposta da IA não continha JSON estruturado esperado, usando fallback.');
                 finalSimData = fallbackData;
@@ -13785,6 +13960,22 @@ async function runAiPurchaseSimulation() {
             finalSimData = fallbackData;
             lastAiEngineUsed = 'Motor Financeiro Analítico (Regras Heurísticas Locais)';
         }
+
+        // Grava histórico estruturado na tabela public.purchase_simulations para auditoria
+        persistPurchaseSimulationToDb({
+            itemName,
+            cashPrice: finalCashPrice,
+            installmentTotal: finalInstallmentTotal,
+            installmentsCount,
+            simDateStr,
+            selectedMethod,
+            cardId: selectedMethod.startsWith('card_') ? selectedMethod.replace(/^card_/, '') : null,
+            cardInfo,
+            preMath,
+            sixMonthsSummary,
+            finalSimData,
+            engineUsed: lastAiEngineUsed
+        });
 
         if (auditEngineEl) {
             auditEngineEl.textContent = `Motor: ${lastAiEngineUsed}`;
