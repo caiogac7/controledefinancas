@@ -1771,7 +1771,10 @@
                     balanceAudits: balanceAudits.slice(0, 30),
                     familySharingEnabled: Boolean(familySharingEnabled),
                     paidToBottomMode: Boolean(paidToBottomMode),
-                    geminiApiKey: (typeof getStoredAiKey === 'function' ? getStoredAiKey() : '') || profileData?.settings_json?.geminiApiKey || '',
+                    geminiApiKey: (() => {
+                        const k = String((typeof getStoredAiKey === 'function' ? getStoredAiKey() : '') || profileData?.settings_json?.geminiApiKey || '').trim();
+                        return k.startsWith('AIza') ? k : '';
+                    })(),
                     ...(existingTerms ? { termsAcceptance: existingTerms } : {})
                 };
 
@@ -6908,6 +6911,21 @@ function openBankModal() {
             currentUser = profile;
             const remoteSettings = profile.settings_json || {};
 
+            // Limpa chaves genéricas legadas que não pertencem ao escopo do usuário e sincroniza a chave BYOK do banco
+            try {
+                localStorage.removeItem('gemini_api_key');
+                localStorage.removeItem('google_ai_key');
+                const dbGeminiKey = String(remoteSettings.geminiApiKey || '').trim();
+                if (dbGeminiKey && dbGeminiKey.startsWith('AIza')) {
+                    localStorage.setItem(`gemini_api_key_${profile.id}`, dbGeminiKey);
+                } else {
+                    localStorage.removeItem(`gemini_api_key_${profile.id}`);
+                    if (remoteSettings.geminiApiKey) {
+                        delete remoteSettings.geminiApiKey;
+                    }
+                }
+            } catch (_) {}
+
             // 1. Carrega Bancos mesclando a tabela relacional public.banks com metadados ricos de settings_json.banks
             const settingsBanks = Array.isArray(remoteSettings.banks) ? remoteSettings.banks : [];
             if (settingsBanks.length > 0) {
@@ -7338,6 +7356,10 @@ function openBankModal() {
         }
 
         async function handleLogout() {
+            try {
+                localStorage.removeItem('gemini_api_key');
+                localStorage.removeItem('google_ai_key');
+            } catch (_) {}
             await supabaseClient.auth.signOut();
             currentUser = null;
             transactions = [];
@@ -11935,22 +11957,76 @@ let lastAiEngineUsed = 'Google Gemini';
 
 function getStoredAiKey() {
     try {
-        let key = (localStorage.getItem('gemini_api_key') || localStorage.getItem('google_ai_key') || '').trim();
-        if (!key && currentUser?.settings_json?.geminiApiKey) {
-            key = String(currentUser.settings_json.geminiApiKey).trim();
-            if (key) localStorage.setItem('gemini_api_key', key);
+        // 1. Prioridade absoluta: registro do usuário autenticado em memória (vindo do banco de dados)
+        const profileKey = String(currentUser?.settings_json?.geminiApiKey || '').trim();
+        if (profileKey && profileKey.startsWith('AIza')) {
+            if (currentUser?.id) {
+                localStorage.setItem(`gemini_api_key_${currentUser.id}`, profileKey);
+            }
+            return profileKey;
         }
-        return key;
+        // 2. Cache secundário estritamente isolado pelo ID do usuário logado
+        if (currentUser?.id) {
+            const scopedKey = String(localStorage.getItem(`gemini_api_key_${currentUser.id}`) || '').trim();
+            if (scopedKey && scopedKey.startsWith('AIza')) {
+                return scopedKey;
+            }
+        }
+        return '';
     } catch (e) {
         return '';
     }
 }
 
-function openAiKeySettingsModal() {
+async function fetchUserGeminiApiKey() {
+    try {
+        // 1. Tenta obter da memória do perfil já carregado
+        let key = String(currentUser?.settings_json?.geminiApiKey || '').trim();
+        if (key && key.startsWith('AIza')) {
+            return key;
+        }
+
+        // 2. Se não estiver em memória ou estiver vazia, faz o fetch diretamente no banco do usuário autenticado
+        if (currentUser?.id && typeof supabaseClient !== 'undefined' && supabaseClient) {
+            const { data, error } = await supabaseClient
+                .from('profiles')
+                .select('settings_json')
+                .eq('id', currentUser.id)
+                .maybeSingle();
+
+            if (!error && data?.settings_json) {
+                if (!currentUser.settings_json || typeof currentUser.settings_json !== 'object') {
+                    currentUser.settings_json = {};
+                }
+                const dbKey = String(data.settings_json.geminiApiKey || '').trim();
+                if (dbKey && dbKey.startsWith('AIza')) {
+                    currentUser.settings_json.geminiApiKey = dbKey;
+                    localStorage.setItem(`gemini_api_key_${currentUser.id}`, dbKey);
+                    return dbKey;
+                }
+            }
+        }
+
+        // 3. Fallback para o cache local escopado do usuário
+        if (currentUser?.id) {
+            const cached = String(localStorage.getItem(`gemini_api_key_${currentUser.id}`) || '').trim();
+            if (cached && cached.startsWith('AIza')) {
+                return cached;
+            }
+        }
+        return '';
+    } catch (err) {
+        console.warn('Erro ao buscar chave Gemini no perfil do usuário:', err);
+        return getStoredAiKey();
+    }
+}
+
+async function openAiKeySettingsModal() {
     const modal = document.getElementById('ai-key-modal');
     const input = document.getElementById('ai-gemini-key-input');
     if (modal) {
-        if (input) input.value = getStoredAiKey();
+        const currentKey = await fetchUserGeminiApiKey();
+        if (input) input.value = currentKey || '';
         modal.classList.remove('hidden');
         modal.classList.add('flex');
     }
@@ -11969,9 +12045,19 @@ async function saveAiKeySettings() {
     const keyVal = (input?.value || '').trim();
     cachedGeminiModelName = null;
     try {
+        localStorage.removeItem('gemini_api_key');
+        localStorage.removeItem('google_ai_key');
+
         if (keyVal) {
-            localStorage.setItem('gemini_api_key', keyVal);
+            if (!keyVal.startsWith('AIza')) {
+                if (typeof showSystemAlert === 'function') {
+                    showSystemAlert('Chave inválida! As chaves oficiais da Google AI Studio começam obrigatoriamente com "AIza". Verifique se o navegador não preencheu sua senha por engano e cole uma chave válida.', 'warning');
+                }
+                return;
+            }
+
             if (currentUser?.id) {
+                localStorage.setItem(`gemini_api_key_${currentUser.id}`, keyVal);
                 if (!currentUser.settings_json || typeof currentUser.settings_json !== 'object') {
                     currentUser.settings_json = {};
                 }
@@ -11981,12 +12067,14 @@ async function saveAiKeySettings() {
                     updated_at: getSaoPauloTimestamp()
                 }).eq('id', currentUser.id);
             }
+            window.lastGeminiError = null;
             if (typeof showSystemAlert === 'function') {
-                showSystemAlert('Chave de API do Gemini salva com sucesso! Ela foi sincronizada na sua conta.', 'success');
+                showSystemAlert('Chave de API do Gemini validada e salva com sucesso no seu perfil!', 'success');
             }
         } else {
-            localStorage.removeItem('gemini_api_key');
-            localStorage.removeItem('google_ai_key');
+            if (currentUser?.id) {
+                localStorage.removeItem(`gemini_api_key_${currentUser.id}`);
+            }
             if (currentUser?.id && currentUser.settings_json) {
                 delete currentUser.settings_json.geminiApiKey;
                 await supabaseClient.from('profiles').update({
@@ -11995,7 +12083,7 @@ async function saveAiKeySettings() {
                 }).eq('id', currentUser.id);
             }
             if (typeof showSystemAlert === 'function') {
-                showSystemAlert('Chave removida. O Consultor IA continuará operando através do motor analítico de regras financeiras.', 'info');
+                showSystemAlert('Chave removida do seu perfil. O Consultor IA continuará operando através do motor analítico de regras financeiras.', 'info');
             }
         }
     } catch (e) {
@@ -12600,33 +12688,120 @@ Lembre-se: Retorne estritamente o JSON válido sem nenhum caractere extra.`;
 }
 
 
-// Modelo oficial estável recomendado para produção
+// Modelos oficiais da família 2.5 / 2.0 (principal + fallbacks homologados)
 const GEMINI_CANDIDATE_MODELS = [
-    'gemini-1.5-flash'
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash'
 ];
 
 async function resolveGeminiModel(apiKey) {
-    return 'gemini-1.5-flash';
+    return 'gemini-2.5-flash';
 }
 
 async function queryGeminiApi(systemInstruction, userPromptText) {
-    const rawKey = getStoredAiKey();
-    const apiKey = (rawKey && typeof rawKey === 'string') ? rawKey.trim() : '';
+    // 1. Busca garantida diretamente do registro do usuário autenticado (ou banco de dados caso não esteja em memória)
+    const fetchedKey = await fetchUserGeminiApiKey();
+    const userApiKey = (fetchedKey && typeof fetchedKey === 'string') ? fetchedKey.trim() : '';
 
     lastAiPromptPayload = `=== SYSTEM INSTRUCTION ===\n${systemInstruction}\n\n=== USER PROMPT ===\n${userPromptText}`;
     window.lastGeminiError = null;
 
-    // 1. Prioritário e Seguro: Serverless Proxy (/api/gemini)
-    // Oculta a API Key do DevTools do navegador e elimina qualquer violação de CSP
-    try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (apiKey) {
-            headers['x-gemini-key'] = apiKey;
+    // 2. Validação estrita do formato oficial do Google AI Studio ("AIza...") antes de disparar qualquer fetch
+    if (!userApiKey || !userApiKey.startsWith('AIza')) {
+        const missingMsg = 'Chave de API do Google Gemini não configurada ou em formato inválido. Acesse "Configurar Chave" e insira uma chave válida do Google AI Studio (iniciada em "AIza").';
+        window.lastGeminiError = {
+            status: 400,
+            code: 'API_KEY_MISSING_OR_INVALID_FORMAT',
+            message: missingMsg,
+            model: 'gemini-2.5-flash'
+        };
+        if (typeof showSystemAlert === 'function') {
+            showSystemAlert(missingMsg, 'warning');
         }
+        return null;
+    }
 
+    const standardPayload = {
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+    };
+
+    // 3. Chamada principal e fallbacks diretos na API v1beta da Google (gemini-2.5-flash -> gemini-2.5-pro -> gemini-2.0-flash)
+    for (const model of GEMINI_CANDIDATE_MODELS) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(userApiKey)}`;
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(standardPayload)
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (reply && reply.trim()) {
+                    lastAiEngineUsed = `Google Gemini (${model})`;
+                    window.lastGeminiError = null;
+                    return reply.trim();
+                }
+            } else {
+                const errData = await resp.json().catch(() => ({}));
+                const rawErrMsg = errData?.error?.message || resp.statusText || `HTTP ${resp.status}`;
+                const isKeyInvalid = resp.status === 400 && (
+                    rawErrMsg.includes('API key not valid') ||
+                    rawErrMsg.includes('API_KEY_INVALID') ||
+                    JSON.stringify(errData || {}).includes('API_KEY_INVALID')
+                );
+
+                if (isKeyInvalid) {
+                    const invalidMsg = 'A chave da API do Gemini cadastrada no seu perfil é inválida ou foi revogada na Google AI Studio. Atualize sua chave nas Configurações.';
+                    window.lastGeminiError = {
+                        status: 400,
+                        code: 'API_KEY_INVALID',
+                        message: invalidMsg,
+                        model
+                    };
+                    if (typeof showSystemAlert === 'function') {
+                        showSystemAlert(invalidMsg, 'error');
+                    }
+                    return null;
+                }
+
+                if (resp.status === 403) {
+                    const forbiddenMsg = 'Acesso negado (Erro 403): verifique se a sua chave possui restrição de domínio (HTTP Referer) ou falta de permissão no painel da Google AI Studio.';
+                    window.lastGeminiError = {
+                        status: 403,
+                        code: 'PERMISSION_DENIED',
+                        message: forbiddenMsg,
+                        model
+                    };
+                    if (typeof showSystemAlert === 'function') {
+                        showSystemAlert(forbiddenMsg, 'error');
+                    }
+                    return null;
+                }
+
+                window.lastGeminiError = {
+                    status: resp.status,
+                    message: rawErrMsg,
+                    model
+                };
+            }
+        } catch (directErr) {
+            console.warn(`[Gemini Direct ${model}] Falha de rede/CSP, tentando próximo modelo ou rota serverless:`, directErr?.message || directErr);
+        }
+    }
+
+    // 4. Contingência via Proxy Serverless (/api/gemini) enviando a chave BYOK do usuário
+    try {
         const proxyResp = await fetch('/api/gemini', {
             method: 'POST',
-            headers,
+            headers: {
+                'Content-Type': 'application/json',
+                'x-gemini-key': userApiKey
+            },
             body: JSON.stringify({
                 systemInstruction,
                 userPrompt: userPromptText
@@ -12636,56 +12811,32 @@ async function queryGeminiApi(systemInstruction, userPromptText) {
         if (proxyResp.ok) {
             const data = await proxyResp.json();
             if (data?.ok && data.text) {
-                lastAiEngineUsed = 'Google Gemini (gemini-1.5-flash)';
+                lastAiEngineUsed = `Google Gemini (${data.model || 'gemini-2.5-flash'})`;
                 window.lastGeminiError = null;
                 return data.text.trim();
             }
         } else {
             const errData = await proxyResp.json().catch(() => ({}));
-            const errMsg = errData?.error || `HTTP ${proxyResp.status}`;
-            window.lastGeminiError = {
-                status: proxyResp.status,
-                message: errMsg,
-                model: 'gemini-1.5-flash'
-            };
-            console.warn('Aviso no proxy Gemini (/api/gemini):', errMsg);
+            const rawErrMsg = errData?.error || `HTTP ${proxyResp.status}`;
+            if (proxyResp.status === 400 && (errData?.code === 'API_KEY_INVALID' || rawErrMsg.includes('API key not valid'))) {
+                const invalidMsg = 'A chave da API do Gemini cadastrada no seu perfil é inválida ou foi revogada. Atualize sua chave nas Configurações.';
+                window.lastGeminiError = { status: 400, code: 'API_KEY_INVALID', message: invalidMsg, model: 'gemini-2.5-flash' };
+                if (typeof showSystemAlert === 'function') showSystemAlert(invalidMsg, 'error');
+            } else if (proxyResp.status === 403) {
+                const forbiddenMsg = 'Acesso negado (Erro 403): verifique restrição de domínio (HTTP Referer) ou permissões da sua chave na Google AI Studio.';
+                window.lastGeminiError = { status: 403, code: 'PERMISSION_DENIED', message: forbiddenMsg, model: 'gemini-2.5-flash' };
+                if (typeof showSystemAlert === 'function') showSystemAlert(forbiddenMsg, 'error');
+            } else {
+                window.lastGeminiError = {
+                    status: proxyResp.status,
+                    message: rawErrMsg,
+                    model: errData?.model || 'gemini-2.5-flash'
+                };
+            }
         }
     } catch (proxyErr) {
-        console.warn('Proxy /api/gemini indisponível, tentando chamada direta segura:', proxyErr?.message || proxyErr);
+        console.warn('Erro ao consultar rota de contingência /api/gemini:', proxyErr?.message || proxyErr);
     }
-
-    // 2. Fallback local seguro utilizando estritamente gemini-1.5-flash
-    if (!apiKey) return null;
-
-    const model = 'gemini-1.5-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-    const standardPayload = {
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: 'user', parts: [{ text: userPromptText }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
-    };
-
-    try {
-        const resp = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(standardPayload)
-        });
-
-        if (resp.ok) {
-            const data = await resp.json();
-            const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (reply && reply.trim()) {
-                lastAiEngineUsed = 'Google Gemini (gemini-1.5-flash)';
-                window.lastGeminiError = null;
-                return reply.trim();
-            }
-        } else {
-            const errData = await resp.json().catch(() => ({}));
-            console.warn(`[Gemini Fallback Error] Status ${resp.status}:`, errData?.error?.message || resp.statusText);
-        }
-    } catch (_) {}
 
     return null;
 }
@@ -12826,6 +12977,24 @@ function renderInteractiveAiSimulationResult(simData, contextData) {
     const cardInfo = contextData.cardInfo || {};
     const ctx = contextData.ctx || {};
     const preMath = contextData.preMath || {};
+
+    // 0. BANNER DE AVISO SE HOUVER ERRO DE CHAVE DE API (400 / 403 / Formato Inválido)
+    const geminiErrBannerHtml = window.lastGeminiError ? `
+        <div class="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div class="flex items-start sm:items-center gap-2.5">
+                <div class="w-7 h-7 rounded-lg bg-rose-500/20 text-rose-500 flex items-center justify-center flex-shrink-0">
+                    <i data-lucide="key-round" class="w-4 h-4"></i>
+                </div>
+                <div>
+                    <strong class="block text-rose-600 dark:text-rose-400">Aviso de Autenticação da Chave Gemini (Status ${window.lastGeminiError.status || 400}):</strong>
+                    <span>${escapeHtml(window.lastGeminiError.message || 'Verifique sua chave de API nas configurações.')} <em>(Exibindo pré-cálculo matemático local abaixo)</em></span>
+                </div>
+            </div>
+            <button type="button" onclick="openAiKeySettingsModal()" class="px-3 py-1.5 rounded-xl bg-[#FF2E4D] hover:bg-[#E61937] text-white text-[11px] font-extrabold whitespace-nowrap shadow-sm cursor-pointer">
+                Configurar Chave
+            </button>
+        </div>
+    ` : '';
 
     // 1. BANNER DE FATURA FECHADA
     const cardBannerHtml = (cardInfo.isCredit && cardInfo.invoiceTurned) ? `
@@ -13139,6 +13308,7 @@ function renderInteractiveAiSimulationResult(simData, contextData) {
     // Renderiza a estrutura completa e limpa
     verdictTextEl.innerHTML = `
         <div class="space-y-4">
+            ${geminiErrBannerHtml}
             ${cardBannerHtml}
             ${headerHtml}
             ${cardsGridHtml}

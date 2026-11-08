@@ -1,7 +1,8 @@
 /**
  * POST /api/gemini
- * Proxy Seguro para Google Gemini API v1beta (CommonJS / Node 18+ nativo)
- * Usa exclusivamente o modelo 'gemini-1.5-flash' estável e homologado para produção.
+ * Proxy Seguro BYOK (Bring Your Own Key) para Google Gemini API v1beta (CommonJS / Node 18+ nativo).
+ * Arquitetura Multi-usuário: utiliza exclusivamente a chave do usuário autenticado (header x-gemini-key),
+ * validando o prefixo oficial "AIza" e operando com os modelos Gemini 2.5 / 2.0.
  */
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -22,14 +23,13 @@ module.exports = async function handler(req, res) {
 
   try {
     const userKeyHeader = req.headers['x-gemini-key'] || req.headers['X-Gemini-Key'];
-    const apiKey = (userKeyHeader && typeof userKeyHeader === 'string' && userKeyHeader.trim())
-      ? userKeyHeader.trim()
-      : (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '');
+    const apiKey = (userKeyHeader && typeof userKeyHeader === 'string') ? userKeyHeader.trim() : '';
 
-    if (!apiKey) {
+    if (!apiKey || !apiKey.startsWith('AIza')) {
       return res.status(400).json({
         ok: false,
-        error: 'Chave da API do Google Gemini não fornecida. Insira sua chave no painel do Consultor IA.'
+        code: 'API_KEY_INVALID_FORMAT',
+        error: 'Chave de API do Gemini ausente ou inválida no seu perfil. Acesse Configurações da Chave e informe uma chave válida da Google AI Studio iniciada em "AIza".'
       });
     }
 
@@ -39,9 +39,11 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ ok: false, error: 'Prompt não fornecido.' });
     }
 
-    // Modelo estável e oficial para produção
-    const model = 'gemini-1.5-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const candidateModels = [
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-2.0-flash'
+    ];
 
     let outgoingPayload;
     if (Array.isArray(contents) && contents.length > 0) {
@@ -73,74 +75,69 @@ module.exports = async function handler(req, res) {
       };
     }
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(outgoingPayload)
-    });
+    let lastStatus = 500;
+    let lastErrorMsg = 'Falha ao consultar modelos Gemini';
+    let lastDetails = null;
+    let lastModelTried = candidateModels[0];
 
-    if (resp.ok) {
-      const data = await resp.json();
-      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      return res.status(200).json({
-        ok: true,
-        model,
-        text: reply ? reply.trim() : '',
-        candidates: data.candidates || []
-      });
-    }
+    for (const model of candidateModels) {
+      lastModelTried = model;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-    // Captura e loga o corpo de erro oficial retornado pelo Google
-    const errText = await resp.text().catch(() => '');
-    let errData = null;
-    try {
-      errData = JSON.parse(errText);
-    } catch (_) {}
-
-    const googleErrMsg = errData?.error?.message || errText || `HTTP ${resp.status}`;
-    console.error(`[Gemini API Google Error] Status ${resp.status} (${model}):`, googleErrMsg);
-
-    // Se falhar por causa da systemInstruction na v1beta, tenta o payload combinado universal
-    if (resp.status === 400 || resp.status === 422) {
-      const fallbackPayload = {
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `${systemInstruction || ''}\n\n---\nCONSULTA DO USUÁRIO:\n${userPrompt || ''}` }]
-          }
-        ],
-        generationConfig: generationConfig || {
-          temperature: 0.2,
-          maxOutputTokens: 2048
-        }
-      };
-
-      const retryResp = await fetch(url, {
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fallbackPayload)
+        body: JSON.stringify(outgoingPayload)
       });
 
-      if (retryResp.ok) {
-        const retryData = await retryResp.json();
-        const retryReply = retryData?.candidates?.[0]?.content?.parts?.[0]?.text;
-        return res.status(200).json({
-          ok: true,
-          model,
-          text: retryReply ? retryReply.trim() : '',
-          candidates: retryData.candidates || []
-        });
+      if (resp.ok) {
+        const data = await resp.json();
+        const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (reply && reply.trim()) {
+          return res.status(200).json({
+            ok: true,
+            model,
+            text: reply.trim(),
+            candidates: data.candidates || []
+          });
+        }
       }
 
-      const retryErrText = await retryResp.text().catch(() => '');
-      console.error(`[Gemini API Google Retry Error] Status ${retryResp.status} (${model}):`, retryErrText);
+      const errText = await resp.text().catch(() => '');
+      let errData = null;
+      try {
+        errData = JSON.parse(errText);
+      } catch (_) {}
+
+      const googleErrMsg = errData?.error?.message || errText || `HTTP ${resp.status}`;
+      console.error(`[Gemini API Google Error] Status ${resp.status} (${model}):`, googleErrMsg);
+
+      lastStatus = resp.status;
+      lastErrorMsg = googleErrMsg;
+      lastDetails = errData || errText;
+
+      // Se a chave for inválida (400 API_KEY_INVALID) ou bloqueada por permissão/domínio (403), interrompe imediatamente sem tentar outros modelos
+      const isKeyInvalid = resp.status === 400 && (
+        googleErrMsg.includes('API key not valid') ||
+        googleErrMsg.includes('API_KEY_INVALID') ||
+        JSON.stringify(errData || {}).includes('API_KEY_INVALID')
+      );
+      if (isKeyInvalid || resp.status === 403) {
+        return res.status(resp.status).json({
+          ok: false,
+          model,
+          code: isKeyInvalid ? 'API_KEY_INVALID' : 'PERMISSION_DENIED',
+          error: googleErrMsg,
+          details: lastDetails
+        });
+      }
     }
 
-    return res.status(resp.status >= 500 ? 502 : resp.status).json({
+    return res.status(lastStatus >= 500 ? 502 : lastStatus).json({
       ok: false,
-      model,
-      error: googleErrMsg,
-      details: errData || errText
+      model: lastModelTried,
+      error: lastErrorMsg,
+      details: lastDetails
     });
   } catch (error) {
     console.error('[Gemini Serverless Function Error]:', error.message);
