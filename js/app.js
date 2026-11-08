@@ -5157,17 +5157,30 @@ function openBankModal() {
             }
 
             let totalImported = 0;
+            let successCount = 0;
+            const failedErrors = [];
             try {
                 for (const item of pluggyItems) {
                     // triggerUpdate: false garante que a requisição apenas busque os dados já existentes na Pluggy (sem mandar atualizar no banco parceiro)
                     const res = await syncPluggyItem(item.id, { silent: true, triggerUpdate: false });
-                    if (res && res.importedCount) totalImported += res.importedCount;
+                    if (!res || res.ok === false) {
+                        failedErrors.push(`${item.connectorName || item.id}: ${res?.error || 'Falha na sincronização'}`);
+                    } else {
+                        successCount++;
+                        if (res.importedCount) totalImported += res.importedCount;
+                    }
                 }
                 localStorage.setItem('finan_last_pluggy_sync_at', String(Date.now()));
                 cleanupStatementAndCreditNoise();
                 renderAll();
                 renderPluggyConnections();
-                alert(`✅ Sincronização de ${pluggyItems.length} conexão(ões) concluída com sucesso!\n• ${totalImported} novo(s) registro(s) sincronizado(s).`);
+                if (failedErrors.length > 0 && successCount === 0) {
+                    alert(`❌ Falha ao sincronizar ${failedErrors.length} conexão(ões):\n• ${failedErrors.join('\n• ')}`);
+                } else if (failedErrors.length > 0) {
+                    alert(`⚠️ Sincronização parcial (${successCount} sucesso, ${failedErrors.length} falha):\n• ${totalImported} novo(s) registro(s) sincronizado(s).\n\nMotivo:\n• ${failedErrors.join('\n• ')}`);
+                } else {
+                    alert(`✅ Sincronização de ${successCount} conexão(ões) concluída com sucesso!\n• ${totalImported} novo(s) registro(s) sincronizado(s).`);
+                }
             } catch (err) {
                 console.error("Erro ao sincronizar conexões:", err);
                 alert('Erro durante a sincronização: ' + (err?.message || 'Erro inesperado'));
@@ -5347,18 +5360,17 @@ function openBankModal() {
                 });
 
                 if (!resp.ok) {
-                    const errText = await resp.text();
-                    let friendlyMsg = 'Erro ao sincronizar dados da Pluggy.';
-                    try {
-                        const parsed = JSON.parse(errText);
-                        friendlyMsg = parsed.error || parsed.erro || friendlyMsg;
-                    } catch (_) {
-                        if (errText) friendlyMsg = `Erro no servidor (${resp.status}): ${errText.slice(0, 140)}`;
-                    }
+                    const errData = await resp.json().catch(() => ({}));
+                    const stepInfo = errData.step ? ` [etapa: ${errData.step}]` : '';
+                    const friendlyMsg = (errData.error || errData.erro || `Erro HTTP ${resp.status} ao sincronizar dados da Pluggy.`) + stepInfo;
                     throw new Error(friendlyMsg);
                 }
 
                 const data = await resp.json();
+                if (data && data.ok === false) {
+                    const stepInfo = data.step ? ` [etapa: ${data.step}]` : '';
+                    throw new Error((data.error || data.erro || 'Erro ao sincronizar dados da Pluggy.') + stepInfo);
+                }
 
                 const itemInfo = data.item || {};
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
@@ -5838,15 +5850,17 @@ function openBankModal() {
                 }
 
                 return {
+                    ok: true,
                     status: updatedEntry.status,
                     totalTxs: pluggyTxs.length,
-                    importedCount: addedMonthlyCount
+                    importedCount: addedMonthlyCount + addedStmtCount
                 };
             } catch (err) {
+                const errMsg = err?.message || 'Falha ao sincronizar com a Pluggy.';
                 if (!silent) {
-                    alert(err.message || 'Falha ao sincronizar com a Pluggy.');
+                    alert(errMsg);
                 }
-                return null;
+                return { ok: false, error: errMsg };
             }
         }
 

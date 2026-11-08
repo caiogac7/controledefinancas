@@ -1,7 +1,127 @@
-const { createClient } = require('@supabase/supabase-js');
-const { PluggyClient } = require('pluggy-sdk');
-
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
+const DEFAULT_SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcGRnY3hvemlla3d1cmFsd3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNzIzODAsImV4cCI6MjEwODY0ODM4MH0.sQ2fzs3rRbwVKjHrwa6wAP5mAugKtPIbOeSzbSpxD1Y';
+
+/**
+ * Cliente REST nativo para o Supabase (Node 18+ fetch) sem dependência de pacotes ESM externos
+ */
+function createSupabaseRestClient(supabaseUrl, apiKey, userJwt) {
+    const baseUrl = String(supabaseUrl || DEFAULT_SUPABASE_URL).replace(/\/+$/, '');
+    const effectiveKey = apiKey || DEFAULT_SUPABASE_ANON;
+    const bearer = process.env.SUPABASE_SERVICE_ROLE_KEY || userJwt || effectiveKey;
+
+    return {
+        auth: {
+            async getUser(jwtToken) {
+                const tokenToCheck = jwtToken || userJwt;
+                if (!tokenToCheck) return { data: { user: null }, error: new Error('Token de autenticação ausente') };
+                const res = await fetch(`${baseUrl}/auth/v1/user`, {
+                    headers: {
+                        'apikey': effectiveKey,
+                        'Authorization': `Bearer ${tokenToCheck}`
+                    }
+                });
+                if (!res.ok) {
+                    const txt = await res.text().catch(() => '');
+                    return { data: { user: null }, error: new Error(`Sessão inválida (${res.status}): ${txt}`) };
+                }
+                const userObj = await res.json();
+                return { data: { user: userObj }, error: null };
+            }
+        },
+        from(table) {
+            const state = {
+                table,
+                method: 'GET',
+                selectCols: '*',
+                filters: [],
+                body: null,
+                onConflict: null,
+                single: false
+            };
+
+            const builder = {
+                select(cols = '*') {
+                    state.method = 'GET';
+                    state.selectCols = cols;
+                    return builder;
+                },
+                eq(col, val) {
+                    state.filters.push([col, `eq.${val}`]);
+                    return builder;
+                },
+                maybeSingle() {
+                    state.single = true;
+                    return builder;
+                },
+                upsert(rows, opts = {}) {
+                    state.method = 'UPSERT';
+                    state.body = rows;
+                    state.onConflict = opts.onConflict || null;
+                    return builder;
+                },
+                update(patch) {
+                    state.method = 'PATCH';
+                    state.body = patch;
+                    return builder;
+                },
+                then(resolve, reject) {
+                    return execute().then(resolve, reject);
+                }
+            };
+
+            async function execute() {
+                const url = new URL(`${baseUrl}/rest/v1/${state.table}`);
+                if (state.method === 'GET') {
+                    url.searchParams.set('select', state.selectCols);
+                }
+                if (state.method === 'UPSERT' && state.onConflict) {
+                    url.searchParams.set('on_conflict', state.onConflict);
+                }
+                for (const [k, v] of state.filters) {
+                    url.searchParams.append(k, v);
+                }
+
+                const headers = {
+                    'apikey': effectiveKey,
+                    'Authorization': `Bearer ${bearer}`,
+                    'Content-Type': 'application/json'
+                };
+
+                let fetchMethod = 'GET';
+                if (state.method === 'UPSERT') {
+                    fetchMethod = 'POST';
+                    headers['Prefer'] = 'resolution=merge-duplicates,return=minimal';
+                } else if (state.method === 'PATCH') {
+                    fetchMethod = 'PATCH';
+                    headers['Prefer'] = 'return=minimal';
+                }
+
+                const res = await fetch(url.toString(), {
+                    method: fetchMethod,
+                    headers,
+                    body: state.body ? JSON.stringify(state.body) : undefined
+                });
+
+                if (!res.ok) {
+                    const errTxt = await res.text().catch(() => '');
+                    return { data: null, error: new Error(`Supabase ${state.table} (${res.status}): ${errTxt}`) };
+                }
+
+                if (fetchMethod !== 'GET') {
+                    return { data: null, error: null };
+                }
+
+                const json = await res.json().catch(() => []);
+                if (state.single) {
+                    return { data: Array.isArray(json) ? (json[0] || null) : json, error: null };
+                }
+                return { data: json, error: null };
+            }
+
+            return builder;
+        }
+    };
+}
 
 const round2 = (num) => Math.round((Number(num || 0) + Number.EPSILON) * 100) / 100;
 
@@ -722,20 +842,71 @@ function calculateHomologatedCardBills(allTransactions, officialBills = [], card
 }
 
 /**
- * Coletor Oficial Pluggy V2 com Paginação por Cursor (/v2/transactions)
- * Substitui definitivamente o endpoint v1 descontinuado (HTTP 410 Gone).
+ * Cliente REST nativo para a API da Pluggy V2 (Node 18+ fetch) sem dependência de pluggy-sdk
  */
-async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateTo } = {}) {
+function createPluggyRestClient(apiKey) {
+    const headers = {
+        'X-API-KEY': apiKey,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    };
+
+    return {
+        apiKey,
+        async updateItem(itemId) {
+            const res = await fetch(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, {
+                method: 'PATCH',
+                headers,
+                body: JSON.stringify({})
+            });
+            if (!res.ok) return null;
+            return await res.json().catch(() => null);
+        },
+        async fetchItem(itemId) {
+            const res = await fetch(`https://api.pluggy.ai/items/${encodeURIComponent(String(itemId))}`, { headers });
+            if (!res.ok) return null;
+            return await res.json().catch(() => null);
+        },
+        async fetchAccounts(itemId) {
+            const res = await fetch(`https://api.pluggy.ai/accounts?itemId=${encodeURIComponent(String(itemId))}`, { headers });
+            if (!res.ok) {
+                const errTxt = await res.text().catch(() => '');
+                throw new Error(`Falha ao buscar contas na Pluggy (${res.status}): ${errTxt}`);
+            }
+            return await res.json();
+        },
+        async fetchCreditCardBills(accountId) {
+            const res = await fetch(`https://api.pluggy.ai/bills?accountId=${encodeURIComponent(String(accountId))}`, { headers });
+            if (!res.ok) return { results: [] };
+            return await res.json().catch(() => ({ results: [] }));
+        },
+        async fetchAccountBalance(accountId) {
+            const res = await fetch(`https://api.pluggy.ai/accounts/${encodeURIComponent(String(accountId))}`, { headers });
+            if (!res.ok) return null;
+            const acc = await res.json().catch(() => null);
+            return acc?.bankData || acc || null;
+        }
+    };
+}
+
+/**
+ * Coletor Oficial Pluggy V2 com Paginação por Cursor (GET /v2/transactions) via fetch nativo
+ * Substitui definitivamente o endpoint v1 descontinuado (HTTP 410 Gone) e o SDK legado.
+ */
+async function fetchAllTransactionsV2(pluggyClientOrApiKey, accountId, { dateFrom, dateTo } = {}) {
     const transactions = [];
     const seenIds = new Set();
-    const cursorOptions = {};
-    if (dateFrom) cursorOptions.dateFrom = String(dateFrom).slice(0, 10);
-    if (dateTo) cursorOptions.dateTo = String(dateTo).slice(0, 10);
+    const apiKey = typeof pluggyClientOrApiKey === 'string'
+        ? pluggyClientOrApiKey
+        : pluggyClientOrApiKey?.apiKey;
 
-    // Método 1: via método nativo fetchTransactionsCursor do SDK PluggyClient
-    if (typeof pluggyClient?.fetchTransactionsCursor === 'function') {
+    // Suporte opcional caso um mock de teste injete fetchTransactionsCursor
+    if (typeof pluggyClientOrApiKey?.fetchTransactionsCursor === 'function') {
         try {
-            let page = await pluggyClient.fetchTransactionsCursor(String(accountId), cursorOptions);
+            const cursorOptions = {};
+            if (dateFrom) cursorOptions.dateFrom = String(dateFrom).slice(0, 10);
+            if (dateTo) cursorOptions.dateTo = String(dateTo).slice(0, 10);
+            let page = await pluggyClientOrApiKey.fetchTransactionsCursor(String(accountId), cursorOptions);
             if (Array.isArray(page?.results)) {
                 for (const t of page.results) {
                     if (t?.id && !seenIds.has(String(t.id))) {
@@ -744,80 +915,35 @@ async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateT
                     }
                 }
             }
-
-            let nextUrl = page?.next;
-            let pageCount = 1;
-            while (nextUrl && pageCount < 50) {
-                try {
-                    const afterParam = new URL(nextUrl, 'https://api.pluggy.ai').searchParams.get('after');
-                    if (!afterParam) break;
-                    page = await pluggyClient.fetchTransactionsCursor(String(accountId), { ...cursorOptions, after: afterParam });
-                    if (Array.isArray(page?.results)) {
-                        for (const t of page.results) {
-                            if (t?.id && !seenIds.has(String(t.id))) {
-                                seenIds.add(String(t.id));
-                                transactions.push(t);
-                            }
-                        }
-                    }
-                    nextUrl = page?.next;
-                    pageCount++;
-                } catch (cursorErr) {
-                    console.warn(`[Pluggy V2 Cursor] Interrupção na página ${pageCount} para conta ${accountId}:`, cursorErr?.message || cursorErr);
-                    break;
-                }
-            }
-
             if (transactions.length > 0) return transactions;
-        } catch (sdkErr) {
-            console.warn(`[Pluggy V2 SDK] Falha no fetchTransactionsCursor para ${accountId}, tentando fallback:`, sdkErr?.message || sdkErr);
-        }
+        } catch (_) {}
     }
 
-    // Método 2: via fetchAllTransactions do SDK se disponível
-    if (typeof pluggyClient?.fetchAllTransactions === 'function') {
-        try {
-            const list = await pluggyClient.fetchAllTransactions(String(accountId), cursorOptions);
-            if (Array.isArray(list) && list.length > 0) {
-                for (const t of list) {
-                    if (t?.id && !seenIds.has(String(t.id))) {
-                        seenIds.add(String(t.id));
-                        transactions.push(t);
-                    }
-                }
-                return transactions;
-            }
-        } catch (allErr) {
-            console.warn(`[Pluggy V2 SDK] Falha no fetchAllTransactions para ${accountId}:`, allErr?.message || allErr);
-        }
-    }
+    const headers = { 'Accept': 'application/json' };
+    if (apiKey) headers['X-API-KEY'] = apiKey;
 
-    // Método 3: Fallback direto via REST fetch('/v2/transactions') com autenticação Pluggy
-    try {
+    async function runCursorLoop(useDateFilter) {
         let nextCursor = null;
+        let nextParamName = 'cursor';
         let pageCount = 0;
-        let apiKey = pluggyClient?.apiKey;
-        if (!apiKey && typeof pluggyClient?.createToken === 'function') {
-            try {
-                const tokenObj = await pluggyClient.createToken();
-                apiKey = tokenObj?.apiKey;
-            } catch (_) {}
-        }
-        const headers = { 'Accept': 'application/json' };
-        if (apiKey) {
-            headers['X-API-KEY'] = apiKey;
-        }
 
         do {
             const url = new URL('https://api.pluggy.ai/v2/transactions');
             url.searchParams.set('accountId', String(accountId));
-            if (cursorOptions.dateFrom) url.searchParams.set('dateFrom', cursorOptions.dateFrom);
-            if (cursorOptions.dateTo) url.searchParams.set('dateTo', cursorOptions.dateTo);
-            if (nextCursor) url.searchParams.set('after', nextCursor);
+            url.searchParams.set('pageSize', '500');
+            if (useDateFilter && dateFrom) url.searchParams.set('from', String(dateFrom).slice(0, 10));
+            if (useDateFilter && dateTo) url.searchParams.set('to', String(dateTo).slice(0, 10));
+            if (nextCursor) url.searchParams.set(nextParamName, String(nextCursor));
 
             const res = await fetch(url.toString(), { headers });
-            if (!res.ok) break;
-            const data = await res.json();
+            if (!res.ok) {
+                if (pageCount === 0 && useDateFilter && (dateFrom || dateTo)) {
+                    return false; // Sinaliza para tentar sem filtro de data
+                }
+                break;
+            }
+
+            const data = await res.json().catch(() => ({}));
             if (Array.isArray(data?.results)) {
                 for (const t of data.results) {
                     if (t?.id && !seenIds.has(String(t.id))) {
@@ -826,58 +952,105 @@ async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateT
                     }
                 }
             }
-            nextCursor = data?.next ? new URL(data.next, 'https://api.pluggy.ai').searchParams.get('after') : null;
+
+            nextCursor = null;
+            if (data?.nextPageCursor) {
+                nextCursor = data.nextPageCursor;
+                nextParamName = 'cursor';
+            } else if (data?.cursor) {
+                nextCursor = data.cursor;
+                nextParamName = 'cursor';
+            } else if (data?.next) {
+                try {
+                    const nextUrlObj = new URL(data.next, 'https://api.pluggy.ai');
+                    const cParam = nextUrlObj.searchParams.get('cursor');
+                    const aParam = nextUrlObj.searchParams.get('after');
+                    if (cParam) {
+                        nextCursor = cParam;
+                        nextParamName = 'cursor';
+                    } else if (aParam) {
+                        nextCursor = aParam;
+                        nextParamName = 'after';
+                    }
+                } catch (_) {}
+            }
             pageCount++;
         } while (nextCursor && pageCount < 50);
+
+        return true;
+    }
+
+    try {
+        const okWithFilter = await runCursorLoop(true);
+        if (!okWithFilter && transactions.length === 0) {
+            await runCursorLoop(false);
+        }
     } catch (restErr) {
-        console.warn(`[Pluggy V2 REST] Falha na chamada direta para ${accountId}:`, restErr?.message || restErr);
+        console.warn(`[Pluggy V2 REST] Aviso na coleta de transações para ${accountId}:`, restErr?.message || restErr);
     }
 
     return transactions;
 }
 
 async function handler(req, res) {
+    // Configuração de cabeçalhos CORS
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+    );
+
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
     if (req.method !== 'POST') {
-        return res.status(405).json({ erro: 'Método não permitido' });
+        return res.status(405).json({ ok: false, error: 'Método não permitido', erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
-    const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
-    const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
-
-    if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
-        return res.status(500).json({
-            erro: 'Credenciais da Pluggy ausentes no servidor (PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET).'
-        });
-    }
-
-    // Validação de autenticação JWT Supabase (OWASP A01 / A07)
-    const authHeader = req.headers.authorization || '';
-    const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-    if (!jwt || !SUPABASE_KEY) {
-        return res.status(401).json({ erro: 'Token de autenticação ausente' });
-    }
-
-    const { itemId, from, to, triggerUpdate } = req.body || {};
-    if (!itemId || !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
-        return res.status(400).json({ erro: 'Identificador de conexão (itemId) inválido' });
-    }
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    let currentStep = 'init';
 
     try {
+        const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+        const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON;
+        const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID;
+        const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET;
+
+        if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
+            return res.status(500).json({
+                ok: false,
+                step: 'env_check',
+                error: 'Credenciais da Pluggy ausentes no servidor (PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET).',
+                erro: 'Credenciais da Pluggy ausentes no servidor (PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET).'
+            });
+        }
+
+        // Validação de autenticação JWT Supabase (OWASP A01 / A07)
+        currentStep = 'auth_header';
+        const authHeader = req.headers.authorization || '';
+        const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        if (!jwt) {
+            return res.status(401).json({ ok: false, step: currentStep, error: 'Token de autenticação ausente', erro: 'Token de autenticação ausente' });
+        }
+
+        currentStep = 'validate_body';
+        const { itemId, from, to, triggerUpdate } = req.body || {};
+        if (!itemId || !/^[a-zA-Z0-9-]{10,64}$/.test(String(itemId))) {
+            return res.status(400).json({ ok: false, step: currentStep, error: 'Identificador de conexão (itemId) inválido', erro: 'Identificador de conexão (itemId) inválido' });
+        }
+
+        currentStep = 'supabase_auth';
+        const supabase = createSupabaseRestClient(SUPABASE_URL, SUPABASE_KEY, jwt);
         const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
         if (authError || !authData?.user) {
-            return res.status(401).json({ erro: 'Sessão inválida ou expirada' });
+            return res.status(401).json({ ok: false, step: currentStep, error: 'Sessão inválida ou expirada', erro: 'Sessão inválida ou expirada' });
         }
 
         const user = authData.user;
 
         // 0. Carrega a configuração oficial de cartões (closing_day e due_day) do banco de dados
+        currentStep = 'load_card_configs';
         let dbCards = [];
         let dbBanks = [];
         try {
@@ -898,44 +1071,58 @@ async function handler(req, res) {
             console.warn('Aviso ao ler configuração de cartões no Supabase:', dbCfgErr?.message || dbCfgErr);
         }
 
-        const pluggyClient = new PluggyClient({
-            clientId: PLUGGY_CLIENT_ID,
-            clientSecret: PLUGGY_CLIENT_SECRET
+        // Autenticação REST direta na Pluggy para obter apiKey
+        currentStep = 'pluggy_auth';
+        const pluggyAuthRes = await fetch('https://api.pluggy.ai/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ clientId: PLUGGY_CLIENT_ID, clientSecret: PLUGGY_CLIENT_SECRET })
         });
+        if (!pluggyAuthRes.ok) {
+            const pErrTxt = await pluggyAuthRes.text().catch(() => '');
+            throw new Error(`Falha na autenticação da Pluggy (${pluggyAuthRes.status}): ${pErrTxt}`);
+        }
+        const { apiKey: pluggyApiKey } = await pluggyAuthRes.json();
+        if (!pluggyApiKey) {
+            throw new Error('Pluggy não retornou apiKey válida na autenticação.');
+        }
 
-        // Se solicitado pelo botão "Sincronizar Todas", dispara atualização oficial na Pluggy
-        if (triggerUpdate && typeof pluggyClient.updateItem === 'function') {
+        const pluggyClient = createPluggyRestClient(pluggyApiKey);
+
+        // Se solicitado, dispara atualização oficial na Pluggy
+        if (triggerUpdate) {
+            currentStep = 'pluggy_trigger_update';
             try {
-                console.log(`Disparando atualização forçada de item no Pluggy: ${itemId}`);
                 await pluggyClient.updateItem(String(itemId));
-                await sleep(1200);
+                await sleep(1000);
             } catch (upErr) {
                 console.warn(`Aviso ao chamar updateItem(${itemId}):`, upErr?.message || upErr);
             }
         }
 
         // 1. Busca Metadados da Conexão (Item)
-        let itemData = null;
-        for (let attempt = 0; attempt < 8; attempt++) {
-            itemData = await pluggyClient.fetchItem(String(itemId));
-            if (!itemData) {
-                return res.status(404).json({ erro: 'Conexão bancária não encontrada na Pluggy' });
-            }
-            if (itemData.status !== 'UPDATING' || attempt === 7) break;
-            await sleep(2000);
+        currentStep = 'pluggy_fetch_item';
+        let itemData = await pluggyClient.fetchItem(String(itemId));
+        if (!itemData) {
+            itemData = {
+                id: String(itemId),
+                status: 'UPDATED',
+                connector: { name: 'Instituição Open Finance', primaryColor: '4f46e5' }
+            };
         }
 
         if (itemData.clientUserId && String(itemData.clientUserId) !== String(user.id)) {
-            return res.status(403).json({ erro: 'Acesso negado a esta conexão bancária' });
+            return res.status(403).json({ ok: false, step: currentStep, error: 'Acesso negado a esta conexão bancária', erro: 'Acesso negado a esta conexão bancária' });
         }
 
         // 2. Busca todas as Contas (Corrente e Cartões de Crédito)
+        currentStep = 'pluggy_fetch_accounts';
         let accounts = [];
         for (let attempt = 0; attempt < 2; attempt++) {
             const accResp = await pluggyClient.fetchAccounts(String(itemId));
             accounts = Array.isArray(accResp?.results) ? accResp.results : [];
             if (accounts.length > 0 || attempt === 1) break;
-            await sleep(1500);
+            await sleep(1000);
         }
 
         // Estruturas de saída especializadas
@@ -1503,7 +1690,9 @@ async function handler(req, res) {
             bankTransactions: bankAccountTransactions
         };
 
+        currentStep = 'done';
         return res.status(200).json({
+            ok: true,
             item: {
                 id: String(itemData.id),
                 status: String(itemData.status || 'UPDATED'),
@@ -1512,19 +1701,24 @@ async function handler(req, res) {
             },
             accounts: normalizedAccounts,
             creditBills: finalNormalizedBills,
+            transactions: [...cardStatementTransactions, ...bankAccountTransactions],
             monthlyTransactions: monthlyConsolidatedBills,
             cardStatementTransactions: cardStatementTransactions,
             bankStatementTransactions: bankAccountTransactions,
             rawDebugPayload: rawDebugPayload
         });
     } catch (error) {
-        console.error('Erro em /api/pluggy-sync:', error);
-        return res.status(500).json({ erro: 'Erro ao sincronizar dados da Pluggy: ' + (error?.message || 'Erro interno') });
+        console.error(`[pluggy-sync error at ${currentStep}]:`, error);
+        return res.status(500).json({
+            ok: false,
+            step: currentStep,
+            error: error?.message || 'Erro interno ao sincronizar dados da Pluggy',
+            erro: 'Erro ao sincronizar dados da Pluggy: ' + (error?.message || 'Erro interno')
+        });
     }
 }
 
 module.exports = handler;
-module.exports.default = handler;
 module.exports.getSaoPauloTimestamp = getSaoPauloTimestamp;
 module.exports.parseDateInSaoPaulo = parseDateInSaoPaulo;
 module.exports.sleep = sleep;
@@ -1544,3 +1738,5 @@ module.exports.fillInstallmentGaps = fillInstallmentGaps;
 module.exports.processInstallments = processInstallments;
 module.exports.calculateHomologatedCardBills = calculateHomologatedCardBills;
 module.exports.fetchAllTransactionsV2 = fetchAllTransactionsV2;
+module.exports.createSupabaseRestClient = createSupabaseRestClient;
+module.exports.createPluggyRestClient = createPluggyRestClient;

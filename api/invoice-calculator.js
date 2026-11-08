@@ -1,5 +1,4 @@
-const { fillInstallmentGaps } = require('./pluggy-sync');
-const { createClient } = require('@supabase/supabase-js');
+const { fillInstallmentGaps, createSupabaseRestClient } = require('./pluggy-sync');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -330,11 +329,11 @@ async function handler(req, res) {
     const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
     const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
-    if (!jwt || !SUPABASE_KEY) {
+    if (!jwt) {
         return res.status(401).json({ erro: 'Token de autenticação ausente ou inválido.' });
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    const supabase = createSupabaseRestClient(SUPABASE_URL, SUPABASE_KEY, jwt);
 
     try {
         const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
@@ -365,7 +364,6 @@ async function handler(req, res) {
 }
 
 module.exports = handler;
-module.exports.default = handler;
 module.exports.getTodayInSaoPaulo = getTodayInSaoPaulo;
 module.exports.getPreviousMonthKey = getPreviousMonthKey;
 module.exports.getDaysInMonth = getDaysInMonth;

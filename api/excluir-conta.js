@@ -1,6 +1,5 @@
-const { createClient } = require('@supabase/supabase-js');
-
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
+const DEFAULT_SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jcGRnY3hvemlla3d1cmFsd3p4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwNzIzODAsImV4cCI6MjEwODY0ODM4MH0.sQ2fzs3rRbwVKjHrwa6wAP5mAugKtPIbOeSzbSpxD1Y';
 
 /**
  * POST /api/excluir-conta
@@ -15,12 +14,8 @@ module.exports = async function handler(req, res) {
         return res.status(405).json({ erro: 'Método não permitido' });
     }
 
-    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!SUPABASE_KEY) {
-        return res.status(500).json({ erro: 'Configuração de servidor incompleta para exclusão de conta' });
-    }
+    const SUPABASE_URL = String(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL).replace(/\/+$/, '');
+    const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON;
 
     const authHeader = req.headers.authorization || '';
     const jwt = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -28,30 +23,48 @@ module.exports = async function handler(req, res) {
         return res.status(401).json({ erro: 'Token de autenticação ausente' });
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
     try {
-        const { data: authData, error: authError } = await supabase.auth.getUser(jwt);
-        if (authError || !authData?.user) {
+        const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+            headers: {
+                'apikey': SUPABASE_KEY,
+                'Authorization': `Bearer ${jwt}`
+            }
+        });
+        if (!userRes.ok) {
+            return res.status(401).json({ erro: 'Sessão inválida ou expirada' });
+        }
+        const user = await userRes.json();
+        const userId = user?.id;
+        if (!userId) {
             return res.status(401).json({ erro: 'Sessão inválida ou expirada' });
         }
 
-        const userId = authData.user.id;
+        const bearer = process.env.SUPABASE_SERVICE_ROLE_KEY || jwt;
+        const headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${bearer}`,
+            'Prefer': 'return=minimal'
+        };
 
         // 1. Exclui registros das tabelas relacionais do usuário
+        const tables = ['transactions', 'bank_statements', 'credit_bills', 'credit_cards', 'banks', 'categories'];
         await Promise.all([
-            supabase.from('transactions').delete().eq('user_id', userId),
-            supabase.from('bank_statements').delete().eq('user_id', userId),
-            supabase.from('banks').delete().eq('user_id', userId),
-            supabase.from('categories').delete().eq('user_id', userId),
-            supabase.from('profiles').delete().eq('id', userId)
+            ...tables.map(t => fetch(`${SUPABASE_URL}/rest/v1/${t}?user_id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE', headers })),
+            fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE', headers })
         ]);
 
-        // 2. Exclui o usuário do Supabase Auth usando privilégio administrativo no back-end
-        const { error: deleteUserError } = await supabase.auth.admin.deleteUser(userId);
-        if (deleteUserError) {
-            console.error('Erro ao excluir auth.users:', deleteUserError);
-            return res.status(500).json({ erro: 'Dados removidos, mas houve falha ao encerrar credencial de acesso' });
+        // 2. Exclui o usuário do Supabase Auth se a Service Role Key estiver configurada
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+            const delUserRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+                method: 'DELETE',
+                headers: {
+                    'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                }
+            });
+            if (!delUserRes.ok) {
+                console.error('Erro ao excluir auth.users:', await delUserRes.text().catch(() => ''));
+            }
         }
 
         return res.status(200).json({ sucesso: true });

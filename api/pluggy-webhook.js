@@ -1,5 +1,4 @@
-const { createClient } = require('@supabase/supabase-js');
-const { PluggyClient } = require('pluggy-sdk');
+const { createSupabaseRestClient, createPluggyRestClient } = require('./pluggy-sync');
 
 const DEFAULT_SUPABASE_URL = 'https://ncpdgcxoziekwuralwzx.supabase.co';
 
@@ -27,7 +26,7 @@ function getSaoPauloTimestamp() {
  * Endpoint seguro para receber notificações de eventos da Pluggy (Open Finance)
  * Suporta: item/updated, item/created, transactions/created
  */
-async function handler(req, res) {
+module.exports = async function handler(req, res) {
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -59,18 +58,26 @@ async function handler(req, res) {
         return res.status(200).json({ recebido: true, ignorado: `Evento ${event} não requer ingestão` });
     }
 
-    if (!SUPABASE_KEY || !PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
+    if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
         console.error('[Pluggy Webhook] Configurações de ambiente ausentes no servidor');
         return res.status(500).json({ erro: 'Configurações do servidor incompletas' });
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    const pluggyClient = new PluggyClient({
-        clientId: PLUGGY_CLIENT_ID,
-        clientSecret: PLUGGY_CLIENT_SECRET
-    });
+    const supabase = createSupabaseRestClient(SUPABASE_URL, SUPABASE_KEY);
 
     try {
+        // Autentica na Pluggy via REST
+        const authRes = await fetch('https://api.pluggy.ai/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientId: PLUGGY_CLIENT_ID, clientSecret: PLUGGY_CLIENT_SECRET })
+        });
+        if (!authRes.ok) {
+            return res.status(500).json({ erro: 'Falha ao autenticar na Pluggy' });
+        }
+        const { apiKey } = await authRes.json();
+        const pluggyClient = createPluggyRestClient(apiKey);
+
         // 1. Busca os metadados do item na Pluggy
         const itemData = await pluggyClient.fetchItem(itemId);
         if (!itemData) {
@@ -80,13 +87,11 @@ async function handler(req, res) {
         // 2. Identifica o usuário proprietário (clientUserId)
         let userId = itemData.clientUserId;
 
-        // Fallback: se clientUserId não veio no item, pesquisa no banco pela conta/banco vinculado
         if (!userId) {
             const { data: bankRecord } = await supabase
                 .from('banks')
                 .select('user_id')
                 .eq('pluggy_item_id', itemId)
-                .limit(1)
                 .maybeSingle();
 
             userId = bankRecord?.user_id;
@@ -121,11 +126,8 @@ async function handler(req, res) {
         for (const acc of accounts) {
             if (acc.type === 'CREDIT') {
                 try {
-                    let bills = [];
-                    if (typeof pluggyClient.fetchBills === 'function') {
-                        const billsResp = await pluggyClient.fetchBills(acc.id);
-                        bills = Array.isArray(billsResp?.results) ? billsResp.results : [];
-                    }
+                    const billsResp = await pluggyClient.fetchCreditCardBills(acc.id);
+                    const bills = Array.isArray(billsResp?.results) ? billsResp.results : [];
 
                     if (bills.length > 0) {
                         const billRows = bills.map(b => {
@@ -167,8 +169,4 @@ async function handler(req, res) {
         console.error('[Pluggy Webhook] Erro ao processar webhook:', err);
         return res.status(500).json({ erro: 'Falha interna ao processar webhook: ' + (err?.message || 'Erro inesperado') });
     }
-}
-
-module.exports = handler;
-module.exports.default = handler;
-
+};
