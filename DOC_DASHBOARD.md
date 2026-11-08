@@ -38,3 +38,8 @@
 - **Favicon Oficial em SVG Data URI:** Ícone da aba em SVG com gradiente `#FF2E4D` a `#E61937` e carteira branca em alta resolução.
 - **Carregamento Instantâneo com Cache Local:** Resumo financeiro mantido em `financas_last_summary_${userId}` no `localStorage`, eliminando o estado de espera com `R$ 0,00` no carregamento.
 - **Roteamento SPA na Vercel:** Diretivas de `rewrites` em `vercel.json` e espelhamento em `public/` garantem navegação fluida sem erro 404.
+
+### 7. Exibição de Valor Reservado Isolado nos Cards de Contas Bancárias
+- **Saldo Livre em Conta:** O saldo principal do card exibe estritamente o montante disponível para transacionar na conta corrente, sem misturar ou inflar com quantias guardadas.
+- **Badge / Linha de Reservado:** Quando a conta possui dinheiro em cofrinho, caixinha ou reserva (`vaultBalance > 0`), o card exibe uma barra dedicada em âmbar com ícone de cofrinho (`piggy-bank`) e o valor exato reservado (`Reservado: R$ X,XX`).
+- **Origem dos Dados e Edição:** O valor é alimentado automaticamente por movimentações de cofre/reserva (`VAULT_TX`) ou ajustado diretamente no campo "Dinheiro Reservado / Cofrinho (R$)" dentro do modal de edição da conta (`bank-modal`).
