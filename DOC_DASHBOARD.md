@@ -39,13 +39,10 @@
 - **Carregamento Instantâneo com Cache Local:** Resumo financeiro mantido em `financas_last_summary_${userId}` no `localStorage`, eliminando o estado de espera com `R$ 0,00` no carregamento.
 - **Roteamento SPA na Vercel:** Diretivas de `rewrites` em `vercel.json` e espelhamento em `public/` garantem navegação fluida sem erro 404.
 
-### 7. Exibição de Valor Reservado Isolado nos Cards de Contas Bancárias
-- **Saldo Livre em Conta:** O saldo principal do card exibe estritamente o montante disponível para transacionar na conta corrente, sem misturar ou inflar com quantias guardadas.
-- **Badge / Linha de Reservado:** Quando a conta possui dinheiro em cofrinho, caixinha ou reserva (`vaultBalance > 0`), o card exibe uma barra dedicada em âmbar com ícone de cofrinho (`piggy-bank`) e o valor exato reservado (`Reservado: R$ X,XX`).
-- **Origem dos Dados e Integração Nativa da Pluggy:**
-  - Extração direta dos dados nativos de saldo reservado da Pluggy: lê `acc.bankData.reservedBalances`, `acc.bankData.hasReservedBalance`, `acc.bankData.automaticallyInvestedBalance` e `pluggyClient.fetchAccountBalance()` (ex: R$ 25,00 após retirada).
-  - Fallback: caso a instituição não reporte o objeto nativo, o sistema apura estritamente as movimentações do ciclo/mês vigente (`VAULT_TX` de depósitos menos retiradas/resgates do período ativo). Isso impede que resíduos cumulativos de cofrinhos já esvaziados no passado inflem o saldo real atual.
-  - Caso o usuário defina ou ajuste manualmente o valor no modal da conta ("Dinheiro Reservado / Cofrinho"), a preferência manual é preservada e respeitada sobre o cálculo automático.
+### 7. Saldo Reservado (Cofrinho / Caixinha) — Controle Estritamente Manual
+- **Fim da Invasão Automática:** Eliminadas todas as extrações e heurísticas automáticas que marcavam contas como "Reservado" indevidamente. O Open Finance reportava remuneração automática de conta corrente (CDB/RDB que rende automaticamente no Itaú e InfinitePay como `automaticallyInvestedBalance`), o que indevidamente convertia o saldo livre em conta em "reserva".
+- **Controle 100% nas Mãos do Usuário:** O badge "Reservado" e o campo `vault_balance` agora só existem se o próprio usuário abrir o modal de edição do banco em "Gerenciar Bancos" e preencher explicitamente um valor no campo "Dinheiro Reservado / Cofrinho".
+- **Saldos em Banco Preservados:** Contas sem reserva manual permanecem limpas, exibindo exclusivamente seu saldo disponível livre sem faixas ou badges de reserva indesejados.
 
 ### 8. Estabilização de Layout, Bloqueio de Tradução Automática e Eliminação de Layout Shift
 
