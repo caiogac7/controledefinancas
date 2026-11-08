@@ -721,6 +721,121 @@ export function calculateHomologatedCardBills(allTransactions, officialBills = [
     return billsByMonth;
 }
 
+/**
+ * Coletor Oficial Pluggy V2 com Paginação por Cursor (/v2/transactions)
+ * Substitui definitivamente o endpoint v1 descontinuado (HTTP 410 Gone).
+ */
+export async function fetchAllTransactionsV2(pluggyClient, accountId, { dateFrom, dateTo } = {}) {
+    const transactions = [];
+    const seenIds = new Set();
+    const cursorOptions = {};
+    if (dateFrom) cursorOptions.dateFrom = String(dateFrom).slice(0, 10);
+    if (dateTo) cursorOptions.dateTo = String(dateTo).slice(0, 10);
+
+    // Método 1: via método nativo fetchTransactionsCursor do SDK PluggyClient
+    if (typeof pluggyClient?.fetchTransactionsCursor === 'function') {
+        try {
+            let page = await pluggyClient.fetchTransactionsCursor(String(accountId), cursorOptions);
+            if (Array.isArray(page?.results)) {
+                for (const t of page.results) {
+                    if (t?.id && !seenIds.has(String(t.id))) {
+                        seenIds.add(String(t.id));
+                        transactions.push(t);
+                    }
+                }
+            }
+
+            let nextUrl = page?.next;
+            let pageCount = 1;
+            while (nextUrl && pageCount < 50) {
+                try {
+                    const afterParam = new URL(nextUrl, 'https://api.pluggy.ai').searchParams.get('after');
+                    if (!afterParam) break;
+                    page = await pluggyClient.fetchTransactionsCursor(String(accountId), { ...cursorOptions, after: afterParam });
+                    if (Array.isArray(page?.results)) {
+                        for (const t of page.results) {
+                            if (t?.id && !seenIds.has(String(t.id))) {
+                                seenIds.add(String(t.id));
+                                transactions.push(t);
+                            }
+                        }
+                    }
+                    nextUrl = page?.next;
+                    pageCount++;
+                } catch (cursorErr) {
+                    console.warn(`[Pluggy V2 Cursor] Interrupção na página ${pageCount} para conta ${accountId}:`, cursorErr?.message || cursorErr);
+                    break;
+                }
+            }
+
+            if (transactions.length > 0) return transactions;
+        } catch (sdkErr) {
+            console.warn(`[Pluggy V2 SDK] Falha no fetchTransactionsCursor para ${accountId}, tentando fallback:`, sdkErr?.message || sdkErr);
+        }
+    }
+
+    // Método 2: via fetchAllTransactions do SDK se disponível
+    if (typeof pluggyClient?.fetchAllTransactions === 'function') {
+        try {
+            const list = await pluggyClient.fetchAllTransactions(String(accountId), cursorOptions);
+            if (Array.isArray(list) && list.length > 0) {
+                for (const t of list) {
+                    if (t?.id && !seenIds.has(String(t.id))) {
+                        seenIds.add(String(t.id));
+                        transactions.push(t);
+                    }
+                }
+                return transactions;
+            }
+        } catch (allErr) {
+            console.warn(`[Pluggy V2 SDK] Falha no fetchAllTransactions para ${accountId}:`, allErr?.message || allErr);
+        }
+    }
+
+    // Método 3: Fallback direto via REST fetch('/v2/transactions') com autenticação Pluggy
+    try {
+        let nextCursor = null;
+        let pageCount = 0;
+        let apiKey = pluggyClient?.apiKey;
+        if (!apiKey && typeof pluggyClient?.createToken === 'function') {
+            try {
+                const tokenObj = await pluggyClient.createToken();
+                apiKey = tokenObj?.apiKey;
+            } catch (_) {}
+        }
+        const headers = { 'Accept': 'application/json' };
+        if (apiKey) {
+            headers['X-API-KEY'] = apiKey;
+        }
+
+        do {
+            const url = new URL('https://api.pluggy.ai/v2/transactions');
+            url.searchParams.set('accountId', String(accountId));
+            if (cursorOptions.dateFrom) url.searchParams.set('dateFrom', cursorOptions.dateFrom);
+            if (cursorOptions.dateTo) url.searchParams.set('dateTo', cursorOptions.dateTo);
+            if (nextCursor) url.searchParams.set('after', nextCursor);
+
+            const res = await fetch(url.toString(), { headers });
+            if (!res.ok) break;
+            const data = await res.json();
+            if (Array.isArray(data?.results)) {
+                for (const t of data.results) {
+                    if (t?.id && !seenIds.has(String(t.id))) {
+                        seenIds.add(String(t.id));
+                        transactions.push(t);
+                    }
+                }
+            }
+            nextCursor = data?.next ? new URL(data.next, 'https://api.pluggy.ai').searchParams.get('after') : null;
+            pageCount++;
+        } while (nextCursor && pageCount < 50);
+    } catch (restErr) {
+        console.warn(`[Pluggy V2 REST] Falha na chamada direta para ${accountId}:`, restErr?.message || restErr);
+    }
+
+    return transactions;
+}
+
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ erro: 'Método não permitido' });
@@ -830,8 +945,9 @@ export default async function handler(req, res) {
         const nowSp = parseDateInSaoPaulo(new Date().toISOString());
 
         // Processa cada conta aplicando a REGRA 1 (Separação BANK vs CREDIT) e a DATA DE VIRADA DO CARTÃO
-        await Promise.all(accounts.map(async (acc) => {
+        await Promise.allSettled(accounts.map(async (acc) => {
             if (!acc.id || !/^[a-zA-Z0-9-]+$/.test(String(acc.id))) return;
+            try {
 
             const isCredit = acc.type === 'CREDIT';
             const rawBalance = Number(acc.balance || 0);
@@ -897,58 +1013,24 @@ export default async function handler(req, res) {
                 dueDay: cardCycleConfig.dueDay
             });
 
-            // REGRA 3: Coleta exaustiva de transações e parcelas via V2 (Cursor /v2/transactions)
-            const allTxsMap = new Map();
-            const cursorOptions = {};
+            // REGRA 3: Coleta exaustiva de transações via V2 com cursor pagination (/v2/transactions)
             const safeOneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-            if (from) {
-                cursorOptions.dateFrom = String(from).slice(0, 10);
-            } else if (isCredit) {
-                cursorOptions.dateFrom = safeOneYearAgo;
-            }
-            if (to) {
-                cursorOptions.dateTo = String(to).slice(0, 10);
-            }
+            const dateFrom = from ? String(from).slice(0, 10) : (isCredit ? safeOneYearAgo : undefined);
+            const dateTo = to ? String(to).slice(0, 10) : undefined;
 
             try {
-                if (typeof pluggyClient.fetchTransactionsCursor === 'function') {
-                    let page = await pluggyClient.fetchTransactionsCursor(String(acc.id), cursorOptions);
-                    if (Array.isArray(page?.results)) {
-                        page.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
-                    }
-                    let nextUrl = page?.next;
-                    let pageCount = 1;
-                    while (nextUrl && pageCount < 50) {
-                        try {
-                            const afterParam = new URL(nextUrl, 'https://api.pluggy.ai').searchParams.get('after');
-                            if (!afterParam) break;
-                            page = await pluggyClient.fetchTransactionsCursor(String(acc.id), { ...cursorOptions, after: afterParam });
-                            if (Array.isArray(page?.results)) {
-                                page.results.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
-                            }
-                            nextUrl = page?.next;
-                            pageCount++;
-                        } catch (_) {
-                            break;
-                        }
-                    }
-                } else if (typeof pluggyClient.fetchAllTransactions === 'function') {
-                    const fullList = await pluggyClient.fetchAllTransactions(String(acc.id), cursorOptions);
-                    if (Array.isArray(fullList)) {
-                        fullList.forEach(t => { if (t && t.id) allTxsMap.set(String(t.id), t); });
-                    }
-                }
-            } catch (txErr) {
-                console.warn(`Aviso ao coletar transações v2 para ${acc.id}:`, txErr?.message || txErr);
+                txResults = await fetchAllTransactionsV2(pluggyClient, String(acc.id), { dateFrom, dateTo });
+            } catch (v2Err) {
+                console.warn(`[Pluggy Sync] Falha ao coletar transações v2 para conta ${acc.id}:`, v2Err?.message || v2Err);
+                txResults = [];
             }
 
-            // Garante associação da fatura para transações que possam não ter o billId preenchido
+            // Garante associação das faturas e metadados de cartão
             if (isCredit && Array.isArray(creditBills) && creditBills.length > 0) {
                 creditBills.forEach(bill => {
                     if (!bill.id || !bill.dueDate) return;
                     const bMonth = String(bill.dueDate).slice(0, 7);
-                    allTxsMap.forEach(t => {
+                    txResults.forEach(t => {
                         if (!t.creditCardMetadata) t.creditCardMetadata = {};
                         if (!t.creditCardMetadata.billId && t.date && String(t.date).slice(0, 7) === bMonth) {
                             t.creditCardMetadata.billId = bill.id;
@@ -959,8 +1041,6 @@ export default async function handler(req, res) {
                     });
                 });
             }
-
-            txResults = Array.from(allTxsMap.values());
 
             // Normaliza as Faturas Oficiais (creditBills) respeitando closingDay e dueDay do cartão
             creditBills.forEach((b) => {
