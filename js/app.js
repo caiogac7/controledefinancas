@@ -8012,6 +8012,9 @@ function openBankModal() {
             renderInstallmentsAndProjection(monthTxs);
             renderFinancialAnalysisAndReports(currentMonth, operationalMonthTxs, totalIncome, totalExpense);
             renderSavedCardsList();
+            if (typeof renderReconciledHistorySettings === 'function') {
+                renderReconciledHistorySettings();
+            }
             lucide.createIcons();
         }
 
@@ -9393,6 +9396,25 @@ function openBankModal() {
             );
         }
 
+        function inferOriginalTransactionAmount(tx) {
+            if (!tx) return 0;
+            if (typeof tx.originalAmount === 'number' && !isNaN(tx.originalAmount) && tx.originalAmount > 0) {
+                return Number(tx.originalAmount);
+            }
+            // Se não tiver originalAmount salvo, busca outra parcela da mesma série em outros meses
+            const baseDesc = getBaseDescription(tx.desc || tx.description || '').toLowerCase().trim();
+            if (baseDesc) {
+                const sibling = transactions.find(other =>
+                    Number(other.id) !== Number(tx.id) &&
+                    !other.reconciledWithStatement &&
+                    getBaseDescription(other.desc || other.description || '').toLowerCase().trim() === baseDesc &&
+                    Number(other.amount || 0) > 0
+                );
+                if (sibling) return Number(sibling.amount);
+            }
+            return Number(tx.amount || 0);
+        }
+
         async function confirmQuickPayReconciled(fitid, amount, dateStr) {
             if (!currentQuickPayTx) return;
             const targetTxId = currentQuickPayTx.id;
@@ -9401,6 +9423,9 @@ function openBankModal() {
 
             const txDesc = currentQuickPayTx.desc || 'Lançamento';
             const isExp = currentQuickPayTx.type !== 'income';
+            if (typeof currentQuickPayTx.originalAmount !== 'number' || isNaN(currentQuickPayTx.originalAmount)) {
+                currentQuickPayTx.originalAmount = Number(currentQuickPayTx.amount || 0);
+            }
             currentQuickPayTx.bankId = chosenBankId;
             currentQuickPayTx.cardId = ''; // Desacopla de cartão para manter visível na Home
             currentQuickPayTx.amount = Number(amount);
@@ -9979,6 +10004,14 @@ function openBankModal() {
 
             transactions.forEach(t => {
                 if (selectedTxIds.has(Number(t.id))) {
+                    const inferredOrig = inferOriginalTransactionAmount(t);
+                    if (typeof t.originalAmount !== 'number' || isNaN(t.originalAmount)) {
+                        t.originalAmount = inferredOrig;
+                    }
+                    // Se o item havia sido conciliado sozinho antes (ex: assumindo o valor cheio do Pix) e agora faz parte de um lote, restaura o valor original da parcela!
+                    if (t.reconciledWithStatement && inferredOrig > 0 && inferredOrig !== Number(t.amount)) {
+                        t.amount = inferredOrig;
+                    }
                     t.paid = true;
                     t.paidAt = paidDate;
                     t.reconciledWithStatement = true;
@@ -10004,6 +10037,172 @@ function openBankModal() {
             showActionToast(`🎉 ${count} títulos quitados e conciliados ao débito de ${formatBRL(realAmt)}!`);
         }
         window.confirmBatchQuickPayReconciled = confirmBatchQuickPayReconciled;
+
+        async function undoReconciliationById(txId) {
+            const tx = transactions.find(t => Number(t.id) === Number(txId));
+            if (!tx) return;
+            const origAmt = inferOriginalTransactionAmount(tx);
+            tx.amount = origAmt;
+            tx.paid = false;
+            tx.paidAt = '';
+            tx.reconciledWithStatement = false;
+            tx.reconciledFitid = '';
+            tx.reconciledAt = '';
+            renderAll();
+            if (currentUser) {
+                currentUser.transactions_json = transactions;
+                await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+            }
+            showActionToast(`↩️ Conciliação de "${getBaseDescription(tx.desc)}" desfeita! Valor original (${formatBRL(origAmt)}) restaurado.`);
+        }
+        window.undoReconciliationById = undoReconciliationById;
+
+        async function undoReconciliationBatchByFitid(fitid) {
+            if (!fitid) return;
+            const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
+            const affected = transactions.filter(t =>
+                normalizeMonthKey(t.month, '2026-11') === currentMonth.key &&
+                t.reconciledWithStatement &&
+                String(t.reconciledFitid || '') === String(fitid)
+            );
+            if (affected.length === 0) return;
+            affected.forEach(tx => {
+                tx.amount = inferOriginalTransactionAmount(tx);
+                tx.paid = false;
+                tx.paidAt = '';
+                tx.reconciledWithStatement = false;
+                tx.reconciledFitid = '';
+                tx.reconciledAt = '';
+            });
+            renderAll();
+            if (currentUser) {
+                currentUser.transactions_json = transactions;
+                await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+            }
+            showActionToast(`↩️ Lote de ${affected.length} lançamento(s) desconciliado e restaurado para Pendente!`);
+        }
+        window.undoReconciliationBatchByFitid = undoReconciliationBatchByFitid;
+
+        function renderReconciledHistorySettings() {
+            const listEl = document.getElementById('reconciled-history-list');
+            const badgeEl = document.getElementById('reconciled-history-month-badge');
+            if (!listEl) return;
+
+            const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
+            if (badgeEl) badgeEl.textContent = currentMonth.label;
+
+            const reconciledTxs = transactions.filter(t =>
+                normalizeMonthKey(t.month, '2026-11') === currentMonth.key &&
+                t.paid &&
+                t.reconciledWithStatement &&
+                !t.isConsolidatedBill &&
+                !isBalanceControlEntry(t)
+            );
+
+            if (reconciledTxs.length === 0) {
+                listEl.innerHTML = `
+                    <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-white/5 text-center">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Nenhuma conciliação bancária realizada em <strong>${escapeHtml(currentMonth.label)}</strong>.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Agrupa por fitid quando houver conciliação em lote
+            const groups = new Map();
+            const singles = [];
+
+            reconciledTxs.forEach(t => {
+                const fit = String(t.reconciledFitid || '').trim();
+                if (fit) {
+                    if (!groups.has(fit)) groups.set(fit, []);
+                    groups.get(fit).push(t);
+                } else {
+                    singles.push(t);
+                }
+            });
+
+            let html = '';
+
+            groups.forEach((txList, fitid) => {
+                const stmt = (Array.isArray(bankStatements) ? bankStatements : []).find(s => String(s.fitid || `stmt_${s.id}`) === fitid);
+                const stmtDesc = stmt ? (stmt.desc || stmt.description || 'Extrato Bancário') : `Extrato (${fitid.slice(0, 18)}...)`;
+                const stmtAmt = stmt ? Number(stmt.amount || 0) : txList.reduce((a, b) => a + Number(b.amount || 0), 0);
+                const sumTxs = Number(txList.reduce((a, b) => a + Number(b.amount || 0), 0).toFixed(2));
+                const diff = Number((sumTxs - stmtAmt).toFixed(2));
+
+                if (txList.length > 1) {
+                    html += `
+                        <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900/80 border border-emerald-500/30 space-y-2.5">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-white/5 pb-2">
+                                <div>
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Lote (${txList.length} itens)</span>
+                                        <span class="text-xs font-extrabold text-slate-800 dark:text-white">${escapeHtml(stmtDesc)}</span>
+                                    </div>
+                                    <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                        Valor no Extrato: <strong class="text-emerald-400">${formatBRL(stmtAmt)}</strong> • Soma dos itens: <strong>${formatBRL(sumTxs)}</strong>
+                                        ${Math.abs(diff) > 0.01 ? `<span class="text-amber-400 font-bold ml-1">(Diferença: ${formatBRL(diff)})</span>` : `<span class="text-emerald-400 font-bold ml-1">(✓ Bateu 100%)</span>`}
+                                    </p>
+                                </div>
+                                <button type="button" onclick="undoReconciliationBatchByFitid('${escapeHtml(fitid)}')"
+                                    class="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[11px] font-extrabold transition flex items-center gap-1.5 self-start sm:self-center">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Desfazer Lote Inteiro
+                                </button>
+                            </div>
+                            <div class="space-y-1.5">
+                                ${txList.map(t => {
+                                    const origAmt = inferOriginalTransactionAmount(t);
+                                    return `
+                                        <div class="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-white/50 dark:bg-slate-950/40">
+                                            <div class="flex items-center gap-2 min-w-0">
+                                                <span class="font-bold text-slate-700 dark:text-slate-200 truncate">${escapeHtml(t.desc)}</span>
+                                                <span class="text-[11px] text-rose-400 font-extrabold">${formatBRL(t.amount)}</span>
+                                                ${Math.abs(origAmt - Number(t.amount)) > 0.01 ? `<span class="text-[10px] text-slate-400">(Original: ${formatBRL(origAmt)})</span>` : ''}
+                                            </div>
+                                            <button type="button" onclick="undoReconciliationById(${Number(t.id)})"
+                                                class="text-[11px] font-bold text-rose-400 hover:underline flex items-center gap-1 ml-2 shrink-0">
+                                                Desfazer item
+                                            </button>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    singles.push(txList[0]);
+                }
+            });
+
+            singles.forEach(t => {
+                const origAmt = inferOriginalTransactionAmount(t);
+                const fitid = String(t.reconciledFitid || '').trim();
+                const stmt = fitid ? (Array.isArray(bankStatements) ? bankStatements : []).find(s => String(s.fitid || `stmt_${s.id}`) === fitid) : null;
+                const stmtLabel = stmt ? `${stmt.desc || stmt.description} (${formatBRL(stmt.amount)})` : 'Conciliado com Extrato';
+
+                html += `
+                    <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs font-extrabold text-slate-800 dark:text-white">${escapeHtml(t.desc)}</span>
+                                <span class="text-xs font-extrabold ${t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}">${formatBRL(t.amount)}</span>
+                                ${Math.abs(origAmt - Number(t.amount)) > 0.01 ? `<span class="text-[10px] text-amber-400 font-bold">(Valor original: ${formatBRL(origAmt)})</span>` : ''}
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">🔗 Vínculo: ${escapeHtml(stmtLabel)}</p>
+                        </div>
+                        <button type="button" onclick="undoReconciliationById(${Number(t.id)})"
+                            class="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[11px] font-extrabold transition flex items-center gap-1.5 self-start sm:self-center shrink-0">
+                            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Desfazer Conciliação
+                        </button>
+                    </div>
+                `;
+            });
+
+            listEl.innerHTML = html;
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+        window.renderReconciledHistorySettings = renderReconciledHistorySettings;
 
         async function confirmBatchQuickPayOriginal() {
             if (selectedTxIds.size === 0) return;
