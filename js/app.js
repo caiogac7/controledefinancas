@@ -1272,6 +1272,26 @@
                 totInst = Number(tx.creditCardMetadata.totalInstallments || 1);
             }
 
+            // AUTORIDADE MÁXIMA DO EMISSOR DO CARTÃO (OPEN FINANCE):
+            // O campo billForecastDate do creditCardMetadata tem 100% de precisão e cobertura oficial do banco.
+            // Se o emissor do cartão já determinou o mês da fatura, respeita sem adivinhação de calendário!
+            const forecastMonth = (
+                (tx.creditCardMetadata?.billForecastDate && String(tx.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+                (tx.raw_data?.creditCardMetadata?.billForecastDate && String(tx.raw_data.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+                null
+            );
+            if (forecastMonth && forecastMonth.length === 7) {
+                return {
+                    cycleMonth: forecastMonth,
+                    rawMonth: forecastMonth,
+                    day,
+                    settlementPhase: totInst > 1 ? 'INSTALLMENT_EXPENSE' : 'SPOT_EXPENSE',
+                    isAlreadyCycleAllocated: true,
+                    closingDayUsed: closingDay,
+                    dueDayUsed: dueDay
+                };
+            }
+
             // Regra 6: Verifica se já está associada ao ciclo correto antes de deslocar
             const hasExplicitBillId = Boolean(tx.billId || (tx.creditCardMetadata && tx.creditCardMetadata.billId));
             const isProjectedInstallmentAnchor = (totInst > 1 && curInst > 1 && day === 1);
@@ -1991,13 +2011,6 @@
                             let pdAmt = Number(cb.paid_amount ?? cb.paidAmount ?? 0);
                             let pendAmt = Number(cb.pending_amount ?? cb.pendingAmount ?? Math.max(0, totAmt - pdAmt));
                             let st = (pendAmt <= 0.009 || cb.status === 'PAID') ? 'PAID' : 'OPEN';
-                            const isMercadoPagoCard = accId.includes('d7900258') || String(cb.bankId || '').includes('d7900258') || String(cb.cardName || '').toLowerCase().includes('mercado');
-                            if (mKey === '2026-11' && isMercadoPagoCard) {
-                                totAmt = 2936.43;
-                                pdAmt = 2936.43;
-                                pendAmt = 0.00;
-                                st = 'PAID';
-                            }
                             const cDay = Number(cb.closing_day || cb.closingDay || cardCfg.closingDay || 2);
                             const dDay = Number(cb.due_day || cb.dueDay || cardCfg.dueDay || 7);
 
@@ -2049,24 +2062,10 @@
                             const eKind = t.isInitialBalance ? 'initial_balance' : (t.isBalanceAdjustment ? 'balance_adjustment' : 'regular');
                             const paidAtIso = t.paid ? (toSaoPauloIsoTimestamp(t.paidAt, '12:00:00') || toSaoPauloIsoTimestamp(txDateIso, '12:00:00')) : null;
                             const isBill = Boolean(t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura '));
-                            const isMercadoPagoBill = isBill && (String(t.bankId || '').includes('d7900258') || String(t.cardId || '').includes('d7900258') || String(t.desc || '').toLowerCase().includes('mercado'));
                             let totAmt = isBill ? Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0) : Number(t.amount || 0);
                             let pdAmt = isBill ? Number(t.paid_amount ?? t.paidAmount ?? 0) : (t.paid ? Number(t.amount || 0) : 0);
                             let pendAmt = isBill ? Number(t.pending_amount ?? t.pendingAmount ?? Math.max(0, totAmt - pdAmt)) : (t.paid ? 0 : Number(t.amount || 0));
                             let bStatus = isBill ? String(t.bill_status || t.billStatus || (pendAmt <= 0.009 || t.paid ? 'PAID' : 'OPEN')) : (t.paid ? 'PAID' : 'OPEN');
-
-                            if (mKey === '2026-11' && isMercadoPagoBill) {
-                                totAmt = 2936.43;
-                                pdAmt = 2936.43;
-                                pendAmt = 0.00;
-                                bStatus = 'PAID';
-                                t.paid = true;
-                                t.amount = 2936.43;
-                                t.total_amount = 2936.43;
-                                t.paid_amount = 2936.43;
-                                t.pending_amount = 0.00;
-                                t.bill_status = 'PAID';
-                            }
                             const txGrp = String(t.tx_group || t.txGroup || (isBill ? 'CONSOLIDATED_BILL' : 'MANUAL_PLANNED'));
                             const showHome = typeof t.show_on_home === 'boolean' ? t.show_on_home : (typeof t.showOnHome === 'boolean' ? t.showOnHome : true);
 
@@ -4842,16 +4841,6 @@ function openBankModal() {
             const cleanBName = String(b.name || '').toLowerCase();
             const isMercadoPagoCard = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
 
-            // REGRA ESTREITA E RIGOROSA DE AUDITORIA:
-            // A fatura de Novembro/2026 do Cartão Mercado Pago é oficialmente e impreterivelmente R$ 2.936,43 (100% quitada).
-            if (mKey === '2026-11' && isMercadoPagoCard) {
-                return 2936.43;
-            }
-            // A fatura aberta de Dezembro/2026 do Cartão Mercado Pago é oficialmente e impreterivelmente R$ 1.309,35.
-            if (mKey === '2026-12' && isMercadoPagoCard) {
-                return 1309.35;
-            }
-
             const { cbRecord, txRecord } = findPersistedCardBillRecord(b, mKey);
 
             if (cbRecord) {
@@ -5023,15 +5012,6 @@ function openBankModal() {
                 const cleanBName = String(e.bank?.name || '').toLowerCase();
                 const isMercadoPagoCard = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
 
-                // REGRA UNIVERSAL DE INTEGRIDADE: Cartão Mercado Pago em 2026-11 está 100% quitado com R$ 2.936,43
-                if (mKeyRef === '2026-11' && isMercadoPagoCard) {
-                    e.total = 2936.43;
-                    e.paid = 2936.43;
-                    e.pending = 0.00;
-                    e.status = 'PAID';
-                    return;
-                }
-
                 // REGRA UNIVERSAL DE QUITAÇÃO:
                 // Se a fatura já veio com status PAID do banco (ou persistedPaid cobre o total),
                 // ela é considerada 100% quitada. Caso contrário, soma os pagamentos reais identificados.
@@ -5157,32 +5137,23 @@ function openBankModal() {
 
                 cycleMap.forEach((bData, mKey) => {
                     const isMercadoPagoCard = bId.includes('d7900258') || accId.includes('d7900258') || String(cardBank.name || '').toLowerCase().includes('mercado');
-                    if (mKey === '2026-11' && isMercadoPagoCard) {
-                        bData.grossExpenses = 2936.43;
-                        bData.inCycleRefunds = 0;
-                        bData.advancePayments = 0;
-                        bData.postClosingPayments = 2936.43;
-                        bData.postClosingRefunds = 0;
-                    }
-
                     const existingCb = (Array.isArray(creditBills) ? creditBills : []).find(cb =>
                         cb && cb.month === mKey && (String(cb.bankId || cb.bank_id) === bId || String(cb.accountId || cb.account_id) === accId)
                     );
-                    let totalAmt = Number(Math.max(0, bData.grossExpenses - bData.inCycleRefunds - bData.advancePayments).toFixed(2));
-                    if (mKey === '2026-11' && isMercadoPagoCard) {
-                        totalAmt = 2936.43;
-                    } else if (existingCb && mKey <= '2026-08' && Number(existingCb.total_amount || 0) > totalAmt) {
+                    let totalAmt = existingCb && Number(existingCb.total_amount || 0) > 0 && existingCb.status === 'PAID'
+                        ? Number(existingCb.total_amount)
+                        : Number(Math.max(0, bData.grossExpenses - bData.inCycleRefunds - bData.advancePayments).toFixed(2));
+                    if (existingCb && mKey <= '2026-08' && Number(existingCb.total_amount || 0) > totalAmt) {
                         totalAmt = Number(existingCb.total_amount);
                     }
                     if (totalAmt <= 0.009) return;
 
-                    let paidAmt = Number(Math.min(totalAmt, bData.postClosingPayments + bData.postClosingRefunds).toFixed(2));
-                    if (mKey === '2026-11' && isMercadoPagoCard) {
-                        paidAmt = 2936.43;
-                    }
+                    let paidAmt = existingCb && existingCb.status === 'PAID'
+                        ? totalAmt
+                        : Number(Math.min(totalAmt, bData.postClosingPayments + bData.postClosingRefunds).toFixed(2));
                     let pendAmt = Number(Math.max(0, totalAmt - paidAmt).toFixed(2));
                     const isPastMonth = curSpMonth > mKey;
-                    const st = (pendAmt <= 0.009 || isPastMonth || (mKey === '2026-11' && isMercadoPagoCard)) ? 'PAID' : 'OPEN';
+                    const st = (pendAmt <= 0.009 || isPastMonth || existingCb?.status === 'PAID') ? 'PAID' : 'OPEN';
                     const dueStr = `${mKey}-${String(cfg.dueDay).padStart(2, '0')}`;
                     const closeStr = `${mKey}-${String(cfg.closingDay).padStart(2, '0')}`;
 

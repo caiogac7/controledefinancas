@@ -502,6 +502,20 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
         (tx.raw_data?.creditCardMetadata?.billForecastDate && String(tx.raw_data.creditCardMetadata.billForecastDate).slice(0, 7)) ||
         null
     );
+
+    // AUTORIDADE MÁXIMA DO EMISSOR DO CARTÃO (OPEN FINANCE):
+    // Se a transação possui billForecastDate oficial do banco emissor, esse mês é a verdade canônica absoluta.
+    // Jamais tenta adivinhar ou recalcular virada de calendário quando o banco já enviou a competência oficial.
+    if ((group === 'CARD_EXPENSE' || tx.accountType === 'CREDIT') && forecastMonth && forecastMonth.length === 7) {
+        return {
+            ...tx,
+            cycleMonth: forecastMonth,
+            month: forecastMonth,
+            settlementPhase: 'IN_CYCLE',
+            isAlreadyCycleAllocated: true
+        };
+    }
+
     const isPreAllocated = Boolean(
         hasBillId ||
         isSynthetic ||
