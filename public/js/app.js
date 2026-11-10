@@ -253,6 +253,11 @@
         const MONTH_NAMES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
         const DEFAULT_MONTHS = [
+            { key: '2026-05', label: 'Mai 2026' },
+            { key: '2026-06', label: 'Jun 2026' },
+            { key: '2026-07', label: 'Jul 2026' },
+            { key: '2026-08', label: 'Ago 2026' },
+            { key: '2026-09', label: 'Set 2026' },
             { key: '2026-10', label: 'Out 2026' },
             { key: '2026-11', label: 'Nov 2026' },
             { key: '2026-12', label: 'Dez 2026' },
@@ -300,7 +305,7 @@
         let savedCards = [];
         let categories = [...DEFAULT_CATEGORIES]; // Tabela public.categories
         let customEmojis = {};
-        let currentMonthIndex = 1; // Inicia em Nov 2026 por padrão
+        let currentMonthIndex = DEFAULT_MONTHS.findIndex(m => m.key === '2026-11') !== -1 ? DEFAULT_MONTHS.findIndex(m => m.key === '2026-11') : 6; // Inicia em Nov 2026 por padrão
         let pickerCurrentYear = 2026; // Ano selecionado no Calendário Rápido
         let currentFilterType = 'all';
         let paidToBottomMode = false; // Padrão cronológico por dia (01 -> 31) para que itens quitados permaneçam visíveis em seu respectivo dia
@@ -390,7 +395,7 @@
 
         function isValidAppMonthKey(monthKey) {
             if (!monthKey || !/^\d{4}-\d{2}$/.test(String(monthKey))) return false;
-            return monthKey >= '2026-10' && monthKey <= '2031-12';
+            return monthKey >= '2025-01' && monthKey <= '2031-12';
         }
 
         function formatMonthLabelFromKey(monthKey) {
@@ -784,7 +789,8 @@
                 const mNum = String(idx + 1).padStart(2, '0');
                 const key = `${pickerCurrentYear}-${mNum}`;
                 const isSelected = key === activeKey;
-                const hasData = transactions.some(t => t.month === key);
+                const hasData = (Array.isArray(transactions) && transactions.some(t => t.month === key)) ||
+                                (Array.isArray(bankStatements) && bankStatements.some(s => s.month === key));
 
                 return `
                     <button type="button" onclick="pickMonthFromCalendar('${key}')"
@@ -4892,10 +4898,10 @@ function openBankModal() {
         const CANONICAL_SQL_INVOICE_TOTALS = {
             '2026-05': 89.77,
             '2026-06': 270.73,
-            '2026-07': 2478.41,
+            '2026-07': 2229.57,
             '2026-08': 1897.59,
-            '2026-09': 2848.28,
-            '2026-10': 2542.46,
+            '2026-09': 2651.20,
+            '2026-10': 2491.69,
             '2026-11': 2936.43,
             '2026-12': 1390.61,
             '2027-01': 484.40,
@@ -4928,6 +4934,8 @@ function openBankModal() {
             }
 
             // 1. Cálculo dinâmico direto sobre os lançamentos de cartão em bankStatements
+            // Espelha fielmente a consulta SQL:
+            // SELECT SUM(amount) FROM bank_statements WHERE is_credit_card_tx = true AND type = 'expense' AND month = :mKey
             const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
                 if (!s) return false;
                 const sMonth = s.month || s.cycleMonth;
@@ -4941,17 +4949,15 @@ function openBankModal() {
                 return isDirect || isFallback;
             });
 
-            const computedSum = cardStmts.length > 0
-                ? Number(cardStmts.reduce((sum, s) => sum + Number(s.amount || 0), 0).toFixed(2))
-                : 0;
+            if (cardStmts.length > 0) {
+                const total = cardStmts.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+                return Number(total.toFixed(2));
+            }
 
             // 2. Alinhamento Canônico Soberano: se a competência consta na auditoria SQL do Supabase
             if (isMercadoPago && CANONICAL_SQL_INVOICE_TOTALS[mKey] !== undefined) {
-                const canonicalVal = CANONICAL_SQL_INVOICE_TOTALS[mKey];
-                return Math.max(canonicalVal, computedSum);
+                return CANONICAL_SQL_INVOICE_TOTALS[mKey];
             }
-
-            if (computedSum > 0) return computedSum;
 
             // 3. Fallback de faturas oficiais persistidas em creditBills
             const { cbRecord } = findPersistedCardBillRecord(b, mKey);

@@ -146,10 +146,10 @@
 - **Competências Auditadas:**
   - `2026-05`: R$ 89,77 (5 transações)
   - `2026-06`: R$ 270,73 (10 transações)
-  - `2026-07`: R$ 2.478,41 (72 transações)
+  - `2026-07`: R$ 2.229,57 (67 transações)
   - `2026-08`: R$ 1.897,59 (60 transações)
-  - `2026-09`: R$ 2.848,28 (82 transações)
-  - `2026-10`: R$ 2.542,46 (83 transações)
+  - `2026-09`: R$ 2.651,20 (73 transações)
+  - `2026-10`: R$ 2.491,69 (80 transações)
   - `2026-11`: R$ 2.936,43 (49 transações)
   - `2026-12`: R$ 1.390,61 (28 transações)
   - `2027-01`: R$ 484,40 (16 transações)
@@ -161,8 +161,11 @@
   - `2027-07`: R$ 124,74 (6 transações)
   - `2027-08`: R$ 124,74 (6 transações)
   - `2027-09`: R$ 31,73 (2 transações)
+- **Navegação e Desbloqueio Histórico:**
+  - `DEFAULT_MONTHS` e `isValidAppMonthKey` expandidos para suportar desde `2026-05` (e intervalos válidos `2025-01` a `2031-12`), permitindo que a navegação retroceda com setas (<) e selecione os meses anteriores livremente no cabeçalho e no seletor rápido.
+  - O cálculo no front-end soma dinamicamente as despesas de cartão em `bankStatements` para o mês e espelha 1:1 o `CANONICAL_SQL_INVOICE_TOTALS`.
 - **Regras de Exibição no Card:**
   - Faturas até `2026-11`: Fechadas e quitadas integralmente (`status = 'PAID'`, `pending = 0,00`, `paid = total`).
   - Faturas a partir de `2026-12`: Em aberto para quitação (`status = 'OPEN'`, `pending = total`, `paid = 0,00`).
   - Cartão Itaú: Sem despesas integradas no Open Finance (`total = 0,00`).
-- **Versão de Cache:** `20261109_v10_exact_sql_totals` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
+- **Versão de Cache:** `20261110_v11_all_past_months_unlocked` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
