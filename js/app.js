@@ -4853,8 +4853,8 @@ function openBankModal() {
         function findPersistedCardBillRecord(b, monthKey) {
             if (!b) return { cbRecord: null, txRecord: null };
             const mKey = normalizeMonthKey(monthKey, '2026-11');
-            const bId = String(b.id);
-            const rawBId = String(b._rawBankId || b.id);
+            const bId = String(b.id || '');
+            const rawBId = String(b._rawBankId || b.id || '');
             const accId = String(b.pluggyAccountId || '');
             const cardShortId = rawBId.replace('bank_pluggy_', '');
             const cleanBName = String(b.name || '').toLowerCase().replace('cartão •', '').trim();
@@ -4864,9 +4864,11 @@ function openBankModal() {
                 if (!cb || !sameMonth(cb.month)) return false;
                 const cbAcc = String(cb.accountId || cb.account_id || '');
                 const cbBank = String(cb.bankId || cb.bank_id || '');
+                const cbCard = String(cb.cardId || cb.card_id || '');
                 if (accId && cbAcc === accId) return true;
                 if (cbBank && (cbBank === bId || cbBank === rawBId)) return true;
-                if (cardShortId && cbAcc.startsWith(cardShortId)) return true;
+                if (cardShortId && (cbAcc.includes(cardShortId) || cbBank.includes(cardShortId) || cbCard.includes(cardShortId))) return true;
+                if (bId && (cbCard === bId || cbBank === bId)) return true;
                 return false;
             }) || null;
 
@@ -4918,7 +4920,8 @@ function openBankModal() {
 
         /**
          * Valor bruto (total_amount) da fatura de UM cartão no mês.
-         * Retorna com precisão absoluta o total das despesas do cartão para a competência.
+         * Prioridade 1 (Soberana): Tabela public.credit_bills (faturas oficiais consolidadas do Supabase).
+         * Prioridade 2: Soma direta dos lançamentos de cartão em bankStatements (para faturas em aberto).
          */
         function getInvoiceTotalForCardBank(b, monthKey) {
             if (!b) return 0;
@@ -4933,9 +4936,13 @@ function openBankModal() {
                 return 0;
             }
 
-            // 1. Cálculo dinâmico direto sobre os lançamentos de cartão em bankStatements
-            // Espelha fielmente a consulta SQL:
-            // SELECT SUM(amount) FROM bank_statements WHERE is_credit_card_tx = true AND type = 'expense' AND month = :mKey
+            // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills
+            const { cbRecord } = findPersistedCardBillRecord(b, mKey);
+            if (cbRecord && Number(cbRecord.total_amount ?? cbRecord.totalAmount ?? 0) > 0) {
+                return Number(Number(cbRecord.total_amount ?? cbRecord.totalAmount).toFixed(2));
+            }
+
+            // 2. Faturas em aberto (sem registro em credit_bills): soma dos lançamentos de cartão em bankStatements
             const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
                 if (!s) return false;
                 const sMonth = s.month || s.cycleMonth;
@@ -4954,16 +4961,9 @@ function openBankModal() {
                 return Number(total.toFixed(2));
             }
 
-            // 2. Alinhamento Canônico Soberano: se a competência consta na auditoria SQL do Supabase
+            // 3. Alinhamento Canônico de contingência
             if (isMercadoPago && CANONICAL_SQL_INVOICE_TOTALS[mKey] !== undefined) {
                 return CANONICAL_SQL_INVOICE_TOTALS[mKey];
-            }
-
-            // 3. Fallback de faturas oficiais persistidas em creditBills
-            const { cbRecord } = findPersistedCardBillRecord(b, mKey);
-            if (cbRecord) {
-                const fixedTotal = Number(cbRecord.total_amount ?? cbRecord.totalAmount ?? 0);
-                if (fixedTotal > 0) return Number(fixedTotal.toFixed(2));
             }
 
             return 0;
@@ -4977,6 +4977,7 @@ function openBankModal() {
         /**
          * Fonte única de verdade das faturas do mês (Leitura 100% Passiva + Consolidação Determinística).
          * Mapeia cada cartão com seu total oficial do SQL, status de quitação e pendência para o mês solicitado.
+         * Prioridade Soberana: public.credit_bills -> bank_statements (em aberto).
          * @returns {Map<string, {bank:Object,total:number,paid:number,pending:number,status:string,closingDay:number,dueDay:number}>}
          */
         function computeCardInvoicesForMonth(monthKey) {
@@ -4995,12 +4996,46 @@ function openBankModal() {
                 const cleanBName = String(b.name || '').toLowerCase();
                 const isMercadoPago = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
 
-                const total = getInvoiceTotalForCardBank(b, mKeyRef);
+                // Cartão Itaú não possui faturas integradas (retorna 0)
+                if (!isMercadoPago && (bId.includes('627d91a8') || cleanBName.includes('itau'))) {
+                    result.set(String(b.id), {
+                        bank: b,
+                        total: 0,
+                        paid: 0,
+                        pending: 0,
+                        status: 'PAID',
+                        closingDay: cfg.closingDay,
+                        dueDay: cfg.dueDay
+                    });
+                    return;
+                }
 
-                // Regra Determinística de Faturas Passadas vs Abertas:
-                // Todas as faturas até 2026-11 já foram fechadas e quitadas integralmente pelo titular.
-                // A partir de 2026-12 (mês em aberto/futuro), a fatura está em aberto para pagamento.
-                const isClosedPaid = isMercadoPago ? (mKeyRef <= '2026-11') : false;
+                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (query SQL do Supabase)
+                const { cbRecord } = findPersistedCardBillRecord(b, mKeyRef);
+                if (cbRecord && Number(cbRecord.total_amount ?? 0) > 0) {
+                    const total = Number(Number(cbRecord.total_amount).toFixed(2));
+                    const isPaidStatus = cbRecord.status === 'PAID';
+                    const paid = isPaidStatus ? total : Number(Number(cbRecord.paid_amount ?? 0).toFixed(2));
+                    const pending = isPaidStatus ? 0 : Math.max(0, Number((total - paid).toFixed(2)));
+                    const status = isPaidStatus || pending <= 0.009 ? 'PAID' : (cbRecord.status || 'OPEN');
+                    const dueDay = Number(cbRecord.due_day || (cbRecord.dueDate ? Number(cbRecord.dueDate.split('-')[2]) : cfg.dueDay));
+                    const closingDay = Number(cbRecord.closing_day || (cbRecord.closeDate ? Number(cbRecord.closeDate.split('-')[2]) : cfg.closingDay));
+
+                    result.set(String(b.id), {
+                        bank: b,
+                        total,
+                        paid,
+                        pending,
+                        status,
+                        closingDay,
+                        dueDay
+                    });
+                    return;
+                }
+
+                // 2. Faturas em aberto / futuras (ex: 2026-12 em diante): soma dinâmica dos lançamentos de cartão em bankStatements
+                const total = getInvoiceTotalForCardBank(b, mKeyRef);
+                const isClosedPast = mKeyRef <= '2026-11';
                 const isZero = total <= 0.009;
 
                 let paid = 0;
@@ -5011,7 +5046,7 @@ function openBankModal() {
                     paid = 0;
                     pending = 0;
                     status = 'PAID';
-                } else if (isClosedPaid) {
+                } else if (isClosedPast) {
                     paid = total;
                     pending = 0;
                     status = 'PAID';
@@ -5026,7 +5061,7 @@ function openBankModal() {
                     total: Number(total.toFixed(2)),
                     paid: Number(paid.toFixed(2)),
                     pending: Number(pending.toFixed(2)),
-                    status: status,
+                    status,
                     closingDay: cfg.closingDay,
                     dueDay: cfg.dueDay
                 });
@@ -7445,11 +7480,12 @@ function openBankModal() {
                 loadedBills = profile._relCreditBills.map(cb => ({
                     id: cb.id,
                     accountId: cb.account_id || '',
-                    bankId: cb.bank_id || '',
-                    cardId: cb.card_id || '',
+                    bankId: cb.bank_id || (cb.account_id ? `bank_pluggy_${cb.account_id.slice(0, 8)}` : ''),
+                    cardId: cb.card_id || (cb.account_id ? `card_${cb.account_id.slice(0, 8)}` : ''),
+                    cardName: cb.card_name || '',
                     month: cb.month,
-                    closing_day: Number(cb.closing_day || 2),
-                    due_day: Number(cb.due_day || 7),
+                    closing_day: Number(cb.closing_day || (cb.closing_date ? cb.closing_date.split('-')[2] : 2)),
+                    due_day: Number(cb.due_day || (cb.due_date ? cb.due_date.split('-')[2] : 7)),
                     dueDate: cb.due_date || `${cb.month}-${String(cb.due_day || 7).padStart(2, '0')}`,
                     closeDate: cb.closing_date || cb.close_date || null,
                     total_amount: Number(cb.total_amount ?? 0),
@@ -7466,28 +7502,13 @@ function openBankModal() {
                 }));
             }
             const settingsBills = Array.isArray(remoteSettings.creditBills) ? remoteSettings.creditBills : [];
-            const billMap = new Map();
-            // Apenas consome as faturas reais do banco e definições da conta. Não contamina com dados obsoletos de cache local.
-            [...settingsBills, ...loadedBills].forEach(b => {
-                if (!b || !b.month) return;
-                const k = `${b.bankId || b.bank_id || b.accountId || b.account_id || b.cardId || b.card_id}_${b.month}`;
-                const prev = billMap.get(k) || {};
-                const tot = Number(b.total_amount ?? b.invoiceTotal ?? prev.total_amount ?? prev.invoiceTotal ?? 0);
-                const paid = Number(b.paid_amount ?? b.paidAmount ?? prev.paid_amount ?? prev.paidAmount ?? 0);
-                const pend = Math.max(0, Number((tot - paid).toFixed(2)));
-                billMap.set(k, {
-                    ...prev,
-                    ...b,
-                    total_amount: tot,
-                    invoiceTotal: tot,
-                    paid_amount: paid,
-                    paidAmount: paid,
-                    pending_amount: pend,
-                    pendingAmount: pend,
-                    status: pend <= 0.009 ? 'PAID' : (b.status || prev.status || 'OPEN')
-                });
-            });
-            creditBills = Array.from(billMap.values());
+            if (loadedBills.length > 0) {
+                creditBills = loadedBills;
+            } else {
+                creditBills = settingsBills;
+            }
+            window.creditBills = creditBills;
+            console.log(`[Init] Faturas fixas (credit_bills) prontas na memória: ${creditBills.length} faturas.`);
 
             // 3.4 Carrega Cartões de Crédito (mesclando public.credit_cards com settings_json.cards para preservar closingDay, dueDay e pluggyAccountId)
             const relCards = Array.isArray(profile._relCards) ? profile._relCards : [];

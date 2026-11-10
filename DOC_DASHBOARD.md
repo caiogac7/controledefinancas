@@ -141,31 +141,32 @@
 - **Tratamento de Caixa com Virada de Cartão:** Se o mês atual já iniciou com déficit prévio, a IA não reprova compras quando a 1ª parcela só cai na fatura do mês seguinte (`impactoAtual <= 0`), informando com clareza o início do desembolso.
 - **Consultor Financeiro Pessoal v2:** Histórico nativo de conversação por turnos com Gemini (`contents`), dados reais consolidados de caixa atual, projeção de 6 meses, compras parceladas ativas e cartões com virada de ciclo.
 
-### 13. Motor Canônico de Faturas de Cartão (Alinhamento Soberano ao SQL do Supabase)
-- **Origem dos Dados:** `public.bank_statements` no Supabase filtrado por `is_credit_card_tx = true` e `type = 'expense'`.
-- **Competências Auditadas:**
-  - `2026-05`: R$ 89,77 (5 transações)
-  - `2026-06`: R$ 270,73 (10 transações)
-  - `2026-07`: R$ 2.229,57 (67 transações)
-  - `2026-08`: R$ 1.897,59 (60 transações)
-  - `2026-09`: R$ 2.651,20 (73 transações)
-  - `2026-10`: R$ 2.491,69 (80 transações)
-  - `2026-11`: R$ 2.936,43 (49 transações)
-  - `2026-12`: R$ 1.390,61 (28 transações)
-  - `2027-01`: R$ 484,40 (16 transações)
-  - `2027-02`: R$ 464,23 (15 transações)
-  - `2027-03`: R$ 442,06 (13 transações)
-  - `2027-04`: R$ 417,91 (12 transações)
-  - `2027-05`: R$ 360,16 (10 transações)
-  - `2027-06`: R$ 341,12 (9 transações)
-  - `2027-07`: R$ 124,74 (6 transações)
-  - `2027-08`: R$ 124,74 (6 transações)
-  - `2027-09`: R$ 31,73 (2 transações)
+### 13. Motor Soberano de Faturas de Cartão (`public.credit_bills` + `public.bank_statements`)
+- **Origem dos Dados Oficial:** Consulta direta da tabela relacional `public.credit_bills` para o usuário logado (`user_id = auth.uid()`):
+  ```sql
+  SELECT
+    cb.month,
+    cb.card_name,
+    cb.account_id,
+    cb.total_amount,
+    cb.paid_amount,
+    cb.pending_amount,
+    cb.status,
+    cb.due_date,
+    cb.closing_date
+  FROM public.credit_bills AS cb
+  WHERE cb.user_id = auth.uid()
+  ORDER BY cb.month, cb.card_name, cb.account_id;
+  ```
+- **Faturas Fechadas Auditadas (`credit_bills`):**
+  - `2026-05`: R$ 89,77 (Quitada)
+  - `2026-07`: R$ 145,25 (Quitada)
+  - `2026-08`: R$ 1.897,59 (Quitada)
+  - `2026-09`: R$ 1.871,20 (Quitada)
+  - `2026-10`: R$ 2.198,09 (Quitada)
+  - `2026-11`: R$ 2.871,43 (Quitada)
+- **Faturas em Aberto / Futuras (`bank_statements`):**
+  - Meses que ainda não possuem fatura fechada oficial em `credit_bills` (ex: `2026-12` R$ 1.390,61, `2027-01` R$ 484,40, etc.) são calculados diretamente pela soma das compras em `bank_statements` com status `OPEN` e exibição de valor pendente para pagamento.
 - **Navegação e Desbloqueio Histórico:**
   - `DEFAULT_MONTHS` e `isValidAppMonthKey` expandidos para suportar desde `2026-05` (e intervalos válidos `2025-01` a `2031-12`), permitindo que a navegação retroceda com setas (<) e selecione os meses anteriores livremente no cabeçalho e no seletor rápido.
-  - O cálculo no front-end soma dinamicamente as despesas de cartão em `bankStatements` para o mês e espelha 1:1 o `CANONICAL_SQL_INVOICE_TOTALS`.
-- **Regras de Exibição no Card:**
-  - Faturas até `2026-11`: Fechadas e quitadas integralmente (`status = 'PAID'`, `pending = 0,00`, `paid = total`).
-  - Faturas a partir de `2026-12`: Em aberto para quitação (`status = 'OPEN'`, `pending = total`, `paid = 0,00`).
-  - Cartão Itaú: Sem despesas integradas no Open Finance (`total = 0,00`).
-- **Versão de Cache:** `20261110_v11_all_past_months_unlocked` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
+- **Versão de Cache:** `20261110_v12_credit_bills_authoritative` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
