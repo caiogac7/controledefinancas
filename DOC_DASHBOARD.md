@@ -140,3 +140,29 @@
   - O campo `planoB` tornou-se obrigatório no schema do Gemini sempre que a recomendação depender da aceitação da loja.
 - **Tratamento de Caixa com Virada de Cartão:** Se o mês atual já iniciou com déficit prévio, a IA não reprova compras quando a 1ª parcela só cai na fatura do mês seguinte (`impactoAtual <= 0`), informando com clareza o início do desembolso.
 - **Consultor Financeiro Pessoal v2:** Histórico nativo de conversação por turnos com Gemini (`contents`), dados reais consolidados de caixa atual, projeção de 6 meses, compras parceladas ativas e cartões com virada de ciclo.
+
+### 13. Motor Canônico de Faturas de Cartão (Alinhamento Soberano ao SQL do Supabase)
+- **Origem dos Dados:** `public.bank_statements` no Supabase filtrado por `is_credit_card_tx = true` e `type = 'expense'`.
+- **Competências Auditadas:**
+  - `2026-05`: R$ 89,77 (5 transações)
+  - `2026-06`: R$ 270,73 (10 transações)
+  - `2026-07`: R$ 2.478,41 (72 transações)
+  - `2026-08`: R$ 1.897,59 (60 transações)
+  - `2026-09`: R$ 2.848,28 (82 transações)
+  - `2026-10`: R$ 2.542,46 (83 transações)
+  - `2026-11`: R$ 2.936,43 (49 transações)
+  - `2026-12`: R$ 1.390,61 (28 transações)
+  - `2027-01`: R$ 484,40 (16 transações)
+  - `2027-02`: R$ 464,23 (15 transações)
+  - `2027-03`: R$ 442,06 (13 transações)
+  - `2027-04`: R$ 417,91 (12 transações)
+  - `2027-05`: R$ 360,16 (10 transações)
+  - `2027-06`: R$ 341,12 (9 transações)
+  - `2027-07`: R$ 124,74 (6 transações)
+  - `2027-08`: R$ 124,74 (6 transações)
+  - `2027-09`: R$ 31,73 (2 transações)
+- **Regras de Exibição no Card:**
+  - Faturas até `2026-11`: Fechadas e quitadas integralmente (`status = 'PAID'`, `pending = 0,00`, `paid = total`).
+  - Faturas a partir de `2026-12`: Em aberto para quitação (`status = 'OPEN'`, `pending = total`, `paid = 0,00`).
+  - Cartão Itaú: Sem despesas integradas no Open Finance (`total = 0,00`).
+- **Versão de Cache:** `20261109_v10_exact_sql_totals` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
