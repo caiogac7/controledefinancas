@@ -1765,12 +1765,54 @@
             async fetchOrCreateProfile(authUser) {
                 const userId = authUser.id;
 
-                const [profRes, banksRes, catsRes, txRes, stmtsRes, auditsRes, cardsRes, creditBillsRes] = await Promise.all([
+                // Busca completa e paginada de extratos (bank_statements) sem truncamento pelo limite padrão de 1.000 linhas do PostgREST
+                async function fetchAllStatements(uId) {
+                    let stmts = [];
+                    const pageSize = 1000;
+                    let from = 0;
+                    while (true) {
+                        const { data, error } = await supabaseClient
+                            .from('bank_statements')
+                            .select('*')
+                            .eq('user_id', uId)
+                            .order('created_at', { ascending: false })
+                            .range(from, from + pageSize - 1);
+                        if (error || !Array.isArray(data) || data.length === 0) break;
+                        stmts.push(...data);
+                        if (data.length < pageSize) break;
+                        from += pageSize;
+                        if (from >= 40000) break;
+                    }
+                    return stmts;
+                }
+
+                // Busca completa e paginada de transações (transactions) sem truncamento
+                async function fetchAllTransactions(uId) {
+                    let txs = [];
+                    const pageSize = 1000;
+                    let from = 0;
+                    while (true) {
+                        const { data, error } = await supabaseClient
+                            .from('transactions')
+                            .select('*')
+                            .eq('user_id', uId)
+                            .order('created_at', { ascending: false })
+                            .range(from, from + pageSize - 1);
+                        if (error || !Array.isArray(data) || data.length === 0) break;
+                        txs.push(...data);
+                        if (data.length < pageSize) break;
+                        from += pageSize;
+                        if (from >= 40000) break;
+                    }
+                    return txs;
+                }
+
+                const [profRes, banksRes, catsRes, allTxs, allStmts, auditsRes, cardsRes, creditBillsRes] = await Promise.all([
                     supabaseClient.from('profiles').select('*').eq('id', userId).maybeSingle(),
                     supabaseClient.from('banks').select('*').eq('user_id', userId),
                     supabaseClient.from('categories').select('*').eq('user_id', userId),
-                    supabaseClient.from('transactions').select('*').eq('user_id', userId),
-                    supabaseClient.from('bank_statements').select('*').eq('user_id', userId),
+                    fetchAllTransactions(userId),
+                    fetchAllStatements(userId),
                     supabaseClient.from('balance_audits').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
                     supabaseClient.from('credit_cards').select('*').eq('user_id', userId),
                     supabaseClient.from('credit_bills').select('*').eq('user_id', userId)
@@ -1802,8 +1844,8 @@
 
                 profile._relBanks = (!banksRes.error && Array.isArray(banksRes.data)) ? banksRes.data : [];
                 profile._relCategories = (!catsRes.error && Array.isArray(catsRes.data)) ? catsRes.data : [];
-                profile._relTransactions = (!txRes.error && Array.isArray(txRes.data)) ? txRes.data : [];
-                profile._relStatements = (!stmtsRes.error && Array.isArray(stmtsRes.data)) ? stmtsRes.data : [];
+                profile._relTransactions = Array.isArray(allTxs) ? allTxs : [];
+                profile._relStatements = Array.isArray(allStmts) ? allStmts : [];
                 profile._relAudits = (!auditsRes?.error && Array.isArray(auditsRes?.data)) ? auditsRes.data : [];
                 profile._relCards = (!cardsRes?.error && Array.isArray(cardsRes?.data)) ? cardsRes.data : [];
                 profile._relCreditBills = (!creditBillsRes?.error && Array.isArray(creditBillsRes?.data)) ? creditBillsRes.data : [];
