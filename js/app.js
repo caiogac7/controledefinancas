@@ -1787,6 +1787,7 @@
                         from += pageSize;
                         if (from >= 40000) break;
                     }
+                    console.log(`[fetchAllStatements] ✅ ${stmts.length} extratos carregados com sucesso do Supabase.`);
                     return stmts;
                 }
 
@@ -1812,6 +1813,7 @@
                         from += pageSize;
                         if (from >= 40000) break;
                     }
+                    console.log(`[fetchAllTransactions] ✅ ${txs.length} transações carregadas com sucesso do Supabase.`);
                     return txs;
                 }
 
@@ -4881,80 +4883,69 @@ function openBankModal() {
 
         /**
          * Valor bruto (total_amount) da fatura de UM cartão no mês.
-         * Prioridade: coluna fixa total_amount em creditBills > coluna fixa total_amount/invoiceTotal em transactions > extrato do cartão alocado por ciclo.
+         * Prioridade Soberana: Soma direta das despesas do cartão em bankStatements para o mês selecionado.
+         * Equivale 100% à consulta SQL do Supabase:
+         * SELECT SUM(amount) FROM bank_statements WHERE is_credit_card_tx = true AND month = :mKey AND type = 'expense'
          */
         function getInvoiceTotalForCardBank(b, monthKey) {
             if (!b) return 0;
             const mKey = normalizeMonthKey(monthKey, '2026-11');
             const bId = String(b.id || '');
             const rawBId = String(b._rawBankId || b.id || '');
-            const cleanBName = String(b.name || '').toLowerCase();
-            const isMercadoPagoCard = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
+            const cardShortId = rawBId.replace('bank_pluggy_', '');
+            const cleanBName = String(b.name || '').toLowerCase().replace('cartão •', '').trim();
 
-            const { cbRecord, txRecord } = findPersistedCardBillRecord(b, mKey);
+            // 1. REGRA SOBERANA: Soma exata das despesas do cartão em bankStatements para a competência selecionada
+            const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
+                if (!s) return false;
+                const sMonth = s.month || s.cycleMonth;
+                if (sMonth !== mKey) return false;
 
+                const isExpense = s.type === 'expense' || s.tx_group === 'CARD_EXPENSE';
+                if (!isExpense) return false;
+
+                const stmtBankId = String(s.bankId || '');
+                const stmtCardId = String(s.cardId || '');
+                const isDirectMatch = stmtBankId === bId || 
+                                      stmtBankId === rawBId || 
+                                      (cardShortId && (stmtCardId === 'card_' + cardShortId || stmtBankId.includes(cardShortId))) || 
+                                      stmtCardId === bId || 
+                                      (cleanBName && String(s.desc || '').toLowerCase().includes(cleanBName));
+                const isFallbackMatch = Boolean(s.isCreditCardTx) && (bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado'));
+                return isDirectMatch || isFallbackMatch;
+            });
+
+            if (cardStmts.length > 0) {
+                const total = cardStmts.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+                const roundedTotal = Number(total.toFixed(2));
+                return roundedTotal;
+            }
+
+            // 2. Faturas oficiais fechadas persistidas (creditBills)
+            const { cbRecord } = findPersistedCardBillRecord(b, mKey);
             if (cbRecord) {
                 const fixedTotal = Number(cbRecord.total_amount ?? cbRecord.totalAmount ?? 0);
                 if (fixedTotal > 0) return Number(fixedTotal.toFixed(2));
             }
-            if (txRecord) {
-                // NUNCA confunde pending_amount com total_amount! Lê prioritariamente total_amount / invoiceTotal.
-                const fixedTxTotal = Number(txRecord.total_amount ?? txRecord.invoiceTotal ?? txRecord.amount ?? 0);
-                if (fixedTxTotal > 0) return Number(fixedTxTotal.toFixed(2));
-            }
 
-            // Fallback pelo extrato do cartão respeitando a autoridade direta da coluna month do banco
-            const cardShortId = rawBId.replace('bank_pluggy_', '');
-            const cardCleanBName = cleanBName.replace('cartão •', '').trim();
-            const cfg = getCardCycleConfig(b);
-            const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
-                if (!s) return false;
-                const belongs = String(s.bankId) === bId || 
-                                String(s.bankId) === rawBId || 
-                                (cardShortId && String(s.cardId) === 'card_' + cardShortId) || 
-                                String(s.cardId) === bId || 
-                                (cardCleanBName && String(s.desc || '').toLowerCase().includes(cardCleanBName)) ||
-                                Boolean(s.isCreditCardTx);
-                if (!belongs) return false;
-                // 1. Autoridade Canônica: Se o registro no banco já tem month ou cycleMonth igual ao mês alvo (ex: '2026-12')
-                const stmtMonth = s.month || s.cycleMonth;
-                if (stmtMonth === mKey) return true;
-                // 2. Alocação de ciclo para itens dinâmicos
-                const alloc = allocateTransactionToCardCycle(s, cfg);
-                return alloc.cycleMonth === mKey;
+            // 3. Transações manuais (apenas se cartão 100% manual sem extrato Open Finance)
+            const manualExpenses = (Array.isArray(transactions) ? transactions : []).filter(t => {
+                if (!t || t.type !== 'expense') return false;
+                if (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) return false;
+                if (normalizeMonthKey(t.month, mKey) !== mKey) return false;
+                const tBankId = String(t.bankId || '');
+                const tCardId = String(t.cardId || '');
+                const belongs = tBankId === bId || 
+                                tBankId === rawBId || 
+                                (cardShortId && (tCardId === 'card_' + cardShortId || tBankId.includes(cardShortId))) || 
+                                tCardId === bId || 
+                                (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName));
+                return belongs;
             });
-            let stmtTotal = 0;
-            cardStmts.forEach(s => {
-                const isExpense = s.type === 'expense' || s.tx_group === 'CARD_EXPENSE';
-                const isRefund = s.tx_group === 'CARD_REFUND' || s.type === 'income';
-                if (isExpense) {
-                    stmtTotal += Number(s.amount || 0);
-                } else if (isRefund) {
-                    stmtTotal = Math.max(0, stmtTotal - Number(s.amount || 0));
-                }
-            });
-            // Se o cartão possui extrato Open Finance integrado (cardStmts), ele é a autoridade canônica absoluta.
-            // Apenas recorre a transactions manuais caso o cartão NÃO possua extrato Open Finance (ex: cartão 100% manual).
-            if (cardStmts.length === 0) {
-                const cardTxExpenses = (Array.isArray(transactions) ? transactions : []).filter(t => {
-                    if (!t || t.type !== 'expense') return false;
-                    if (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) return false;
-                    const isCardItem = Boolean(t.isCreditCardTx || t.cardId || (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName)));
-                    if (!isCardItem) return false;
-                    const belongs = String(t.bankId) === bId || 
-                                    String(t.bankId) === rawBId || 
-                                    (cardShortId && String(t.cardId) === 'card_' + cardShortId) || 
-                                    String(t.cardId) === bId || 
-                                    (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName));
-                    if (!belongs) return false;
-                    return normalizeMonthKey(t.month, mKey) === mKey;
-                });
-                cardTxExpenses.forEach(t => {
-                    stmtTotal += Number(t.amount || 0);
-                });
+            if (manualExpenses.length > 0) {
+                const total = manualExpenses.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+                return Number(total.toFixed(2));
             }
-
-            if (stmtTotal > 0) return Number(stmtTotal.toFixed(2));
 
             return 0;
         }
@@ -5141,20 +5132,8 @@ function openBankModal() {
                 );
                 if (realCardStmts.length === 0) return;
 
-                // Remove sintéticas antigas deste cartão e regera com o closingDay oficial do banco
-                // (apenas itens que possuem rawMonth distinto do ciclo são re-alocados por closingDay)
-                const otherStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s =>
-                    s && String(s.bankId) !== bId
-                );
-                const resetRealCardStmts = realCardStmts.map(s => {
-                    const hasRaw = Boolean(s.rawDate || s.rawPurchaseDate || (s.rawMonth && s.rawMonth !== s.month));
-                    return {
-                        ...s,
-                        isAlreadyCycleAllocated: !hasRaw
-                    };
-                });
-                const regeneratedCardStmts = fillInstallmentGaps(resetRealCardStmts, cfg);
-                bankStatements = [...otherStmts, ...regeneratedCardStmts];
+                // bankStatements é a cópia fiel da tabela public.bank_statements e NUNCA deve ser mutada no front-end
+                const regeneratedCardStmts = realCardStmts;
 
                 // Agrupa por ciclo para recalcular total_amount, paid_amount, pending_amount
                 const cycleMap = new Map();
@@ -7516,6 +7495,8 @@ function openBankModal() {
             } else {
                 bankStatements = settingsStmts;
             }
+            window.bankStatements = bankStatements;
+            console.log(`[Init] Extratos prontos na memória: ${bankStatements.length} registros.`);
 
             // 3.3 Carrega Faturas Consolidadas Fixas (credit_bills) com primazia do banco relacional
             let loadedBills = [];
