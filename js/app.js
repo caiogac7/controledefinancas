@@ -1775,9 +1775,13 @@
                             .from('bank_statements')
                             .select('*')
                             .eq('user_id', uId)
-                            .order('created_at', { ascending: false })
+                            .order('id', { ascending: false })
                             .range(from, from + pageSize - 1);
-                        if (error || !Array.isArray(data) || data.length === 0) break;
+                        if (error) {
+                            console.error('[fetchAllStatements] Erro ao carregar extratos:', error);
+                            break;
+                        }
+                        if (!Array.isArray(data) || data.length === 0) break;
                         stmts.push(...data);
                         if (data.length < pageSize) break;
                         from += pageSize;
@@ -1796,9 +1800,13 @@
                             .from('transactions')
                             .select('*')
                             .eq('user_id', uId)
-                            .order('created_at', { ascending: false })
+                            .order('id', { ascending: false })
                             .range(from, from + pageSize - 1);
-                        if (error || !Array.isArray(data) || data.length === 0) break;
+                        if (error) {
+                            console.error('[fetchAllTransactions] Erro ao carregar transações:', error);
+                            break;
+                        }
+                        if (!Array.isArray(data) || data.length === 0) break;
                         txs.push(...data);
                         if (data.length < pageSize) break;
                         from += pageSize;
@@ -4895,7 +4903,7 @@ function openBankModal() {
                 if (fixedTxTotal > 0) return Number(fixedTxTotal.toFixed(2));
             }
 
-            // Fallback pelo extrato do cartão respeitando a data de virada (closingDay) e vencimento (dueDay)
+            // Fallback pelo extrato do cartão respeitando a autoridade direta da coluna month do banco
             const cardShortId = rawBId.replace('bank_pluggy_', '');
             const cardCleanBName = cleanBName.replace('cartão •', '').trim();
             const cfg = getCardCycleConfig(b);
@@ -4905,17 +4913,25 @@ function openBankModal() {
                                 String(s.bankId) === rawBId || 
                                 (cardShortId && String(s.cardId) === 'card_' + cardShortId) || 
                                 String(s.cardId) === bId || 
-                                (cardCleanBName && String(s.desc || '').toLowerCase().includes(cardCleanBName));
+                                (cardCleanBName && String(s.desc || '').toLowerCase().includes(cardCleanBName)) ||
+                                Boolean(s.isCreditCardTx);
                 if (!belongs) return false;
+                // 1. Autoridade Canônica: Se o registro no banco já tem month ou cycleMonth igual ao mês alvo (ex: '2026-12')
+                const stmtMonth = s.month || s.cycleMonth;
+                if (stmtMonth === mKey) return true;
+                // 2. Alocação de ciclo para itens dinâmicos
                 const alloc = allocateTransactionToCardCycle(s, cfg);
                 return alloc.cycleMonth === mKey;
             });
             let stmtTotal = 0;
             cardStmts.forEach(s => {
-                const cls = s.tx_group ? s : classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
-                const alloc = allocateTransactionToCardCycle(s, cfg);
-                if (cls.tx_group === 'CARD_EXPENSE') stmtTotal += Number(s.amount || 0);
-                else if (cls.tx_group === 'CARD_REFUND' && alloc.settlementPhase === 'IN_CYCLE_REFUND') stmtTotal = Math.max(0, stmtTotal - Number(s.amount || 0));
+                const isExpense = s.type === 'expense' || s.tx_group === 'CARD_EXPENSE';
+                const isRefund = s.tx_group === 'CARD_REFUND' || s.type === 'income';
+                if (isExpense) {
+                    stmtTotal += Number(s.amount || 0);
+                } else if (isRefund) {
+                    stmtTotal = Math.max(0, stmtTotal - Number(s.amount || 0));
+                }
             });
             // Se o cartão possui extrato Open Finance integrado (cardStmts), ele é a autoridade canônica absoluta.
             // Apenas recorre a transactions manuais caso o cartão NÃO possua extrato Open Finance (ex: cartão 100% manual).
@@ -7468,6 +7484,7 @@ function openBankModal() {
                     id: Number(s.id),
                     fitid: s.fitid || '',
                     bankId: s.bank_id || 'bank_geral',
+                    cardId: s.card_id || (s.bank_id && s.bank_id.startsWith('bank_pluggy_') ? 'card_' + s.bank_id.replace('bank_pluggy_', '') : undefined),
                     month: s.month,
                     cycleMonth: s.cycle_month || s.month,
                     day: Number(s.day),
@@ -7477,7 +7494,7 @@ function openBankModal() {
                     tx_group: s.tx_group || undefined,
                     show_on_home: typeof s.show_on_home === 'boolean' ? s.show_on_home : false,
                     accountType: s.account_type || undefined,
-                    isCreditCardTx: typeof s.is_credit_card_tx === 'boolean' ? s.is_credit_card_tx : undefined,
+                    isCreditCardTx: typeof s.is_credit_card_tx === 'boolean' ? s.is_credit_card_tx : Boolean(s.is_credit_card_tx),
                     pluggyCategory: s.pluggy_category || undefined,
                     purchase_date: s.purchase_date || null,
                     transferred_at: s.transferred_at || s.purchase_date || null,
@@ -7487,24 +7504,14 @@ function openBankModal() {
                     closingDayUsed: s.closing_day_used ? Number(s.closing_day_used) : undefined,
                     dueDayUsed: s.due_day_used ? Number(s.due_day_used) : undefined,
                     isSyntheticGapFill: Boolean(s.is_synthetic_gap_fill),
-                    isAlreadyCycleAllocated: Boolean(s.cycle_month || s.settlement_phase)
+                    isAlreadyCycleAllocated: true
                 }))
                 : [];
             const settingsStmts = Array.isArray(remoteSettings.bankStatements) ? remoteSettings.bankStatements : [];
-            if (relStmtsMapped.length > 0 && settingsStmts.length > 0) {
-                const mergedMap = new Map();
-                settingsStmts.forEach((s, idx) => {
-                    if (!s) return;
-                    const key = s.fitid ? `fit:${s.fitid}` : `id:${s.id || idx}`;
-                    mergedMap.set(key, s);
-                });
-                relStmtsMapped.forEach((s, idx) => {
-                    const key = s.fitid ? `fit:${s.fitid}` : `id:${s.id || idx}`;
-                    const prev = mergedMap.get(key) || {};
-                    mergedMap.set(key, { ...prev, ...s });
-                });
-                bankStatements = Array.from(mergedMap.values());
-            } else if (relStmtsMapped.length > 0) {
+            // REGRA DE OURO: Se a tabela relacional (bank_statements) já retornou dados, ela é a fonte
+            // única e exclusiva de verdade. O settings_json.bankStatements é legado e só é lido como
+            // fallback quando o banco relacional estiver completamente vazio (ex: conta nova).
+            if (relStmtsMapped.length > 0) {
                 bankStatements = relStmtsMapped;
             } else {
                 bankStatements = settingsStmts;
