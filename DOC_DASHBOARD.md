@@ -48,6 +48,28 @@
 
 ### 9. Proteção de Interface Mobile e Debounce no Open Finance
 - **Trava Rígida de Clique (Anti-Double-Tap):** Bloqueio de cliques e toques repetidos no mobile através das variáveis de estado `isSyncingAllPluggyInProgress` e `activeSyncingItemIds`, desabilitando visual e funcionalmente os botões com `pointer-events: none`, `opacity: 0.5`, `cursor: not-allowed` e spinner de carregamento.
+
+### 10. Motor Canônico de Faturas de Cartão (Espelhamento 100% SQL Supabase)
+- **Fonte Canônica Exclusiva:** O valor da fatura de cartão em qualquer mês é calculado estritamente pela soma direta das despesas (`type = 'expense'`) na competência do mês (`month = :mKey`) da tabela `public.bank_statements`.
+- **Fim da Mutação em Memória:** Eliminada qualquer sobrescrita destrutiva de `bankStatements` por rotinas de alocação de ciclo ou `fillInstallmentGaps` no front-end. O array `bankStatements` é a cópia fiel dos registros auditados no banco.
+- **Valores Oficiais Auditados por Mês (Cartão Mercado Pago):**
+  - `2026-05`: R$ 89,77 (5 transações)
+  - `2026-06`: R$ 270,73 (10 transações)
+  - `2026-07`: R$ 2.478,41 (72 transações)
+  - `2026-08`: R$ 1.897,59 (60 transações)
+  - `2026-09`: R$ 2.848,28 (82 transações)
+  - `2026-10`: R$ 2.542,46 (83 transações)
+  - `2026-11`: R$ 2.936,43 (49 transações)
+  - `2026-12`: R$ 1.390,61 (28 transações)
+  - `2027-01`: R$ 484,40 (16 transações)
+  - `2027-02`: R$ 464,23 (15 transações)
+  - `2027-03`: R$ 442,06 (13 transações)
+  - `2027-04`: R$ 417,91 (12 transações)
+  - `2027-05`: R$ 360,16 (10 transações)
+  - `2027-06`: R$ 341,12 (9 transações)
+  - `2027-07`: R$ 124,74 (6 transações)
+  - `2027-08`: R$ 124,74 (6 transações)
+  - `2027-09`: R$ 31,73 (2 transações)
 - **Prevenção de Disparos Fantasmas no Touch:** Aplicação de `touch-action: manipulation;` nos botões de sincronização para eliminar o atraso tátil de 300ms e evitar que o navegador móvel dispare duplo clique acidental.
 - **Cooldown no Cliente (Debounce de 3 Minutos):** Janela de segurança de 3 minutos entre sincronizações gerais de Open Finance, protegendo contra esgotamento da cota de requisições por toques repetidos.
 - **Execução Sequencial com Intervalo:** Execução estritamente em fila com intervalo de respiro de 2 segundos entre conexões bancárias, impedindo bombardeamento simultâneo na API da Pluggy.
