@@ -3,12 +3,11 @@
 ## Métricas, KPIs e Regras de Interface
 
 ### 1. Card Fatura Consolidada (Mercado Pago - Nov 2026)
-- **Fatura Fechada Oficial (Boleto Quitado):** `R$ 2.871,43` (registrado na tabela soberana `public.credit_bills`).
+- **Valor Real Exibido no Card:** `R$ 2.936,43` (Recomposição dinâmica do boleto fechado `R$ 2.871,43` + adiantamentos pagos `R$ 65,00`).
 - **Despesas Brutas do Mês:** `R$ 2.936,43` (49 compras em `bank_statements`).
-- **Adiantamentos de Fatura Abatidos:** `- R$ 65,00` (R$ 50,00 em 13/10 e R$ 15,00 em 01/11 antes do corte da fatura).
-- **Saldo Líquido Fechado:** `R$ 2.871,43` (`R$ 2.936,43 - R$ 65,00`).
+- **Adiantamentos de Fatura Pagos:** `R$ 65,00` (R$ 50,00 em 13/10 e R$ 15,00 em 01/11 antes do corte da fatura).
 - **Status:** `✓ Fatura quitada` (com badge verde e `pending_amount = R$ 0,00`).
-- **Total Pago Global:** `R$ 2.936,43` (R$ 65,00 em adiantamentos + R$ 2.871,43 quitados após o fechamento: R$ 350,00 + R$ 900,00 + R$ 1.621,43).
+- **Total Pago:** `R$ 2.936,43` (R$ 65,00 em adiantamentos + R$ 2.871,43 quitados após o fechamento: R$ 350,00 + R$ 900,00 + R$ 1.621,43).
 - **Limites:** Limite total R$ 5.600,00, Usado R$ 3.979,79 (71%), Disponível R$ 1.620,21.
 
 ### 2. Ações em Lote e Seleção Múltipla (Visão Mensal & Parcelamentos)

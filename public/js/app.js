@@ -4919,8 +4919,35 @@ function openBankModal() {
         window.CANONICAL_SQL_INVOICE_TOTALS = CANONICAL_SQL_INVOICE_TOTALS;
 
         /**
+         * Retorna a soma de adiantamentos de fatura feitos para este cartão e mês.
+         */
+        function getAdvancePaymentsForCardMonth(b, monthKey) {
+            if (!b) return 0;
+            const mKey = normalizeMonthKey(monthKey, '2026-11');
+            const bId = String(b.id || '');
+            const rawBId = String(b._rawBankId || b.id || '');
+            const cleanBName = String(b.name || '').toLowerCase();
+            const isMercadoPago = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
+
+            const advances = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
+                if (!s) return false;
+                const sMonth = s.billForecastDate || s.bill_forecast_date || s.month || s.cycleMonth;
+                if (sMonth !== mKey) return false;
+                const stmtBankId = String(s.bankId || '');
+                const stmtCardId = String(s.cardId || '');
+                const isDirect = stmtBankId === bId || stmtBankId === rawBId || stmtCardId.includes('d7900258') || stmtBankId.includes('d7900258');
+                const isFallback = Boolean(s.isCreditCardTx) && isMercadoPago;
+                if (!isDirect && !isFallback) return false;
+                return Boolean(s.isAdvancePayment || s.is_advance_payment);
+            });
+
+            const sum = advances.reduce((acc, s) => acc + Number(s.amount || 0), 0);
+            return Number(sum.toFixed(2));
+        }
+
+        /**
          * Valor bruto (total_amount) da fatura de UM cartão no mês.
-         * Prioridade 1 (Soberana): Tabela public.credit_bills (faturas oficiais consolidadas do Supabase).
+         * Prioridade 1 (Soberana): Tabela public.credit_bills (faturas oficiais consolidadas do Supabase, recompondo adiantamentos).
          * Prioridade 2: Soma direta dos lançamentos de cartão em bankStatements (para faturas em aberto).
          */
         function getInvoiceTotalForCardBank(b, monthKey) {
@@ -4936,13 +4963,15 @@ function openBankModal() {
                 return 0;
             }
 
-            // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills
+            // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (recompondo adiantamentos)
             const { cbRecord } = findPersistedCardBillRecord(b, mKey);
             if (cbRecord && Number(cbRecord.total_amount ?? cbRecord.totalAmount ?? 0) > 0) {
-                return Number(Number(cbRecord.total_amount ?? cbRecord.totalAmount).toFixed(2));
+                const billTotal = Number(cbRecord.total_amount ?? cbRecord.totalAmount);
+                const advanceTotal = getAdvancePaymentsForCardMonth(b, mKey);
+                return Number((billTotal + advanceTotal).toFixed(2));
             }
 
-            // 2. Faturas em aberto (sem registro em credit_bills): cálculo da fatura com despesas, estornos e adiantamentos
+            // 2. Faturas em aberto (sem registro em credit_bills): compras reais menos estornos
             const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
                 if (!s) return false;
                 const sMonth = s.billForecastDate || s.bill_forecast_date || s.month || s.cycleMonth;
@@ -4957,18 +4986,15 @@ function openBankModal() {
             if (cardStmts.length > 0) {
                 let expenses = 0;
                 let refunds = 0;
-                let advances = 0;
                 cardStmts.forEach(s => {
                     const amt = Number(s.amount || 0);
                     if (s.type === 'expense' || s.tx_group === 'CARD_EXPENSE') {
                         expenses += amt;
-                    } else if (s.isAdvancePayment || s.is_advance_payment) {
-                        advances += amt;
                     } else if (s.tx_group === 'CARD_REFUND' || s.raw_data?.operationType === 'ESTORNO') {
                         refunds += amt;
                     }
                 });
-                const total = Math.max(0, expenses - refunds - advances);
+                const total = Math.max(0, expenses - refunds);
                 return Number(total.toFixed(2));
             }
 
@@ -5021,12 +5047,17 @@ function openBankModal() {
                     return;
                 }
 
-                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (query SQL do Supabase)
+                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (query SQL do Supabase, recompondo adiantamentos)
                 const { cbRecord } = findPersistedCardBillRecord(b, mKeyRef);
                 if (cbRecord && Number(cbRecord.total_amount ?? 0) > 0) {
-                    const total = Number(Number(cbRecord.total_amount).toFixed(2));
+                    const billTotal = Number(cbRecord.total_amount);
+                    const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
+                    // O valor real da fatura inclui os adiantamentos que o cliente já pagou
+                    const total = Number((billTotal + advanceTotal).toFixed(2));
                     const isPaidStatus = cbRecord.status === 'PAID';
-                    const paid = isPaidStatus ? total : Number(Number(cbRecord.paid_amount ?? 0).toFixed(2));
+                    // Total pago inclui o valor quitado no boleto + adiantamentos
+                    const billPaid = Number(cbRecord.paid_amount ?? 0);
+                    const paid = isPaidStatus ? total : Number((billPaid + advanceTotal).toFixed(2));
                     const pending = isPaidStatus ? 0 : Math.max(0, Number((total - paid).toFixed(2)));
                     const status = isPaidStatus || pending <= 0.009 ? 'PAID' : (cbRecord.status || 'OPEN');
                     const dueDay = Number(cbRecord.due_day || (cbRecord.dueDate ? Number(cbRecord.dueDate.split('-')[2]) : cfg.dueDay));
@@ -5046,6 +5077,7 @@ function openBankModal() {
 
                 // 2. Faturas em aberto / futuras (ex: 2026-12 em diante): soma dinâmica dos lançamentos de cartão em bankStatements
                 const total = getInvoiceTotalForCardBank(b, mKeyRef);
+                const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
                 const isClosedPast = mKeyRef <= '2026-11';
                 const isZero = total <= 0.009;
 
@@ -5062,9 +5094,9 @@ function openBankModal() {
                     pending = 0;
                     status = 'PAID';
                 } else {
-                    paid = 0;
-                    pending = total;
-                    status = 'OPEN';
+                    paid = Math.min(total, advanceTotal);
+                    pending = Math.max(0, Number((total - paid).toFixed(2)));
+                    status = pending <= 0.009 ? 'PAID' : 'OPEN';
                 }
 
                 result.set(String(b.id), {
