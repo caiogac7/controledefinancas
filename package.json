@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "node server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node -e \"const fs=require('fs'); fs.mkdirSync('public/js',{recursive:true}); fs.mkdirSync('public/css',{recursive:true}); ['index.html','manifest.json','favicon.ico','icon-192.png','icon-512.png'].forEach(f=>fs.existsSync(f)&&fs.copyFileSync(f,'public/'+f)); ['js/app.js','js/bootstrap.js','js/icons.js'].forEach(f=>fs.existsSync(f)&&fs.copyFileSync(f,'public/'+f)); ['css/style.css'].forEach(f=>fs.existsSync(f)&&fs.copyFileSync(f,'public/'+f)); console.log('Public synced successfully');\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
