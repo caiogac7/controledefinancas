@@ -4875,27 +4875,35 @@ function openBankModal() {
                 if (cls.tx_group === 'CARD_EXPENSE') stmtTotal += Number(s.amount || 0);
                 else if (cls.tx_group === 'CARD_REFUND' && alloc.settlementPhase === 'IN_CYCLE_REFUND') stmtTotal = Math.max(0, stmtTotal - Number(s.amount || 0));
             });
-            // REGRA UNIVERSAL: Também computa compras parceladas e transações ativas do cartão alocadas no mês
-            const cardTxExpenses = (Array.isArray(transactions) ? transactions : []).filter(t => {
-                if (!t || t.type !== 'expense') return false;
-                if (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) return false;
-                const isCardItem = Boolean(t.isCreditCardTx || t.cardId || (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName)));
-                if (!isCardItem) return false;
-                const belongs = String(t.bankId) === bId || 
-                                String(t.bankId) === rawBId || 
-                                (cardShortId && String(t.cardId) === 'card_' + cardShortId) || 
-                                String(t.cardId) === bId || 
-                                (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName));
-                if (!belongs) return false;
-                return normalizeMonthKey(t.month, mKey) === mKey;
-            });
-            cardTxExpenses.forEach(t => {
-                stmtTotal += Number(t.amount || 0);
-            });
+            // Se o cartão possui extrato Open Finance integrado (cardStmts), ele é a autoridade canônica absoluta.
+            // Apenas recorre a transactions manuais caso o cartão NÃO possua extrato Open Finance (ex: cartão 100% manual).
+            if (cardStmts.length === 0) {
+                const cardTxExpenses = (Array.isArray(transactions) ? transactions : []).filter(t => {
+                    if (!t || t.type !== 'expense') return false;
+                    if (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) return false;
+                    const isCardItem = Boolean(t.isCreditCardTx || t.cardId || (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName)));
+                    if (!isCardItem) return false;
+                    const belongs = String(t.bankId) === bId || 
+                                    String(t.bankId) === rawBId || 
+                                    (cardShortId && String(t.cardId) === 'card_' + cardShortId) || 
+                                    String(t.cardId) === bId || 
+                                    (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName));
+                    if (!belongs) return false;
+                    return normalizeMonthKey(t.month, mKey) === mKey;
+                });
+                cardTxExpenses.forEach(t => {
+                    stmtTotal += Number(t.amount || 0);
+                });
+            }
 
             if (stmtTotal > 0) return Number(stmtTotal.toFixed(2));
 
             return 0;
+        }
+
+        const _cardInvoiceCache = new Map();
+        function invalidateCardInvoiceCache() {
+            _cardInvoiceCache.clear();
         }
 
         /**
@@ -4906,6 +4914,9 @@ function openBankModal() {
          */
         function computeCardInvoicesForMonth(monthKey) {
             const mKeyRef = normalizeMonthKey(monthKey, '2026-11');
+            if (_cardInvoiceCache.has(mKeyRef)) {
+                return _cardInvoiceCache.get(mKeyRef);
+            }
             const sourceBanks = (typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : banks) || [];
             const creditBanks = sourceBanks.filter(b => isCreditCardBank(b));
             const result = new Map();
@@ -5031,6 +5042,7 @@ function openBankModal() {
                 const isPastMonth = curSpMonth > mKeyRef;
                 e.status = (e.pending <= 0.009 || isPastMonth) ? 'PAID' : 'OPEN';
             });
+            _cardInvoiceCache.set(mKeyRef, result);
             return result;
         }
 
@@ -5039,6 +5051,7 @@ function openBankModal() {
          * quando a data de virada (closingDay) ou vencimento (dueDay) do cartão é atualizada.
          */
         function recalculateAllCardCyclesAndBills() {
+            invalidateCardInvoiceCache();
             const creditBanks = (Array.isArray(banks) ? banks : []).filter(b => isCreditCardBank(b));
             if (creditBanks.length === 0) return;
 
@@ -7455,7 +7468,7 @@ function openBankModal() {
                 bankStatements = settingsStmts;
             }
 
-            // 3.3 Carrega Faturas Consolidadas Fixas (credit_bills) para leitura 100% passiva no F5
+            // 3.3 Carrega Faturas Consolidadas Fixas (credit_bills) com primazia do banco relacional
             let loadedBills = [];
             if (Array.isArray(profile._relCreditBills) && profile._relCreditBills.length > 0) {
                 loadedBills = profile._relCreditBills.map(cb => ({
@@ -7482,13 +7495,9 @@ function openBankModal() {
                 }));
             }
             const settingsBills = Array.isArray(remoteSettings.creditBills) ? remoteSettings.creditBills : [];
-            let localBills = [];
-            try {
-                const rawLocalBills = localStorage.getItem(`financas_credit_bills_${profile.id}`);
-                if (rawLocalBills) localBills = JSON.parse(rawLocalBills) || [];
-            } catch {}
             const billMap = new Map();
-            [...localBills, ...settingsBills, ...loadedBills].forEach(b => {
+            // Apenas consome as faturas reais do banco e definições da conta. Não contamina com dados obsoletos de cache local.
+            [...settingsBills, ...loadedBills].forEach(b => {
                 if (!b || !b.month) return;
                 const k = `${b.bankId || b.bank_id || b.accountId || b.account_id || b.cardId || b.card_id}_${b.month}`;
                 const prev = billMap.get(k) || {};
@@ -8310,6 +8319,7 @@ function openBankModal() {
         // RENDERIZAÇÃO COMPLETA (CONTABILIDADE EXATA POR DATA E MÊS)
         // ==========================================
         function renderAll() {
+            invalidateCardInvoiceCache();
             if (typeof restoreAccidentallyEvictedReconciledTransactions === 'function') {
                 restoreAccidentallyEvictedReconciledTransactions();
             }

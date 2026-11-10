@@ -63,9 +63,24 @@
         return;
     }
 
-    // 2. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
+    // 2. Limpeza proativa de caches legados de faturas no localStorage que causavam persistência de valores antigos
+    try {
+        const lastAppVer = localStorage.getItem('finan_app_version');
+        const APP_CACHE_VERSION = '20261109_v3_pure_clean_engine';
+        if (lastAppVer !== APP_CACHE_VERSION) {
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const k = localStorage.key(i);
+                if (k && (k.startsWith('financas_credit_bills_') || k.startsWith('financas_last_summary_') || k.includes('raw_debug'))) {
+                    localStorage.removeItem(k);
+                }
+            }
+            localStorage.setItem('finan_app_version', APP_CACHE_VERSION);
+        }
+    } catch (_) {}
+
+    // 3. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
     const script = document.createElement('script');
-    const APP_CACHE_VERSION = '20261109_dynamic_bill_forecast_engine';
+    const APP_CACHE_VERSION = '20261109_v3_pure_clean_engine';
     script.src = `js/app.js?v=${APP_CACHE_VERSION}`;
     script.defer = true;
     document.body.appendChild(script);
