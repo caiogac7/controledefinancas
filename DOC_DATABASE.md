@@ -21,5 +21,7 @@
 | 08/11/2026 | `bank_statements` | Correção do mês contábil da tarifa de uso do limite emergencial Mercado Pago (`id: 1794048770108`) de `2026-12` para `2026-11` conforme `billForecastDate: 2026-11` e `billPostDate: 2026-11-02`. | Corrigir divergência contábil de R$ 14,90 entre as faturas de Novembro e Dezembro/2026 do Cartão Mercado Pago. |
 | 08/11/2026 | `transactions` | Adição das colunas `original_amount numeric(15,2)` e `reconciled_at timestamptz`. | Armazenar o valor planejado original para viabilizar rateio proporcional em extrato e reversão perfeita a qualquer momento. |
 | 08/11/2026 | `reconcile_transactions_batch` / `undo_reconciliation_batch` | Stored Procedures transacionais ACID no PostgreSQL para quitação, conciliação e desconciliação ultra-rápidas (<30ms). | Eliminar lentidão e travamentos por upload de JSON pesado e proteger integridade contra mudança de aba/tela. |
+| 10/11/2026 | `bank_statements` | Adição das colunas `bill_forecast_date (varchar(7))` e `is_advance_payment (boolean default false)`, vinculando adiantamentos pré-fechamento (`operationType = 'PAGAMENTO_FATURA'`) à competência da fatura e preenchendo o `bill_id`. | Garantir apuração contábil exata da fatura de cartão abatendo pagamentos antecipados (ex: R$ 15,00 + R$ 50,00 = R$ 65,00 em Nov/2026). |
+
 
 

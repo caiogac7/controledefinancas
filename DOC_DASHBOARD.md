@@ -3,9 +3,12 @@
 ## Métricas, KPIs e Regras de Interface
 
 ### 1. Card Fatura Consolidada (Mercado Pago - Nov 2026)
-- **Valor da Fatura:** `R$ 2.936,43` (Auditado e travado de forma imutável contra recálculos indevidos de ciclo).
+- **Fatura Fechada Oficial (Boleto Quitado):** `R$ 2.871,43` (registrado na tabela soberana `public.credit_bills`).
+- **Despesas Brutas do Mês:** `R$ 2.936,43` (49 compras em `bank_statements`).
+- **Adiantamentos de Fatura Abatidos:** `- R$ 65,00` (R$ 50,00 em 13/10 e R$ 15,00 em 01/11 antes do corte da fatura).
+- **Saldo Líquido Fechado:** `R$ 2.871,43` (`R$ 2.936,43 - R$ 65,00`).
 - **Status:** `✓ Fatura quitada` (com badge verde e `pending_amount = R$ 0,00`).
-- **Total Pago:** `R$ 2.936,43` (Soma dos 5 pagamentos consolidados do mês: R$ 50,00 + R$ 15,00 + R$ 350,00 + R$ 900,00 + R$ 1.621,43).
+- **Total Pago Global:** `R$ 2.936,43` (R$ 65,00 em adiantamentos + R$ 2.871,43 quitados após o fechamento: R$ 350,00 + R$ 900,00 + R$ 1.621,43).
 - **Limites:** Limite total R$ 5.600,00, Usado R$ 3.979,79 (71%), Disponível R$ 1.620,21.
 
 ### 2. Ações em Lote e Seleção Múltipla (Visão Mensal & Parcelamentos)
@@ -50,26 +53,28 @@
 - **Trava Rígida de Clique (Anti-Double-Tap):** Bloqueio de cliques e toques repetidos no mobile através das variáveis de estado `isSyncingAllPluggyInProgress` e `activeSyncingItemIds`, desabilitando visual e funcionalmente os botões com `pointer-events: none`, `opacity: 0.5`, `cursor: not-allowed` e spinner de carregamento.
 
 ### 10. Motor Canônico de Faturas de Cartão (Espelhamento 100% SQL Supabase)
-- **Fonte Canônica Exclusiva:** O valor da fatura de cartão em qualquer mês é calculado estritamente pela soma direta das despesas (`type = 'expense'`) na competência do mês (`month = :mKey`) da tabela `public.bank_statements`.
-- **Fim da Mutação em Memória:** Eliminada qualquer sobrescrita destrutiva de `bankStatements` por rotinas de alocação de ciclo ou `fillInstallmentGaps` no front-end. O array `bankStatements` é a cópia fiel dos registros auditados no banco.
+- **Equação Canônica do Saldo da Fatura:**
+  $$\text{Saldo da Fatura} = \text{Compras Brutas (expense)} - \text{Estornos (CARD\_REFUND)} - \text{Adiantamentos de Fatura (is\_advance\_payment)}$$
+- **Fonte Soberana para Faturas Fechadas:** Para meses com fatura fechada emitida pelo banco (`public.credit_bills`), o valor oficial faturado (`total_amount`) prevalece, pois o banco já emite a fatura com os adiantamentos pré-fechamento devidamente abatidos.
+- **Cálculo Determinístico para Faturas em Aberto:** Para meses sem fatura fechada persistida (ou faturas futuras), o saldo da fatura é computado dinamicamente abatendo compras, estornos e adiantamentos vinculados ao mês contábil (`bill_forecast_date`).
 - **Valores Oficiais Auditados por Mês (Cartão Mercado Pago):**
-  - `2026-05`: R$ 89,77 (5 transações)
-  - `2026-06`: R$ 270,73 (10 transações)
-  - `2026-07`: R$ 2.478,41 (72 transações)
-  - `2026-08`: R$ 1.897,59 (60 transações)
-  - `2026-09`: R$ 2.848,28 (82 transações)
-  - `2026-10`: R$ 2.542,46 (83 transações)
-  - `2026-11`: R$ 2.936,43 (49 transações)
-  - `2026-12`: R$ 1.390,61 (28 transações)
-  - `2027-01`: R$ 484,40 (16 transações)
-  - `2027-02`: R$ 464,23 (15 transações)
-  - `2027-03`: R$ 442,06 (13 transações)
-  - `2027-04`: R$ 417,91 (12 transações)
-  - `2027-05`: R$ 360,16 (10 transações)
-  - `2027-06`: R$ 341,12 (9 transações)
-  - `2027-07`: R$ 124,74 (6 transações)
-  - `2027-08`: R$ 124,74 (6 transações)
-  - `2027-09`: R$ 31,73 (2 transações)
+  - `2026-05`: R$ 89,77 (5 compras) | Fatura Fechada: R$ 89,77
+  - `2026-06`: R$ 270,73 (10 compras) | Fatura Fechada: R$ 270,73
+  - `2026-07`: R$ 2.229,57 (67 compras) - R$ 549,52 (estornos) | Fatura: R$ 1.680,05
+  - `2026-08`: R$ 1.897,59 (60 compras) | Fatura Fechada: R$ 1.897,59
+  - `2026-09`: R$ 2.651,20 (73 compras) - R$ 32,34 (estorno) | Fatura: R$ 2.618,86
+  - `2026-10`: R$ 2.491,69 (80 compras) - R$ 42,60 (estorno) | Fatura: R$ 2.449,09
+  - `2026-11`: R$ 2.936,43 (49 compras) - R$ 65,00 (adiantamentos de R$ 15 + R$ 50) | Fatura Fechada: R$ 2.871,43
+  - `2026-12`: R$ 1.390,61 (28 compras em aberto) | Fatura Provisória: R$ 1.390,61
+  - `2027-01`: R$ 484,40 (16 compras)
+  - `2027-02`: R$ 464,23 (15 compras)
+  - `2027-03`: R$ 442,06 (13 compras)
+  - `2027-04`: R$ 417,91 (12 compras)
+  - `2027-05`: R$ 360,16 (10 compras)
+  - `2027-06`: R$ 341,12 (9 compras)
+  - `2027-07`: R$ 124,74 (6 compras)
+  - `2027-08`: R$ 124,74 (6 compras)
+  - `2027-09`: R$ 31,73 (2 compras)
 - **Prevenção de Disparos Fantasmas no Touch:** Aplicação de `touch-action: manipulation;` nos botões de sincronização para eliminar o atraso tátil de 300ms e evitar que o navegador móvel dispare duplo clique acidental.
 - **Cooldown no Cliente (Debounce de 3 Minutos):** Janela de segurança de 3 minutos entre sincronizações gerais de Open Finance, protegendo contra esgotamento da cota de requisições por toques repetidos.
 - **Execução Sequencial com Intervalo:** Execução estritamente em fila com intervalo de respiro de 2 segundos entre conexões bancárias, impedindo bombardeamento simultâneo na API da Pluggy.
