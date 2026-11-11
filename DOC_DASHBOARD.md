@@ -212,3 +212,9 @@
 - **Parecer com IA (Google Gemini):**
   - Diagnóstico executivo sob demanda via #btn-rep-ai-audit (unAiExecutiveDiagnosis()).
   - Fallback local imediato e sanitização rigorosa via escapeHtml() contra XSS (OWASP).
+
+- **Janela Temporal do Fluxo de Caixa (Regra dos 4 Meses para Trás):**
+  - O gráfico de 12 meses agora inicia obrigatoriamente com no máximo 4 meses para trás em relação ao mês atual/ativo (ddMonthsToKey(curKey, -4)).
+  - Para o mês corrente de Nov/2026 (2026-11), a visualização compreende exatamente: Jul/2026, Ago/2026, Set/2026, Out/2026, Nov/2026 (Ativo), Dez/2026, Jan/2027, Fev/2027, Mar/2027, Abr/2027, Mai/2027 e Jun/2027.
+  - Elimina a poluição de meses legados de 2025 puxados por extratos bancários antigos (ank_statements).
+  - Card de valores (#rep-cashflow-focus-card) inicializa automaticamente fixado no mês ativo com valores reais de receita, despesa e saldo.

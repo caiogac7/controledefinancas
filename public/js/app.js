@@ -856,15 +856,20 @@
 
         function syncMonthsFromTransactions() {
             const activeKey = MONTHS[currentMonthIndex]?.key || '2026-11';
-            MONTHS = DEFAULT_MONTHS.map(m => ({ ...m }));
+            // REGRA DE NEGÓCIO: Iniciar com no máximo 4 meses para trás a partir do mês ativo
+            const minAllowedMonth = (typeof addMonthsToKey === 'function')
+                ? addMonthsToKey(activeKey, -4)
+                : '2026-07';
+            MONTHS = DEFAULT_MONTHS.filter(m => m.key >= minAllowedMonth).map(m => ({ ...m }));
             transactions.forEach(t => {
-                if (t && isValidAppMonthKey(t.month)) ensureMonthExists(t.month);
+                if (t && isValidAppMonthKey(t.month) && t.month >= minAllowedMonth) ensureMonthExists(t.month);
             });
             bankStatements.forEach(s => {
-                if (s && isValidAppMonthKey(s.month)) ensureMonthExists(s.month);
+                if (s && isValidAppMonthKey(s.month) && s.month >= minAllowedMonth) ensureMonthExists(s.month);
             });
             const restoredIdx = MONTHS.findIndex(m => m.key === activeKey);
-            currentMonthIndex = restoredIdx !== -1 ? restoredIdx : 1;
+            currentMonthIndex = restoredIdx !== -1 ? restoredIdx : MONTHS.findIndex(m => m.key === '2026-11');
+            if (currentMonthIndex === -1) currentMonthIndex = 0;
             populateMonthSelect();
         }
 
@@ -8765,7 +8770,36 @@ function openBankModal() {
             const chartEl = document.getElementById('rep-cashflow-chart');
             const focusCardEl = document.getElementById('rep-cashflow-focus-card');
             if (chartEl) {
-                const sliceMonths = (Array.isArray(MONTHS) ? MONTHS : []).slice(0, 12);
+                // REGRA DE NEGÓCIO: Iniciar com NO MÁXIMO 4 meses para trás a partir do mês ativo/selecionado
+                const curKey = currentMonth?.key || '2026-11';
+                const startMonthKey = (typeof addMonthsToKey === 'function')
+                    ? addMonthsToKey(curKey, -4)
+                    : (() => {
+                        const [y, m] = curKey.split('-').map(Number);
+                        const t = (y * 12 + (m - 1)) - 4;
+                        return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+                    })();
+
+                const sliceMonths = [];
+                for (let i = 0; i < 12; i++) {
+                    const k = (typeof addMonthsToKey === 'function')
+                        ? addMonthsToKey(startMonthKey, i)
+                        : (() => {
+                            const [y, m] = startMonthKey.split('-').map(Number);
+                            const t = (y * 12 + (m - 1)) + i;
+                            return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+                        })();
+                    const existingM = Array.isArray(MONTHS) ? MONTHS.find(m => m.key === k) : null;
+                    if (existingM) {
+                        sliceMonths.push(existingM);
+                    } else {
+                        const [y, m] = k.split('-').map(Number);
+                        sliceMonths.push({
+                            key: k,
+                            label: `${MONTH_NAMES_SHORT[(m || 1) - 1] || 'Mês'} ${y}`
+                        });
+                    }
+                }
                 let maxVal = 1;
                 const series = sliceMonths.map(m => {
                     const mTxs = typeof getHomeVisibleTransactions === 'function'
