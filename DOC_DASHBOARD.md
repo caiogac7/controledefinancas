@@ -174,3 +174,41 @@
 - **Navegação e Desbloqueio Histórico:**
   - `DEFAULT_MONTHS` e `isValidAppMonthKey` expandidos para suportar desde `2026-05` (e intervalos válidos `2025-01` a `2031-12`), permitindo que a navegação retroceda com setas (<) e selecione os meses anteriores livremente no cabeçalho e no seletor rápido.
 - **Versão de Cache:** `20261110_v12_credit_bills_authoritative` aplicada em `index.html`, `bootstrap.js` e espelhos em `public/`.
+
+### 11. Aba Relatórios & Análise Financeira (Auditoria Executiva e Inteligência)
+- **Cabeçalho & Exportação:**
+  - Título sincronizado com o mês selecionado (#rep-month-title).
+  - Botões para impressão em PDF (window.print()), exportação CSV do mês e exportação CSV consolidada geral.
+- **Diagnóstico Executivo Concreto & Teto Diário:**
+  - **Status Badge & Título:** Parecer de saúde financeira baseado no comprometimento da renda (Déficit no Mês, Orçamento Apertado, Saúde Excelente).
+  - **Teto Seguro de Gastos Diários:** Margem calculada como $\frac{\text{Sobra Prevista}}{\text{Dias Restantes}}$, com trava automática (R$ 0,00) em caso de déficit.
+  - **Dias Restantes:** Calculado dinamicamente com base no fuso America/Sao_Paulo (getSaoPauloDateYYYYMMDD()) e número real de dias do mês.
+- **Quatro KPIs de Saúde Financeira:**
+  - **Comprometimento da Renda:** $\frac{\text{Despesas Totais}}{\text{Receitas Totais}} \times 100$, com cores dinâmicas (Verde $\le 75\%$, Âmbar $\le 95\%$, Vermelho $> 95\%$).
+  - **Margem Livre / Poupança:** Percentual e valor absoluto da folga orçamentária projetada.
+  - **Fixas vs. Parceladas:** Proporção percentual de despesas fixas recorrentes em relação ao peso das compras parceladas.
+  - **Média Diária:** Custo médio por dia no mês corrente.
+- **Diagnósticos Inteligentes do Mês (3 Cards):**
+  - **Maior Foco de Gastos:** Identificação automática da categoria de maior impacto e sua fatia percentual do total de saídas.
+  - **Alívio no Próximo Mês:** Mapeamento de compras parceladas que encerram no mês e cálculo do valor mensal liberado para o caixa seguinte.
+  - **Peso das Parcelas:** Monitoramento do grau de endividamento parcelado sobre o orçamento.
+- **Plano de Ação Prático Passo a Passo (4 Etapas):**
+  - **Passo 1 (Contas Pendentes):** Alerta de faturas e títulos a vencer com data e valor do próximo vencimento.
+  - **Passo 2 (Otimização):** Sugestão algorítmica de teto de gastos com corte de 15% na maior categoria de consumo.
+  - **Passo 3 (Meta 20% Poupança):** Comparação da sobra real com a meta clássica de 20% de economia mensal.
+  - **Passo 4 (Reserva de Emergência):** Monitoramento do saldo em contas de reserva em relação à meta de 3 meses de despesas.
+- **Bússola Financeira 50-30-20:**
+  - Comparativo visual das 3 barras de progresso:
+    - Necessidades & Contas Fixas (Meta $\le 50\%$).
+    - Estilo de Vida & Parcelas (Meta $\le 30\%$).
+    - Poupança & Investimentos (Meta $\ge 20\%$).
+- **Gráfico de Fluxo de Caixa (12 Meses):**
+  - Barras comparativas mês a mês de receitas vs. despesas operacionais (com faturas de cartão consolidadas).
+  - Card interativo (#rep-cashflow-focus-card) com atualização em tempo real ao tocar ou passar o mouse nas barras.
+  - Suporte total a rolagem horizontal suave no celular (	ouch-pan-x).
+- **Top 5 Maiores Despesas & Composição por Natureza:**
+  - Ranking dinâmico das 5 maiores saídas do mês com tags numéricas, porcentagens e barras proporcionais.
+  - Quebra de saídas por natureza: Despesas Fixas, Compras Parceladas e Despesas Únicas/Avulsas.
+- **Parecer com IA (Google Gemini):**
+  - Diagnóstico executivo sob demanda via #btn-rep-ai-audit (unAiExecutiveDiagnosis()).
+  - Fallback local imediato e sanitização rigorosa via escapeHtml() contra XSS (OWASP).

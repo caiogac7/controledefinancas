@@ -8485,1134 +8485,510 @@ function openBankModal() {
             lucide.createIcons();
         }
 
-// =========================================================================
-// RELATÓRIOS v2 — INÍCIO (motor de análise)
-// Princípio: UMA fonte de verdade para o caixa (a mesma da Visão Mensal), todos os
-// percentuais sobre a MESMA base (renda do mês) e nenhum número "chutado".
-// Este bloco é puro (não lê DOM nem variáveis globais do app): recebe dados e devolve análise.
-// =========================================================================
-const RPT_MONTHS_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
-function rptRound2(n) {
-    return Math.round((Number(n) || 0) * 100) / 100;
-}
+        // =========================================================================
+        // RELATÓRIOS & ANÁLISE FINANCEIRA EXECUTIVA (AUDITORIA E PROJEÇÕES)
+        // =========================================================================
+        function renderFinancialAnalysisAndReports(currentMonth, monthTxs, totalIncome, totalExpense) {
+            const titleEl = document.getElementById('rep-month-title');
+            if (titleEl) titleEl.textContent = currentMonth.label;
 
-function rptFmt(n) {
-    const v = rptRound2(n);
-    const abs = Math.abs(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `${v < 0 ? '-' : ''}R$ ${abs}`;
-}
+            const effectiveBanksList = typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : (banks || []);
+            const allEffectiveTransactions = typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (transactions || []);
 
-function rptMonthAdd(key, delta) {
-    const [y, m] = String(key).split('-').map(Number);
-    const t = y * 12 + (m - 1) + delta;
-    return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
-}
+            const expenses = monthTxs.filter(t => t.type === 'expense');
+            const paidExpense = expenses.reduce((acc, t) => {
+                if (t.isConsolidatedBill) {
+                    const bTot = Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
+                    const bPaid = Number(t.paid_amount ?? t.paidAmount ?? (t.paid ? bTot : 0));
+                    return acc + Math.min(bTot, Math.max(0, bPaid));
+                }
+                return acc + (t.paid ? Number(t.amount || 0) : 0);
+            }, 0);
+            const pendingExpense = Math.max(0, totalExpense - paidExpense);
+            const fixedExpenses = expenses.filter(t => String(t.inst || '').toLowerCase() === 'fixa').reduce((a, t) => a + Number(t.amount || 0), 0);
+            const instExpenses = expenses.filter(t => String(t.inst || '').includes('/')).reduce((a, t) => a + Number(t.amount || 0), 0);
+            const singleExpenses = Math.max(0, totalExpense - fixedExpenses - instExpenses);
 
-function rptDaysInMonth(key) {
-    const [y, m] = String(key).split('-').map(Number);
-    return new Date(y, m, 0).getDate();
-}
+            const commitPct = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : (totalExpense > 0 ? 100 : 0);
+            const savingAmount = totalIncome - totalExpense;
+            const savingPct = totalIncome > 0 ? Math.max(0, Math.round((savingAmount / totalIncome) * 100)) : 0;
 
-function rptMonthLabel(key) {
-    const [y, m] = String(key).split('-').map(Number);
-    return `${RPT_MONTHS_PT[(m || 1) - 1]} ${y}`;
-}
+            const fixedPct = totalExpense > 0 ? Math.round((fixedExpenses / totalExpense) * 100) : 0;
+            const instPct = totalExpense > 0 ? Math.round((instExpenses / totalExpense) * 100) : 0;
+            const dailyAvg = totalExpense / 30;
 
-// ---- Classificação essencial x estilo de vida (por descrição, depois por categoria) ----
-const RPT_DESC_LIFESTYLE = /(ifood|\bifd\b|ifd\*|rappi|uber\s?eats|burger|burguer|hamburg|pizza|lanche|restaurante|sorvete|a[cç]a[ií]|cervej|\bbar\b|netflix|spotify|disney|hbo|prime\s?video|youtube|deezer|steam|playstation|xbox|cinema|ingresso|shein|shopee|aliexpress|amazon|magalu|americanas|mercado\s?livre|mercadolivre|temu|zara|renner|riachuelo)/i;
-const RPT_DESC_ESSENTIAL = /(supermercado|mercadinho|hortifruti|padaria|a[cç]ougue|mercado(?!\s?(livre|pago|libre))|atacad|assa[ií]|carrefour|farm[aá]cia|drogaria|drogasil|pacheco|raia|hospital|cl[ií]nica|unimed|plano\s?de\s?sa[uú]de|aluguel|condom[ií]nio|energia|enel|cemig|[aá]gua|sabesp|internet|combust[ií]vel|\bposto\b|ipiranga|pneu|oficina|mec[aâ]nic|escola|faculdade|mensalidade|iptu|ipva|licenciamento)/i;
-const RPT_CAT_ESSENTIAL = /^(casa|moradia|sa[uú]de|transporte|moto|carro|educa[cç][aã]o|contas|mercado|supermercado|combust[ií]vel|aluguel|financiamento|d[ií]vidas?|impostos?|alimenta[cç][aã]o)$/i;
-const RPT_CAT_LIFESTYLE = /^(lazer|assinaturas?|compras|clothing|vestu[aá]rio|viagens?|restaurantes?|delivery|beleza|presentes?|academia|games?|streaming|pet|outros)$/i;
+            const commitEl = document.getElementById('rep-kpi-commit');
+            const commitSub = document.getElementById('rep-kpi-commit-sub');
+            if (commitEl) {
+                commitEl.textContent = `${commitPct}%`;
+                commitEl.className = `text-lg md:text-xl font-extrabold mt-1 ${commitPct <= 75 ? 'text-emerald-600 dark:text-emerald-400' : (commitPct <= 95 ? 'text-amber-500' : 'text-rose-600 dark:text-rose-400')}`;
+                if (commitSub) commitSub.textContent = commitPct <= 75 ? 'Saudável (abaixo de 75%)' : (commitPct <= 100 ? 'Atenção: Orçamento apertado' : 'Alerta: Despesas superam receitas');
+            }
 
-function rptClassifyBucket(cat, desc, kind) {
-    const d = String(desc || '');
-    const c = String(cat || '').trim();
-    if (RPT_DESC_LIFESTYLE.test(d)) return { bucket: 'lifestyle', known: true };
-    if (RPT_DESC_ESSENTIAL.test(d)) return { bucket: 'essential', known: true };
-    if (RPT_CAT_ESSENTIAL.test(c)) return { bucket: 'essential', known: true };
-    if (RPT_CAT_LIFESTYLE.test(c)) return { bucket: 'lifestyle', known: true };
-    if (kind === 'fixed') return { bucket: 'essential', known: false };
-    return { bucket: 'lifestyle', known: false };
-}
+            const savEl = document.getElementById('rep-kpi-saving');
+            const savSub = document.getElementById('rep-kpi-saving-sub');
+            if (savEl) {
+                savEl.textContent = `${savingPct}%`;
+                if (savSub) savSub.textContent = `Saldo livre: ${formatBRL(savingAmount)}`;
+            }
 
-function rptParseInst(raw) {
-    if (raw && typeof raw === 'object') {
-        const cur = Number(raw.cur ?? raw.installmentNumber ?? 0);
-        const tot = Number(raw.tot ?? raw.totalInstallments ?? 0);
-        return tot > 0 && cur > 0 ? { cur, tot } : null;
-    }
-    const m = String(raw || '').trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-    return m ? { cur: Number(m[1]), tot: Number(m[2]) } : null;
-}
+            const splitEl = document.getElementById('rep-kpi-split');
+            const splitSub = document.getElementById('rep-kpi-split-sub');
+            if (splitEl) {
+                splitEl.textContent = `${fixedPct}% Fixas / ${instPct}% Parc.`;
+                if (splitSub) splitSub.textContent = `Parcelas somam ${formatBRL(instExpenses)}`;
+            }
 
-function rptNormalizeItem(t) {
-    const type = t.type === 'income' ? 'income' : 'expense';
-    const isBill = Boolean(t.isConsolidatedBill);
-    const amount = rptRound2(isBill ? Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0) : Number(t.amount || 0));
-    const rawPaid = isBill
-        ? Number(t.paid_amount ?? t.paidAmount ?? (t.paid ? amount : 0))
-        : (t.paid ? amount : 0);
-    const paidAmount = rptRound2(Math.min(amount, Math.max(0, rawPaid)));
-    const instRaw = String(t.inst || '').trim();
-    const inst = rptParseInst(instRaw);
-    let kind = 'single';
-    if (isBill) kind = 'bill';
-    else if (instRaw.toLowerCase() === 'fixa') kind = 'fixed';
-    else if (inst && inst.tot > 1) kind = 'installment';
-    const cat = String(t.cat || 'Geral');
-    const cls = rptClassifyBucket(cat, t.desc, kind);
-    return {
-        desc: String(t.desc || ''),
-        cat,
-        day: Math.max(1, Number(t.day) || 1),
-        type,
-        amount,
-        paidAmount,
-        pendingAmount: rptRound2(amount - paidAmount),
-        paid: amount - paidAmount <= 0.009,
-        kind,
-        inst,
-        bucket: cls.bucket,
-        known: cls.known
-    };
-}
+            const dailyEl = document.getElementById('rep-kpi-daily');
+            if (dailyEl) {
+                dailyEl.textContent = `${formatBRL(dailyAvg)}/dia`;
+            }
 
-function rptSum(arr, f) {
-    return rptRound2(arr.reduce((a, x) => a + f(x), 0));
-}
+            const catMap = {};
+            expenses.forEach(t => { catMap[t.cat] = (catMap[t.cat] || 0) + Number(t.amount || 0); });
+            const topCat = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0];
 
-function rptByCat(expenseItems) {
-    const map = {};
-    expenseItems.forEach(i => {
-        if (!map[i.cat]) map[i.cat] = { cat: i.cat, amount: 0, essentialAmt: 0, lifestyleAmt: 0 };
-        map[i.cat].amount += i.amount;
-        if (i.bucket === 'essential') map[i.cat].essentialAmt += i.amount; else map[i.cat].lifestyleAmt += i.amount;
-    });
-    return Object.values(map)
-        .map(c => ({ cat: c.cat, amount: rptRound2(c.amount), bucket: c.essentialAmt >= c.lifestyleAmt ? 'essential' : 'lifestyle' }))
-        .sort((a, b) => b.amount - a.amount);
-}
+            const finishingThisMonth = expenses.filter(t => {
+                if (!t.inst || !t.inst.includes('/')) return false;
+                const [c, tot] = t.inst.split('/').map(Number);
+                return c === tot;
+            });
+            const finishingSum = finishingThisMonth.reduce((a, t) => a + Number(t.amount || 0), 0);
 
-// ---- Evita contar duas vezes a mesma compra (lançada à mão e também vista no cartão) ----
-function rptTokens(text) {
-    return String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .replace(/\d+\s*\/\s*\d+/g, ' ').split(/[^a-z0-9]+/).filter(t => t.length >= 4);
-}
-function rptSameInstallment(a, b) {
-    if (Math.abs(Number(a.amount) - Number(b.amount)) > Math.max(0.5, Number(b.amount) * 0.02)) return false;
-    const tb = new Set(rptTokens(b.desc));
-    return rptTokens(a.desc).some(t => tb.has(t));
-}
+            // =========================================================================
+            // DIAGNÓSTICO EXECUTIVO CONCRETO & TETO DIÁRIO PERMITIDO
+            // =========================================================================
+            const spToday = (typeof getSaoPauloDateYYYYMMDD === 'function') ? getSaoPauloDateYYYYMMDD() : '2026-11-10';
+            const [spYear, spMonth, spDay] = spToday.split('-').map(Number);
+            const [targetYear, targetMonthNum] = (currentMonth.key || '2026-11').split('-').map(Number);
+            const daysInCurrentMonth = new Date(targetYear, targetMonthNum, 0).getDate();
 
-// ---- Parcelas: cronograma dos próximos 6 meses ----
-function rptBuildInstallments(monthKey, installmentItems, cardFuture, cardInstNow) {
-    const manualNow = rptSum(installmentItems, i => i.amount);
-    const rows = installmentItems.map(i => {
-        const remaining = Math.max(0, i.inst.tot - i.inst.cur);
-        return {
-            desc: i.desc,
-            amount: i.amount,
-            cur: i.inst.cur,
-            tot: i.inst.tot,
-            remaining,
-            endKey: rptMonthAdd(monthKey, remaining),
-            remainingTotal: rptRound2(i.amount * remaining)
-        };
-    }).sort((a, b) => b.amount - a.amount);
-
-    const schedule = [];
-    for (let k = 1; k <= 6; k++) {
-        const key = rptMonthAdd(monthKey, k);
-        const manual = rptSum(rows.filter(r => r.remaining >= k), r => r.amount);
-        const fut = (cardFuture || {})[key];
-        const card = Array.isArray(fut)
-            ? rptSum(fut.filter(c => { const i = rptParseInst(c.inst); return i && i.tot > 1 && Number(c.amount) > 0 && !installmentItems.some(m => rptSameInstallment(c, m)); }), c => Number(c.amount))
-            : rptRound2(Number(fut || 0));
-        schedule.push({ monthKey: key, manual, card, total: rptRound2(manual + card) });
-    }
-    const nowTotal = rptRound2(manualNow + cardInstNow);
-    let releaseNext = null;
-    if (schedule.length) {
-        const drop = rptRound2(nowTotal - schedule[0].total);
-        if (drop > 0.5) releaseNext = { monthKey: schedule[0].monthKey, amount: drop };
-    }
-    const debtManual = rptSum(rows, r => r.remainingTotal);
-    const debtCard = rptSum(schedule, s => s.card);
-    return { manualNow, cardNow: rptRound2(cardInstNow), nowTotal, rows, schedule, releaseNext, debtRemaining: rptRound2(debtManual + debtCard) };
-}
-
-// ---- Linha do tempo do caixa no mês (só o que ainda vai acontecer) ----
-function rptBuildTimeline(state, todayDay, dim, saldoHoje, pendingItems) {
-    if (state === 'past') return null;
-    const startDay = state === 'current' ? todayDay : 1;
-    const byDay = {};
-    pendingItems.forEach(i => {
-        const d = Math.min(dim, Math.max(startDay, i.day));
-        byDay[d] = (byDay[d] || 0) + (i.type === 'income' ? i.pendingAmount : -i.pendingAmount);
-    });
-    const days = Object.keys(byDay).map(Number).sort((a, b) => a - b);
-    const points = [{ day: startDay, balance: rptRound2(saldoHoje), event: 0 }];
-    let bal = saldoHoje;
-    days.forEach(d => {
-        bal += byDay[d];
-        points.push({ day: d, balance: rptRound2(bal), event: rptRound2(byDay[d]) });
-    });
-    const min = points.reduce((m, p) => (p.balance < m.balance ? p : m), points[0]);
-    const firstNeg = points.find(p => p.balance < 0) || null;
-    return { startDay, points, min, firstNegativeDay: firstNeg ? firstNeg.day : null, endBalance: rptRound2(bal) };
-}
-
-/**
- * input = {
- *   monthKey, monthLabel, todayStr,
- *   cash: { saldoHoje, carryIn, reserva },
- *   items: [...itens da Visão Mensal (faturas já consolidadas)...],
- *   cardItems: [...compras detalhadas do cartão no mês...],
- *   cardFuture: { 'YYYY-MM': parcelas identificadas no cartão },
- *   history: [ { monthKey, items } ]  // até 3 meses anteriores
- *   months: [ { monthKey, label, income, expense } ]  // janela do gráfico
- * }
- */
-function rptBuildSnapshot(input) {
-    const monthKey = input.monthKey;
-    const todayStr = input.todayStr;
-    const todayMonth = todayStr.slice(0, 7);
-    const todayDay = Number(todayStr.slice(8, 10)) || 1;
-    const state = monthKey < todayMonth ? 'past' : (monthKey > todayMonth ? 'future' : 'current');
-    const dim = rptDaysInMonth(monthKey);
-    const daysLeft = state === 'current' ? Math.max(1, dim - todayDay + 1) : (state === 'future' ? dim : 0);
-    const daysElapsed = state === 'current' ? todayDay : (state === 'past' ? dim : 0);
-    const label = input.monthLabel || rptMonthLabel(monthKey);
-
-    const items = (input.items || []).map(rptNormalizeItem);
-    const inc = items.filter(i => i.type === 'income');
-    const exp = items.filter(i => i.type === 'expense');
-
-    const totalIncome = rptSum(inc, x => x.amount);
-    const receivedIncome = rptSum(inc, x => x.paidAmount);
-    const pendingIncome = rptRound2(totalIncome - receivedIncome);
-    const totalExpense = rptSum(exp, x => x.amount);
-    const paidExpense = rptSum(exp, x => x.paidAmount);
-    const pendingExpense = rptRound2(totalExpense - paidExpense);
-
-    const cashIn = input.cash || {};
-    const saldoHoje = rptRound2(cashIn.saldoHoje);
-    const carryIn = rptRound2(cashIn.carryIn);
-    const reserva = rptRound2(cashIn.reserva);
-    const hasReserve = cashIn.hasReserveAccount !== false;
-    const saldoPrevisto = rptRound2(saldoHoje + pendingIncome - pendingExpense);
-    const resultadoMes = rptRound2(totalIncome - totalExpense);
-
-    // ---- histórico (até 3 meses anteriores) ----
-    const hist = (input.history || []).map(h => {
-        const its = (h.items || []).map(rptNormalizeItem);
-        const ex = its.filter(i => i.type === 'expense');
-        return {
-            monthKey: h.monthKey,
-            income: rptSum(its.filter(i => i.type === 'income'), x => x.amount),
-            expense: rptSum(ex, x => x.amount),
-            single: rptSum(ex.filter(i => i.kind === 'single'), x => x.amount),
-            byCat: rptByCat(ex.filter(i => i.kind !== 'bill'))
-        };
-    }).filter(h => h.income > 0 || h.expense > 0);
-    const avgIncomeHist = hist.length ? rptRound2(hist.reduce((a, h) => a + h.income, 0) / hist.length) : 0;
-    const rendaRef = totalIncome > 0 ? totalIncome : avgIncomeHist;
-    const colchao = rptRound2(Math.max(100, rendaRef * 0.05));
-
-    // ---- ritmo de gastos avulsos (PIX/débito/dinheiro) por dia ----
-    let ritmoVarDia = null;
-    if (hist.length > 0) {
-        ritmoVarDia = rptRound2(hist.reduce((a, h) => a + h.single / rptDaysInMonth(h.monthKey), 0) / hist.length);
-    } else if (state === 'current' && daysElapsed >= 7) {
-        const singlesPaid = rptSum(exp.filter(i => i.kind === 'single'), x => x.paidAmount);
-        ritmoVarDia = rptRound2(singlesPaid / daysElapsed);
-    }
-
-    // ---- status e texto do veredito ----
-    let status;
-    if (!items.length || (totalIncome === 0 && totalExpense === 0)) status = 'empty';
-    else if (state === 'past') status = saldoPrevisto >= 0 ? 'closed-ok' : 'closed-negative';
-    else if (saldoPrevisto < -colchao) status = 'critical';
-    else if (saldoPrevisto < colchao) status = 'tight';
-    else status = 'healthy';
-
-    const headlines = {
-        'critical': `Fecha no vermelho: faltam ${rptFmt(-saldoPrevisto)} para cobrir o mês`,
-        'tight': saldoPrevisto < 0
-            ? `No limite: o mês fecha em ${rptFmt(saldoPrevisto)}, praticamente zero a zero`
-            : `Folga curta: sobram só ${rptFmt(saldoPrevisto)} no fim do mês`,
-        'healthy': `Mês no azul: sobram ${rptFmt(saldoPrevisto)} no fim do mês`,
-        'closed-ok': `Mês encerrado no azul: terminou com ${rptFmt(saldoPrevisto)} em caixa`,
-        'closed-negative': `Mês encerrado no vermelho: terminou com ${rptFmt(saldoPrevisto)} em caixa`,
-        'empty': 'Sem lançamentos neste mês'
-    };
-
-    const lead = [];
-    if (status !== 'empty') {
-        if (state === 'past') {
-            lead.push(`Entraram ${rptFmt(totalIncome)} e saíram ${rptFmt(totalExpense)} (resultado de ${rptFmt(resultadoMes)}).`);
-        } else {
-            lead.push(`Você tem ${rptFmt(saldoHoje)} em conta, ainda recebe ${rptFmt(pendingIncome)} e ainda paga ${rptFmt(pendingExpense)}.`);
-        }
-        if (resultadoMes < -0.005 && totalIncome > 0) {
-            if (carryIn > 0.5) {
-                lead.push(`As despesas do mês (${rptFmt(totalExpense)}) superam as receitas (${rptFmt(totalIncome)}) em ${rptFmt(-resultadoMes)}; o saldo que veio de meses anteriores (${rptFmt(carryIn)}) ${saldoPrevisto >= 0 ? 'cobre esse buraco' : 'cobre só parte desse buraco'}, mas ele não se repete no mês que vem.`);
+            let daysLeft = 1;
+            if (spYear === targetYear && spMonth === targetMonthNum) {
+                daysLeft = Math.max(1, daysInCurrentMonth - spDay + 1);
+            } else if (spYear > targetYear || (spYear === targetYear && spMonth > targetMonthNum)) {
+                daysLeft = 1;
             } else {
-                lead.push(`As despesas do mês (${rptFmt(totalExpense)}) superam as receitas (${rptFmt(totalIncome)}) em ${rptFmt(-resultadoMes)}.`);
+                daysLeft = daysInCurrentMonth;
             }
-        } else if (totalIncome === 0 && totalExpense > 0) {
-            lead.push('Nenhuma receita foi lançada neste mês, então a análise de renda fica limitada.');
-        }
-    }
 
-    // ---- margem diária e projeção realista ----
-    let allowance = null;
-    if (state !== 'past' && status !== 'empty') {
-        const tetoDia = saldoPrevisto > 0 ? rptRound2(saldoPrevisto / daysLeft) : 0;
-        const falta = saldoPrevisto < 0 ? rptRound2(-saldoPrevisto) : 0;
-        const pendingSingles = rptSum(exp.filter(i => i.kind === 'single' && !i.paid), x => x.pendingAmount);
-        const gastoEsperado = ritmoVarDia === null ? null : rptRound2(Math.max(0, ritmoVarDia * daysLeft - pendingSingles));
-        allowance = {
-            daysLeft,
-            tetoDia,
-            falta,
-            ritmoVarDia,
-            gastoEsperado,
-            saldoRealista: gastoEsperado === null ? null : rptRound2(saldoPrevisto - gastoEsperado)
-        };
-    }
+            const execCard = document.getElementById('rep-executive-card');
+            const execTitle = document.getElementById('rep-executive-title');
+            const execDesc = document.getElementById('rep-executive-desc');
+            const execBadge = document.getElementById('rep-status-badge');
+            const dailyAllowanceEl = document.getElementById('rep-daily-allowance');
+            const daysLeftEl = document.getElementById('rep-days-left');
 
-    // ---- composição das despesas (tudo sobre a MESMA base: a renda do mês) ----
-    const expNoBill = exp.filter(i => i.kind !== 'bill');
-    const billItems = exp.filter(i => i.kind === 'bill');
-    const billTotal = rptSum(billItems, x => x.amount);
-    const pct = (v) => (totalIncome > 0 ? Math.round((v / totalIncome) * 100) : null);
-    const kindSum = (k) => rptSum(expNoBill.filter(i => i.kind === k), x => x.amount);
-
-    // ---- raio-x do cartão (itens detalhados; só estimativa, não entra nos totais) ----
-    const cardItems = (input.cardItems || []).map(c => {
-        const inst = rptParseInst(c.inst);
-        const cat = String(c.cat || 'Compras');
-        const cls = rptClassifyBucket(cat, c.desc, 'single');
-        return { desc: String(c.desc || ''), amount: rptRound2(c.amount), cat, inst, bucket: cls.bucket, known: cls.known };
-    }).filter(c => c.amount > 0);
-    const cardItemsSum = rptSum(cardItems, c => c.amount);
-    const manualInstItems = items.filter(i => i.type === 'expense' && i.kind === 'installment');
-    const cardInstItemsAll = cardItems.filter(c => c.inst && c.inst.tot > 1);
-    const cardInstNowRaw = rptSum(cardInstItemsAll, c => c.amount);
-    const cardInstNowDedup = rptSum(cardInstItemsAll.filter(c => !manualInstItems.some(m => rptSameInstallment(c, m))), c => c.amount);
-    const coverage = billTotal > 0 && cardItemsSum > 0 ? cardItemsSum / billTotal : null;
-    const cardReliable = cardItems.length >= 3 && coverage !== null && coverage >= 0.5 && coverage <= 1.5;
-    const cardInstNow = cardReliable ? Math.min(cardInstNowDedup, billTotal) : 0;
-    const cardEssentialShare = cardItemsSum > 0 ? rptSum(cardItems.filter(c => c.bucket === 'essential'), c => c.amount) / cardItemsSum : 0;
-    const cardXray = {
-        available: cardItems.length > 0,
-        reliable: cardReliable,
-        itemsCount: cardItems.length,
-        itemsSum: cardItemsSum,
-        billTotal,
-        coverage: coverage === null ? null : Math.round(coverage * 100),
-        byCat: rptByCat(cardItems.map(c => ({ cat: c.cat, amount: c.amount, bucket: c.bucket }))),
-        installmentsInside: cardInstNowRaw,
-        top: cardItems.slice().sort((a, b) => b.amount - a.amount).slice(0, 5)
-    };
-
-    // ---- parcelas ----
-    const installments = rptBuildInstallments(
-        monthKey, expNoBill.filter(i => i.kind === 'installment'), input.cardFuture || {}, cardInstNow
-    );
-
-    // ---- grupos da composição ----
-    const groupDefs = [
-        { id: 'fixed', label: 'Contas fixas', amount: kindSum('fixed') },
-        { id: 'installment', label: 'Parcelas lançadas', amount: kindSum('installment') },
-        { id: 'single', label: 'Gastos avulsos', amount: kindSum('single') },
-        { id: 'bill', label: 'Fatura do cartão', amount: billTotal }
-    ];
-    const groups = groupDefs.map(g => ({ ...g, pctRenda: pct(g.amount), pctDespesa: totalExpense > 0 ? Math.round((g.amount / totalExpense) * 100) : 0 }));
-
-    // ---- 50/30/20 por categoria (fatura entra por proporção dos itens, se confiável) ----
-    const needsDirect = rptSum(expNoBill.filter(i => i.bucket === 'essential'), x => x.amount);
-    const wantsDirect = rptSum(expNoBill.filter(i => i.bucket === 'lifestyle'), x => x.amount);
-    let needsBill = 0, wantsBill = 0, undefinedBill = 0;
-    if (billTotal > 0) {
-        if (cardReliable) {
-            needsBill = rptRound2(billTotal * cardEssentialShare);
-            wantsBill = rptRound2(billTotal - needsBill);
-        } else {
-            undefinedBill = billTotal;
-        }
-    }
-    const needs = rptRound2(needsDirect + needsBill);
-    const wants = rptRound2(wantsDirect + wantsBill);
-    const savings = rptRound2(Math.max(0, resultadoMes));
-    const knownAmt = rptSum(expNoBill.filter(i => i.known), x => x.amount);
-    const classifiedBase = rptSum(expNoBill, x => x.amount);
-    const confidence = classifiedBase > 0 ? Math.round((knownAmt / classifiedBase) * 100) : 100;
-    const rule503020 = {
-        base: totalIncome,
-        pillars: [
-            { id: 'needs', label: 'Essenciais', target: '≤ 50%', amount: needs, pct: pct(needs), ok: totalIncome > 0 ? needs / totalIncome <= 0.55 : null },
-            { id: 'wants', label: 'Estilo de vida', target: '≤ 30%', amount: wants, pct: pct(wants), ok: totalIncome > 0 ? wants / totalIncome <= 0.35 : null },
-            { id: 'savings', label: 'Poupança', target: '≥ 20%', amount: savings, pct: pct(savings), ok: totalIncome > 0 ? savings / totalIncome >= 0.15 : null }
-        ],
-        undefinedBill,
-        confidence,
-        billEstimated: billTotal > 0 && cardReliable
-    };
-
-    // ---- categorias ----
-    const categories = rptByCat(expNoBill).map(c => ({ ...c, pctDespesa: totalExpense > 0 ? Math.round((c.amount / totalExpense) * 100) : 0 }));
-    const topExpenses = exp.slice().sort((a, b) => b.amount - a.amount).slice(0, 5)
-        .map(i => ({ desc: i.desc, cat: i.cat, day: i.day, amount: i.amount, kind: i.kind, inst: i.inst, pctDespesa: totalExpense > 0 ? Math.round((i.amount / totalExpense) * 100) : 0 }));
-
-    // ---- linha do tempo do caixa ----
-    const pendingItems = items.filter(i => !i.paid);
-    const timeline = status === 'empty' ? null : rptBuildTimeline(state, todayDay, dim, saldoHoje, pendingItems);
-
-    // ---- reserva / fôlego ----
-    const essentialMonthly = needs > 0 ? needs : 0;
-    const reserveMonths = (hasReserve && essentialMonthly > 0) ? rptRound2(reserva / essentialMonthly) : null;
-    const reserveTarget = rptRound2(essentialMonthly * 3);
-
-    // ---- gráfico 12 meses com saldo acumulado ----
-    const chart = (input.months || []).map(m => {
-        const result = rptRound2(m.income - m.expense);
-        return { monthKey: m.monthKey, label: m.label || rptMonthLabel(m.monthKey), income: rptRound2(m.income), expense: rptRound2(m.expense), result, forecast: m.monthKey > todayMonth, selected: m.monthKey === monthKey, cumulative: null };
-    });
-    let cum = saldoPrevisto;
-    chart.forEach(c => {
-        if (c.monthKey === monthKey) c.cumulative = rptRound2(cum);
-        else if (c.monthKey > monthKey) { cum += c.result; c.cumulative = rptRound2(cum); }
-    });
-
-    // ---- alertas (ordenados por gravidade) ----
-    const alerts = [];
-    const sevOrder = { critical: 0, warning: 1, info: 2, good: 3 };
-    const addAlert = (severity, title, detail) => alerts.push({ severity, title, detail });
-
-    if (status === 'critical') {
-        addAlert('critical', `Caixa fecha ${rptFmt(saldoPrevisto)}`, `Entre o que você tem, o que ainda recebe e o que ainda paga, faltam ${rptFmt(-saldoPrevisto)} para fechar o mês.`);
-    } else if (status === 'tight' && saldoPrevisto < 0) {
-        addAlert('warning', `Sem margem: faltam ${rptFmt(-saldoPrevisto)}`, 'Qualquer gasto novo estoura o caixa neste mês. Pequeno ajuste já resolve.');
-    }
-    if (timeline && timeline.min.balance < -0.005 && saldoPrevisto >= -0.005) {
-        addAlert('warning', `Saldo fica negativo no dia ${timeline.min.day}`, `Antes de uma receita entrar, o caixa chega a ${rptFmt(timeline.min.balance)} (dia ${timeline.min.day}). Vale antecipar a receita ou adiar uma conta.`);
-    }
-    if (state === 'current') {
-        const overdue = exp.filter(i => !i.paid && i.day < todayDay && i.kind !== 'bill');
-        if (overdue.length) {
-            addAlert('critical', `${overdue.length} conta(s) com vencimento já passado`, `${rptFmt(rptSum(overdue, x => x.pendingAmount))} ainda sem pagamento. Pague ou reagende para evitar juros e multa.`);
-        }
-    }
-    if (resultadoMes < -colchao && totalIncome > 0 && saldoPrevisto >= -colchao) {
-        addAlert('warning', 'Você gasta mais do que ganha neste mês', `Resultado do mês: ${rptFmt(resultadoMes)}. O caixa só fecha por causa do saldo anterior (${rptFmt(carryIn)}); se isso se repetir, o saldo acaba.`);
-    }
-    if (totalIncome === 0 && totalExpense > 0 && state !== 'past') {
-        addAlert('warning', 'Nenhuma receita lançada no mês', 'Sem lançar o salário e outras entradas, o saldo previsto fica pessimista.');
-    }
-    const parcelaPct = totalIncome > 0 ? installments.nowTotal / totalIncome : null;
-    if (parcelaPct !== null && installments.nowTotal > 0) {
-        if (parcelaPct >= 0.4) addAlert('critical', `Parcelas consomem ${Math.round(parcelaPct * 100)}% da renda`, `${rptFmt(installments.nowTotal)} por mês em parcelas. Acima de 40% o orçamento perde a flexibilidade; evite qualquer novo parcelamento.`);
-        else if (parcelaPct >= 0.3) addAlert('warning', `Parcelas consomem ${Math.round(parcelaPct * 100)}% da renda`, `${rptFmt(installments.nowTotal)} por mês. O ideal é ficar abaixo de 30% antes de assumir novas parcelas.`);
-    }
-    if (installments.releaseNext) {
-        addAlert('good', `Parcelas liberam ${rptFmt(installments.releaseNext.amount)} em ${rptMonthLabel(installments.releaseNext.monthKey)}`, 'Esse valor volta para o seu caixa. Combine com antecedência para onde ele vai (reserva ou dívida).');
-    }
-    const realCats = categories.filter(c => !/cart[aã]o de cr[eé]dito/i.test(c.cat));
-    if (realCats.length && totalExpense > 0 && realCats[0].pctDespesa >= 35 && realCats[0].amount >= 200) {
-        addAlert('info', `${realCats[0].cat} concentra ${realCats[0].pctDespesa}% das despesas`, `${rptFmt(realCats[0].amount)} em uma única categoria. Vale revisar se há espaço para reduzir.`);
-    }
-    // variação por categoria vs média dos meses anteriores
-    if (hist.length >= 2) {
-        const avgByCat = {};
-        hist.forEach(h => h.byCat.forEach(c => { avgByCat[c.cat] = (avgByCat[c.cat] || 0) + c.amount / hist.length; }));
-        categories.filter(c => !/cart[aã]o de cr[eé]dito/i.test(c.cat)).forEach(c => {
-            const avg = avgByCat[c.cat] || 0;
-            if (avg > 50 && c.amount > avg * 1.3 && c.amount - avg >= 100) {
-                addAlert('info', `${c.cat} está ${Math.round((c.amount / avg - 1) * 100)}% acima da média`, `${rptFmt(c.amount)} neste mês contra média de ${rptFmt(avg)} nos meses anteriores.`);
+            if (daysLeftEl) {
+                if (spYear === targetYear && spMonth === targetMonthNum) {
+                    daysLeftEl.textContent = `${daysLeft} dias até o fim do mês`;
+                } else if (spYear > targetYear || (spYear === targetYear && spMonth > targetMonthNum)) {
+                    daysLeftEl.textContent = `Mês encerrado (${daysInCurrentMonth} dias)`;
+                } else {
+                    daysLeftEl.textContent = `Mês futuro (${daysInCurrentMonth} dias)`;
+                }
             }
-        });
-    }
-    if (reserveMonths !== null) {
-        if (reserveMonths < 1) addAlert('warning', reserva > 0 ? 'Reserva cobre menos de 1 mês' : 'Reserva de emergência vazia', `${rptFmt(reserva)} guardados para ${rptFmt(essentialMonthly)} de gastos essenciais por mês.`);
-        else if (reserveMonths >= 3) addAlert('good', `Reserva cobre ${reserveMonths.toFixed(1).replace('.', ',')} meses`, 'Você está acima da meta de 3 meses de gastos essenciais.');
-    }
-    const nextM = chart.find(c => c.monthKey === rptMonthAdd(monthKey, 1));
-    if (state !== 'past' && nextM && nextM.income > 0 && nextM.expense > nextM.income) {
-        addAlert('warning', `${nextM.label}: despesas lançadas superam as receitas`, `Já há ${rptFmt(nextM.expense)} em despesas contra ${rptFmt(nextM.income)} de receita lançada (${rptFmt(nextM.result)}).`);
-    }
-    alerts.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity]);
 
-    // ---- plano de ação ----
-    const plan = [];
-    const pendingExp = exp.filter(i => !i.paid).sort((a, b) => a.day - b.day);
-    if (state !== 'past' && saldoPrevisto < -0.005) {
-        const gap = -saldoPrevisto;
-        const cut = pendingExp.filter(i => i.bucket === 'lifestyle' && (i.kind === 'single' || i.kind === 'fixed')).sort((a, b) => b.pendingAmount - a.pendingAmount);
-        let acc = 0; const pick = [];
-        for (const c of cut) { if (acc >= gap) break; pick.push(c); acc += c.pendingAmount; }
-        const cutAll = rptSum(cut, x => x.pendingAmount);
-        if (pick.length && acc >= gap) {
-            plan.push({ tone: 'critical', badge: 'Prioridade', title: `Fechar o buraco de ${rptFmt(gap)}`, desc: `Adie ou corte ${pick.map(p => `"${p.desc}" (${rptFmt(p.pendingAmount)})`).join(', ')}: isso cobre a falta sem mexer em contas essenciais.` });
-        } else {
-            plan.push({ tone: 'critical', badge: 'Prioridade', title: `Fechar o buraco de ${rptFmt(gap)}`, desc: `Mesmo adiando todo gasto não essencial pendente (${rptFmt(cutAll)}), ainda faltam ${rptFmt(Math.max(0, gap - cutAll))}. ${reserva >= gap ? `Sua reserva (${rptFmt(reserva)}) cobre a diferença; ` : ''}outras saídas: antecipar uma receita ou renegociar um vencimento.` });
-        }
-    }
-    if (state === 'current') {
-        const upcoming = pendingExp.filter(i => i.day >= todayDay && i.kind !== 'bill').slice(0, 3);
-        const bills = pendingExp.filter(i => i.kind === 'bill' && i.day >= todayDay).slice(0, 1);
-        const next = [...bills, ...upcoming].sort((a, b) => a.day - b.day).slice(0, 3);
-        if (next.length) {
-            plan.push({ tone: 'info', badge: 'Agenda', title: `Próximos vencimentos (${rptFmt(rptSum(next, x => x.pendingAmount))})`, desc: next.map(n => `dia ${String(n.day).padStart(2, '0')}: ${n.desc} (${rptFmt(n.pendingAmount)})`).join(' • ') + '.' });
-        }
-    }
-    if (parcelaPct !== null && installments.nowTotal > 0) {
-        if (parcelaPct >= 0.3) {
-            const alvo = rptRound2(totalIncome * 0.3);
-            plan.push({ tone: 'warning', badge: 'Parcelas', title: 'Congele novos parcelamentos', desc: `Suas parcelas (${rptFmt(installments.nowTotal)}) passam de 30% da renda (${rptFmt(alvo)}). ${installments.releaseNext ? `Em ${rptMonthLabel(installments.releaseNext.monthKey)} elas liberam ${rptFmt(installments.releaseNext.amount)}. ` : ''}Se precisar comprar algo, simule antes no Simulador de Compras.` });
-        } else {
-            plan.push({ tone: 'good', badge: 'Parcelas', title: 'Parcelas sob controle', desc: `${Math.round(parcelaPct * 100)}% da renda (${rptFmt(installments.nowTotal)}), abaixo do limite de 30%.${installments.releaseNext ? ` Em ${rptMonthLabel(installments.releaseNext.monthKey)} liberam ${rptFmt(installments.releaseNext.amount)}.` : ''}` });
-        }
-    }
-    const savingsPctReal = totalIncome > 0 ? savings / totalIncome : null;
-    if (state !== 'past' && totalIncome > 0 && (status === 'tight' || status === 'critical' || (savingsPctReal !== null && savingsPctReal < 0.1))) {
-        const lifestyleCats = rptByCat(exp.filter(i => i.bucket === 'lifestyle' && (i.kind === 'single' || i.kind === 'fixed'))).slice(0, 3);
-        if (lifestyleCats.length) {
-            const sav = rptSum(lifestyleCats, c => c.amount * 0.15);
-            plan.push({ tone: 'warning', badge: 'Ajuste fino', title: `Reduzir 15% do estilo de vida libera ${rptFmt(sav)}/mês`, desc: `Onde: ${lifestyleCats.map(c => `${c.cat} (${rptFmt(c.amount)} → ${rptFmt(c.amount * 0.85)})`).join(', ')}. Só entram gastos flexíveis e não essenciais (parcelas já contratadas e a fatura ficam de fora).` });
-        }
-    }
-    if (hasReserve && reserveTarget > 0) {
-        const falta = Math.max(0, reserveTarget - reserva);
-        if (falta > 0) {
-            const aporte = resultadoMes > 0 ? rptRound2(resultadoMes * 0.5) : 0;
-            plan.push({ tone: 'info', badge: 'Segurança', title: `Reserva de emergência: ${rptFmt(reserva)} de ${rptFmt(reserveTarget)}`, desc: aporte > 0 ? `Meta: 3 meses de gastos essenciais. Separe ${rptFmt(aporte)} (metade da sobra do mês) para chegar lá em cerca de ${Math.ceil(falta / aporte)} meses.` : 'Meta: 3 meses de gastos essenciais. Primeiro feche o caixa do mês; depois comece a separar um valor fixo.' });
-        } else {
-            plan.push({ tone: 'good', badge: 'Segurança', title: 'Reserva de emergência completa', desc: `${rptFmt(reserva)} cobrem os 3 meses de gastos essenciais (${rptFmt(reserveTarget)}).` });
-        }
-    } else if (state !== 'past' && totalIncome > 0) {
-        plan.push({ tone: 'info', badge: 'Segurança', title: 'Defina uma reserva de emergência', desc: 'Cadastre uma conta de reserva em "Bancos & Extratos" para acompanhar a meta de 3 meses de gastos essenciais.' });
-    }
-    if (status === 'healthy' && state !== 'past' && saldoPrevisto > 0) {
-        plan.unshift({ tone: 'good', badge: 'Oportunidade', title: `Direcione ${rptFmt(saldoPrevisto * 0.5)} para a reserva`, desc: 'O mês fecha no azul. Separar metade da sobra logo no início protege você do restante do mês.' });
-    }
+            // Cálculo do Teto Diário Seguro
+            const projectedSurplus = savingAmount;
+            let dailyAllowance = 0;
+            if (projectedSurplus > 0) {
+                dailyAllowance = projectedSurplus / daysLeft;
+            }
 
-    if (status === 'empty') {
-        alerts.length = 0;
-        plan.length = 0;
-        plan.push({ tone: 'info', badge: 'Comece aqui', title: 'Lance as receitas e despesas deste mês', desc: 'Com o salário e as contas lançados, esta tela calcula o saldo previsto, os alertas e o plano de ação.' });
-    }
+            if (dailyAllowanceEl) {
+                dailyAllowanceEl.textContent = projectedSurplus > 0 ? `${formatBRL(dailyAllowance)}/dia` : 'R$ 0,00 (Trava de Gastos)';
+                dailyAllowanceEl.className = projectedSurplus > 0 ? 'font-black text-emerald-400 text-sm' : 'font-black text-rose-400 text-sm';
+            }
 
-    return {
-        monthKey, label, state, daysInMonth: dim, daysLeft, todayDay,
-        totals: { totalIncome, receivedIncome, pendingIncome, totalExpense, paidExpense, pendingExpense, resultadoMes },
-        cash: { saldoHoje, carryIn, reserva, saldoPrevisto, ajustes: rptRound2(saldoPrevisto - (carryIn + resultadoMes)) },
-        colchao, status, headline: headlines[status], lead, allowance,
-        kpis: {
-            commit: { pct: totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : null },
-            parcelas: { pct: parcelaPct === null ? null : Math.round(parcelaPct * 100), amount: installments.nowTotal },
-            reserve: { months: reserveMonths, amount: reserva, target: reserveTarget, registered: hasReserve }
-        },
-        groups, rule503020, categories, topExpenses, cardXray, installments, timeline, chart, alerts, plan,
-        history: hist.map(h => ({ monthKey: h.monthKey, income: h.income, expense: h.expense }))
-    };
-}
-// RELATÓRIOS v2 — FIM (motor de análise)
+            if (execTitle && execDesc && execBadge) {
+                if (commitPct > 100) {
+                    execBadge.textContent = 'Déficit no Mês';
+                    execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30';
+                    execTitle.textContent = `Atenção: Suas despesas superam suas receitas em ${formatBRL(totalExpense - totalIncome)}`;
+                    execDesc.innerHTML = `Você está com <strong>${commitPct}% da sua renda comprometida</strong>. Para não fechar o mês no vermelho, corte despesas supérfluas pendentes (${formatBRL(pendingExpense)} ainda não foram pagas) e suspenda novas compras parceladas.`;
+                } else if (commitPct >= 85) {
+                    execBadge.textContent = 'Orçamento Apertado';
+                    execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30';
+                    execTitle.textContent = `Folga curta: Sobra prevista de apenas ${formatBRL(savingAmount)}`;
+                    execDesc.innerHTML = `Seu custo diário até o fim do mês não pode ultrapassar <strong>${formatBRL(dailyAllowance)}/dia</strong>. Fique atento às compras no cartão para não queimar a margem de segurança.`;
+                } else {
+                    execBadge.textContent = 'Saúde Excelente';
+                    execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                    execTitle.textContent = `Mês no Azul: Margem livre de ${formatBRL(savingAmount)} (${savingPct}% da renda)`;
+                    execDesc.innerHTML = `Seu fluxo de caixa está sob controle. Recomendação prática: direcione pelo menos <strong>${formatBRL(savingAmount * 0.5)}</strong> para a sua Reserva de Emergência ou conta Poupança logo no início da semana.`;
+                }
+            }
 
-// =========================================================================
-// RELATÓRIOS v2 — INÍCIO (adaptador: lê os dados reais do app)
-// =========================================================================
-function rptGetCardItemsForMonth(monthKey) {
-    const out = [];
-    try {
-        const cards = (getEffectiveBanks() || []).filter(b => isCreditCardBank(b));
-        cards.forEach(b => {
-            const bId = String(b.id || '');
-            const rawBId = String(b._rawBankId || b.id || '');
-            const cleanBName = String(b.name || '').toLowerCase();
-            const cardShortId = rawBId.replace('bank_pluggy_', '');
-            const cardCleanBName = cleanBName.replace('cartão •', '').trim();
-            const cfg = getCardCycleConfig(b);
-            const belongs = (s) => String(s.bankId) === bId
-                || String(s.bankId) === rawBId
-                || (cardShortId && String(s.cardId) === 'card_' + cardShortId)
-                || String(s.cardId) === bId
-                || (cardCleanBName && String(s.desc || '').toLowerCase().includes(cardCleanBName));
-            const instOf = (s) => {
-                if (s.inst) return s.inst;
-                const m = s.creditCardMetadata;
-                if (m && Number(m.totalInstallments) > 0) return { cur: Number(m.installmentNumber || 1), tot: Number(m.totalInstallments) };
-                if (Number(s.total_installments) > 0) return { cur: Number(s.installment_number || 1), tot: Number(s.total_installments) };
-                return null;
-            };
-            (Array.isArray(bankStatements) ? bankStatements : []).forEach(s => {
-                if (!s || !belongs(s)) return;
-                const alloc = allocateTransactionToCardCycle(s, cfg);
-                if (alloc.cycleMonth !== monthKey) return;
-                const cls = s.tx_group ? s : classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
-                if (cls.tx_group !== 'CARD_EXPENSE') return;
-                out.push({ desc: s.desc, amount: Number(s.amount || 0), cat: s.pluggyCategory || s.cat || 'Compras', inst: instOf(s) });
-            });
-            (Array.isArray(transactions) ? transactions : []).forEach(t => {
-                if (!t || t.type !== 'expense') return;
-                if (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) return;
-                const isCardItem = Boolean(t.isCreditCardTx || t.cardId);
-                if (!isCardItem || !belongs(t)) return;
-                if (normalizeMonthKey(t.month, monthKey) !== monthKey) return;
-                out.push({ desc: t.desc, amount: Number(t.amount || 0), cat: t.cat || t.pluggyCategory || 'Compras', inst: instOf(t) || t.inst || null });
-            });
-        });
-    } catch (err) {
-        console.warn('[Relatórios v2] não foi possível detalhar o cartão em', monthKey, err);
-    }
-    return out;
-}
-
-function rptCollectInput(currentMonth) {
-    const monthKey = currentMonth.key;
-    const todayStr = (typeof getSaoPauloDateYYYYMMDD === 'function') ? getSaoPauloDateYYYYMMDD() : new Date().toISOString().slice(0, 10);
-
-    const memo = new Map();
-    const homeItems = (key) => {
-        if (!memo.has(key)) {
-            let r = [];
-            try { r = getHomeVisibleTransactions(key) || []; } catch (err) { console.warn('[Relatórios v2] mês sem leitura:', key, err); }
-            memo.set(key, r);
-        }
-        return memo.get(key);
-    };
-    const labelOf = (key) => {
-        const m = Array.isArray(MONTHS) ? MONTHS.find(x => x.key === key) : null;
-        return (m && m.label) ? m.label : rptMonthLabel(key);
-    };
-
-    // Caixa: exatamente a mesma conta da Visão Mensal (saldo + a receber - a pagar)
-    let carryIn = 0, saldoHoje = 0, reserva = 0, hasReserveAccount = false;
-    (getEffectiveBanks() || []).forEach(b => {
-        if (isBankIncludedInTotal(b)) {
-            const m = computeBankMetricsForMonth(b, monthKey);
-            carryIn += Number(m.carryIn || 0);
-            saldoHoje += Number(m.currentBalance || 0);
-        } else if (!isCreditCardBank(b)) {
-            hasReserveAccount = true;
-            reserva += Number(calculateBankBalance(b, monthKey) || 0);
-        }
-    });
-
-    const history = [];
-    for (let k = 1; k <= 3; k++) {
-        const key = rptMonthAdd(monthKey, -k);
-        history.push({ monthKey: key, items: homeItems(key) });
-    }
-
-    const months = [];
-    for (let k = -4; k <= 7; k++) {
-        const key = rptMonthAdd(monthKey, k);
-        const norm = homeItems(key).map(rptNormalizeItem);
-        months.push({
-            monthKey: key,
-            label: labelOf(key),
-            income: rptSum(norm.filter(i => i.type === 'income'), x => x.amount),
-            expense: rptSum(norm.filter(i => i.type === 'expense'), x => x.amount)
-        });
-    }
-
-    const hasCreditCards = (getEffectiveBanks() || []).some(b => isCreditCardBank(b));
-    const cardItems = hasCreditCards ? rptGetCardItemsForMonth(monthKey) : [];
-    const cardFuture = {};
-    if (hasCreditCards) {
-        for (let k = 1; k <= 6; k++) {
-            const key = rptMonthAdd(monthKey, k);
-            cardFuture[key] = rptGetCardItemsForMonth(key)
-                .filter(c => { const i = rptParseInst(c.inst); return i && i.tot > 1 && Number(c.amount) > 0; });
-        }
-    }
-
-    return {
-        monthKey,
-        monthLabel: currentMonth.label,
-        todayStr,
-        cash: { saldoHoje, carryIn, reserva, hasReserveAccount },
-        items: homeItems(monthKey),
-        cardItems,
-        cardFuture,
-        history,
-        months
-    };
-}
-// RELATÓRIOS v2 — FIM (adaptador)
-
-// =========================================================================
-// RELATÓRIOS v2 — INÍCIO (tela)
-// =========================================================================
-const RPT_TONES = {
-    critical: { box: 'bg-rose-500/10 border-rose-500/30', text: 'text-rose-400', dot: 'bg-rose-500', icon: 'alert-octagon', badge: 'bg-rose-500/15 text-rose-300 border border-rose-500/30', badgeA: 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30' },
-    warning: { box: 'bg-amber-500/10 border-amber-500/30', text: 'text-amber-400', dot: 'bg-amber-500', icon: 'alert-triangle', badge: 'bg-amber-500/15 text-amber-300 border border-amber-500/30', badgeA: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30' },
-    info: { box: 'bg-sky-500/10 border-sky-500/25', text: 'text-sky-400', dot: 'bg-sky-500', icon: 'info', badge: 'bg-sky-500/15 text-sky-300 border border-sky-500/30', badgeA: 'bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/30' },
-    good: { box: 'bg-emerald-500/10 border-emerald-500/30', text: 'text-emerald-400', dot: 'bg-emerald-500', icon: 'check-circle-2', badge: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30', badgeA: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30' }
-};
-const RPT_STATUS_BADGE = {
-    'critical': { tone: 'critical', text: 'Atenção ao caixa' },
-    'tight': { tone: 'warning', text: 'Sem margem' },
-    'healthy': { tone: 'good', text: 'Saudável' },
-    'closed-ok': { tone: 'good', text: 'Mês encerrado' },
-    'closed-negative': { tone: 'critical', text: 'Mês encerrado' },
-    'empty': { tone: 'info', text: 'Sem dados' }
-};
-const RPT_GROUP_COLORS = { fixed: 'bg-sky-500', installment: 'bg-amber-500', single: 'bg-violet-500', bill: 'bg-rose-500' };
-
-function rptEsc(v) {
-    return (typeof escapeHtml === 'function') ? escapeHtml(String(v ?? '')) : String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-function rptMoney(n) {
-    return (typeof formatBRL === 'function') ? formatBRL(n) : rptFmt(n);
-}
-function rptSet(id, html) {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = html;
-    return el;
-}
-
-function rptEmptyBox(text) {
-    return `<div class="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-700 text-center text-xs text-slate-400">${rptEsc(text)}</div>`;
-}
-
-function rptRenderSummary(s) {
-    const badge = RPT_STATUS_BADGE[s.status] || RPT_STATUS_BADGE.empty;
-    const tone = RPT_TONES[badge.tone];
-    const card = document.getElementById('rep-executive-card');
-    if (card) {
-        card.classList.remove('border-rose-500/30', 'border-amber-500/30', 'border-emerald-500/30', 'border-sky-500/25');
-        tone.box.split(' ').filter(c => c.startsWith('border-')).forEach(c => card.classList.add(c));
-    }
-    const iconEl = document.getElementById('rep-status-icon');
-    if (iconEl) iconEl.innerHTML = `<i data-lucide="${tone.icon}" class="w-5 h-5 ${tone.text}"></i>`;
-    const badgeEl = document.getElementById('rep-status-badge');
-    if (badgeEl) {
-        badgeEl.textContent = badge.text;
-        badgeEl.className = `px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${tone.badge}`;
-    }
-    const titleEl = document.getElementById('rep-executive-title');
-    if (titleEl) titleEl.textContent = s.headline;
-    rptSet('rep-executive-desc', s.lead.map(l => `<p>${rptEsc(l)}</p>`).join(''));
-
-    // Cascata do caixa
-    const t = s.totals, c = s.cash;
-    const tile = (label, value, sub, cls, strong) => `
-        <div class="p-3 rounded-xl border ${strong ? 'bg-white/10 border-white/25' : 'bg-white/5 border-white/10'}">
-            <p class="text-[10px] uppercase font-bold tracking-wide text-slate-400">${label}</p>
-            <p class="text-sm sm:text-base font-black mt-0.5 ${cls}">${value}</p>
-            <p class="text-[10px] text-slate-400 mt-0.5 leading-snug">${sub}</p>
-        </div>`;
-    if (s.state === 'past') {
-        rptSet('rep-waterfall', [
-            tile('Entrou no mês', rptMoney(t.totalIncome), 'receitas do mês', 'text-emerald-400'),
-            tile('Saiu no mês', rptMoney(t.totalExpense), 'despesas do mês', 'text-rose-400'),
-            tile('Resultado', rptMoney(t.resultadoMes), 'entrou − saiu', t.resultadoMes >= 0 ? 'text-emerald-400' : 'text-rose-400'),
-            tile('Saldo final em caixa', rptMoney(c.saldoPrevisto), `veio de antes: ${rptMoney(c.carryIn)}`, c.saldoPrevisto >= 0 ? 'text-emerald-400' : 'text-rose-400', true)
-        ].join(''));
-    } else {
-        rptSet('rep-waterfall', [
-            tile('Em conta hoje', rptMoney(c.saldoHoje), c.carryIn ? `inclui ${rptMoney(c.carryIn)} de meses anteriores` : 'saldo atual das contas', 'text-white'),
-            tile('+ Ainda vai receber', rptMoney(t.pendingIncome), 'receitas pendentes', 'text-emerald-400'),
-            tile('− Ainda vai pagar', rptMoney(t.pendingExpense), 'despesas pendentes', 'text-rose-400'),
-            tile('= Saldo previsto', rptMoney(c.saldoPrevisto), 'fim do mês (igual à Visão Mensal)', c.saldoPrevisto >= 0 ? 'text-emerald-400' : 'text-rose-400', true)
-        ].join(''));
-    }
-
-    // Margem diária e projeção realista
-    const a = s.allowance;
-    const alEl = document.getElementById('rep-allowance');
-    if (alEl) {
-        if (!a) {
-            alEl.classList.add('hidden');
-        } else {
-            alEl.classList.remove('hidden');
-            const t1 = a.falta > 0
-                ? tile('Margem segura por dia', 'Sem margem', `faltam ${rptMoney(a.falta)} para fechar o mês`, 'text-rose-400')
-                : tile('Margem segura por dia', `${rptMoney(a.tetoDia)}/dia`, `para os ${a.daysLeft} dias ${s.state === 'current' ? 'restantes' : 'do mês'}`, 'text-emerald-400');
-            const t2 = a.ritmoVarDia === null
-                ? tile('Seu ritmo de gastos avulsos', '—', 'ainda sem histórico suficiente', 'text-slate-300')
-                : tile('Seu ritmo de gastos avulsos', `${rptMoney(a.ritmoVarDia)}/dia`, 'média dos meses anteriores (PIX, débito e dinheiro)', a.ritmoVarDia > a.tetoDia && a.tetoDia >= 0 ? 'text-amber-400' : 'text-slate-200');
-            const t3 = a.saldoRealista === null
-                ? tile('Projeção realista', '—', 'depende do histórico de gastos', 'text-slate-300')
-                : tile('Projeção realista', rptMoney(a.saldoRealista), `se mantiver o ritmo, ainda saem ~${rptMoney(a.gastoEsperado)} sem lançamento`, a.saldoRealista >= 0 ? 'text-emerald-400' : 'text-rose-400');
-            alEl.innerHTML = t1 + t2 + t3;
-        }
-    }
-}
-
-function rptRenderKpis(s) {
-    const k = s.kpis;
-    const commit = k.commit.pct;
-    const commitTone = commit === null ? 'text-slate-400' : (commit <= 75 ? 'text-emerald-500' : (commit <= 100 ? 'text-amber-500' : 'text-rose-500'));
-    const commitSub = commit === null ? 'Lance as receitas do mês' : (commit <= 75 ? 'Saudável (até 75%)' : (commit <= 100 ? 'Orçamento apertado' : 'Despesas acima das receitas'));
-    const stack = s.totals.totalIncome > 0
-        ? `<div class="flex h-2 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700 mt-2">${s.groups.filter(g => g.amount > 0).map(g => `<div class="${RPT_GROUP_COLORS[g.id]} h-full" style="width:${Math.min(100, (g.amount / Math.max(s.totals.totalIncome, s.totals.totalExpense)) * 100)}%" title="${rptEsc(g.label)}"></div>`).join('')}</div>
-           <div class="flex flex-wrap gap-x-2.5 gap-y-0.5 mt-1.5">${s.groups.filter(g => g.amount > 0).map(g => `<span class="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full ${RPT_GROUP_COLORS[g.id]}"></span>${rptEsc(g.label)} ${g.pctRenda}%</span>`).join('')}</div>`
-        : '';
-    const res = s.totals.resultadoMes;
-    const reserve = k.reserve;
-    const card = (label, labelCls, value, valueCls, sub, extra = '') => `
-        <div class="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm">
-            <span class="text-[11px] font-bold uppercase tracking-wider ${labelCls}">${label}</span>
-            <p class="text-lg md:text-xl font-extrabold mt-1 ${valueCls}">${value}</p>
-            <p class="text-[11px] text-slate-400 mt-0.5">${sub}</p>${extra}
-        </div>`;
-    const parcelaVal = k.parcelas.pct === null ? rptMoney(k.parcelas.amount) : `${k.parcelas.pct}%`;
-    const parcelaTone = k.parcelas.pct === null ? 'text-slate-500 dark:text-slate-300' : (k.parcelas.pct >= 40 ? 'text-rose-500' : (k.parcelas.pct >= 30 ? 'text-amber-500' : 'text-emerald-500'));
-    const rel = s.installments.releaseNext;
-    rptSet('rep-kpis', [
-        card('Comprometimento da renda', 'text-slate-400', commit === null ? '—' : `${commit}%`, commitTone,
-            commit === null ? commitSub : `${commitSub} • ${rptMoney(s.totals.totalExpense)} de ${rptMoney(s.totals.totalIncome)}`, stack),
-        card('Resultado do mês', 'text-emerald-500', rptMoney(res), res >= 0 ? 'text-emerald-500' : 'text-rose-500',
-            `receitas − despesas • saldo previsto ${rptMoney(s.cash.saldoPrevisto)}`),
-        card('Peso das parcelas', 'text-amber-500', parcelaVal, parcelaTone,
-            k.parcelas.amount > 0 ? `${rptMoney(k.parcelas.amount)}/mês${rel ? ` • libera ${rptMoney(rel.amount)} em ${rptEsc(rptMonthLabel(rel.monthKey))}` : ''}` : 'Nenhuma parcela neste mês'),
-        reserve.registered
-            ? card('Fôlego da reserva', 'text-sky-500', reserve.months === null ? '—' : `${reserve.months.toFixed(1).replace('.', ',')} meses`,
-                reserve.months === null ? 'text-slate-500' : (reserve.months >= 3 ? 'text-emerald-500' : (reserve.months >= 1 ? 'text-amber-500' : 'text-rose-500')),
-                `${rptMoney(reserve.amount)} guardados • meta ${rptMoney(reserve.target)}`)
-            : card('Fôlego da reserva', 'text-sky-500', '—', 'text-slate-500 dark:text-slate-300', 'Cadastre uma conta de reserva em Bancos')
-    ].join(''));
-}
-
-function rptRenderAlerts(s) {
-    if (!s.alerts.length) {
-        rptSet('rep-alerts-list', rptEmptyBox(s.status === 'empty' ? 'Lance as receitas e despesas deste mês para ver os alertas.' : 'Nenhum ponto de atenção neste mês. Continue assim!'));
-        return;
-    }
-    rptSet('rep-alerts-list', s.alerts.map(a => {
-        const t = RPT_TONES[a.severity];
-        return `<div class="p-3.5 rounded-2xl border ${t.box} flex items-start gap-3">
-            <i data-lucide="${t.icon}" class="w-4 h-4 ${t.text} flex-shrink-0 mt-0.5"></i>
-            <div class="min-w-0"><p class="text-xs font-extrabold text-slate-800 dark:text-white">${rptEsc(a.title)}</p>
-            <p class="text-[11px] text-slate-500 dark:text-slate-300 leading-snug mt-0.5">${rptEsc(a.detail)}</p></div></div>`;
-    }).join(''));
-}
-
-function rptRenderPlan(s) {
-    if (!s.plan.length) {
-        rptSet('rep-action-plan', rptEmptyBox('Sem ações pendentes. Registre receitas e despesas para gerar o plano.'));
-        return;
-    }
-    rptSet('rep-action-plan', s.plan.map((p, i) => {
-        const t = RPT_TONES[p.tone] || RPT_TONES.info;
-        return `<div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 flex items-start gap-3">
-            <span class="w-6 h-6 rounded-lg ${t.dot} text-white font-extrabold flex items-center justify-center text-[11px] flex-shrink-0 mt-0.5">${i + 1}</span>
-            <div class="min-w-0 flex-1 space-y-1">
-                <div class="flex items-center justify-between gap-2 flex-wrap">
-                    <p class="font-extrabold text-slate-800 dark:text-white text-xs">${rptEsc(p.title)}</p>
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${t.badgeA}">${rptEsc(p.badge)}</span>
-                </div>
-                <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">${rptEsc(p.desc)}</p>
-            </div></div>`;
-    }).join(''));
-}
-
-function rptRenderRule(s) {
-    const r = s.rule503020;
-    if (!(r.base > 0)) {
-        rptSet('rep-rule-503020', rptEmptyBox('Lance as receitas do mês para ver a divisão 50/30/20.'));
-        return;
-    }
-    const bar = (label, target, pct, amount, ok, color) => `
-        <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-1.5">
-            <div class="flex items-center justify-between gap-2 font-bold text-slate-700 dark:text-slate-200">
-                <span class="text-xs">${label}</span>
-                <span class="${ok === false ? 'text-amber-500' : (ok ? 'text-emerald-500' : 'text-slate-400')} whitespace-nowrap text-xs font-extrabold">${pct}%</span>
-            </div>
-            <div class="w-full bg-slate-200 dark:bg-slate-700 h-2.5 rounded-full overflow-hidden"><div class="${color} h-full rounded-full" style="width:${Math.min(100, pct)}%"></div></div>
-            <p class="text-[10px] text-slate-400">meta ${target} • ${rptMoney(amount)}</p>
-        </div>`;
-    const colors = { needs: 'bg-sky-500', wants: 'bg-violet-500', savings: 'bg-emerald-500' };
-    const emoji = { needs: '🏠', wants: '🎯', savings: '🚀' };
-    let html = r.pillars.map(p => bar(`${emoji[p.id]} ${p.label}`, p.target, p.pct, p.amount, p.ok, p.ok === false ? 'bg-amber-500' : colors[p.id])).join('');
-    if (r.undefinedBill > 0) {
-        const pctU = Math.round((r.undefinedBill / r.base) * 100);
-        html += `<div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-dashed border-slate-300 dark:border-slate-700 space-y-1">
-            <div class="flex items-center justify-between font-bold text-slate-700 dark:text-slate-200"><span class="text-xs">💳 Fatura do cartão sem detalhe</span><span class="text-xs text-slate-400 font-extrabold">${pctU}% (${rptMoney(r.undefinedBill)})</span></div>
-            <p class="text-[10px] text-slate-400 leading-snug">Sem itens detalhados da fatura não dá para separar o que é essencial. Ela fica de fora das barras acima.</p></div>`;
-    }
-    const notes = [];
-    if (r.billEstimated) notes.push('A fatura foi distribuída por proporção dos itens detalhados (estimativa).');
-    if (r.confidence < 75) notes.push(`${100 - r.confidence}% dos gastos usam categorias que não reconheci; classifiquei como estilo de vida.`);
-    if (notes.length) html += `<p class="text-[10px] text-slate-400 leading-snug px-1">${rptEsc(notes.join(' '))}</p>`;
-    rptSet('rep-rule-503020', html);
-}
-
-function rptRenderTimeline(s) {
-    const card = document.getElementById('rep-timeline-card');
-    if (!card) return;
-    const tl = s.timeline;
-    if (!tl) { card.classList.add('hidden'); return; }
-    card.classList.remove('hidden');
-    const W = 640, H = 170, padL = 44, padR = 12, padT = 14, padB = 24;
-    const x0 = tl.startDay, x1 = s.daysInMonth;
-    const xs = (d) => padL + ((d - x0) / Math.max(1, x1 - x0)) * (W - padL - padR);
-    const vals = tl.points.map(p => p.balance);
-    let vmin = Math.min(0, ...vals), vmax = Math.max(0, ...vals);
-    if (vmax - vmin < 1) { vmax += 50; vmin -= 50; }
-    const span = vmax - vmin;
-    vmax += span * 0.08; vmin -= span * 0.08;
-    const ys = (v) => padT + (1 - (v - vmin) / (vmax - vmin)) * (H - padT - padB);
-    let path = `M ${xs(tl.points[0].day)} ${ys(tl.points[0].balance)}`;
-    for (let i = 1; i < tl.points.length; i++) {
-        path += ` L ${xs(tl.points[i].day)} ${ys(tl.points[i - 1].balance)} L ${xs(tl.points[i].day)} ${ys(tl.points[i].balance)}`;
-    }
-    path += ` L ${xs(x1)} ${ys(tl.points[tl.points.length - 1].balance)}`;
-    const zeroY = ys(0);
-    const markers = tl.points.slice(1).map(p => `<circle cx="${xs(p.day)}" cy="${ys(p.balance)}" r="3" class="${p.event >= 0 ? 'fill-emerald-400' : 'fill-rose-400'}"><title>Dia ${p.day}: ${rptEsc(rptMoney(p.event))} → saldo ${rptEsc(rptMoney(p.balance))}</title></circle>`).join('');
-    const tickAnchor = (i) => (i === 0 ? 'start' : (i === 2 ? 'end' : 'middle'));
-    const ticks = [x0, Math.round((x0 + x1) / 2), x1].map((d, i) => `<text x="${xs(d)}" y="${H - 6}" text-anchor="${tickAnchor(i)}" class="fill-slate-400" font-size="10">dia ${d}</text>`).join('');
-    const minNeg = tl.min.balance < -0.005;
-    const minPt = `<circle cx="${xs(tl.min.day)}" cy="${ys(tl.min.balance)}" r="5" class="${minNeg ? 'fill-rose-500' : 'fill-amber-400'}" stroke="white" stroke-width="1.5"/>`;
-    rptSet('rep-timeline-chart', `
-        <svg viewBox="0 0 ${W} ${H}" class="w-full h-auto" role="img" aria-label="Saldo previsto dia a dia">
-            <rect x="${padL}" y="${zeroY}" width="${W - padL - padR}" height="${Math.max(0, H - padB - zeroY)}" class="fill-rose-500/10"/>
-            <line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" class="stroke-slate-400" stroke-dasharray="4 3" stroke-width="1"/>
-            <text x="${padL - 6}" y="${zeroY + 3}" text-anchor="end" class="fill-slate-400" font-size="10">R$ 0</text>
-            <path d="${path}" fill="none" class="stroke-sky-400" stroke-width="2.5" stroke-linejoin="round"/>
-            ${markers}${minPt}${ticks}
-        </svg>`);
-    const next = tl.points.filter(p => p.event !== 0).slice(0, 4).map(p => `dia ${String(p.day).padStart(2, '0')}: ${p.event >= 0 ? '+' : '−'}${rptMoney(Math.abs(p.event))}`).join(' • ');
-    rptSet('rep-timeline-note', `<span class="font-bold ${minNeg ? 'text-rose-400' : 'text-slate-200'}">Ponto mais baixo: ${rptEsc(rptMoney(tl.min.balance))} no dia ${tl.min.day}.</span> ${next ? `<span class="text-slate-400">Movimentos que ainda vão acontecer: ${rptEsc(next)}.</span>` : '<span class="text-slate-400">Não há movimentos pendentes neste mês.</span>'}`);
-}
-
-function rptRenderInstallments(s) {
-    const ins = s.installments;
-    if (!(ins.nowTotal > 0) && ins.rows.length === 0 && ins.schedule.every(x => x.total === 0)) {
-        rptSet('rep-installments', rptEmptyBox('Nenhuma compra parcelada neste mês.'));
-        return;
-    }
-    const max = Math.max(1, ins.nowTotal, ...ins.schedule.map(x => x.total));
-    const barsData = [{ monthKey: s.monthKey, total: ins.nowTotal, now: true }, ...ins.schedule];
-    const bars = barsData.map(b => {
-        const h = Math.max(4, Math.round((b.total / max) * 70));
-        return `<div class="flex flex-col items-center flex-1 min-w-[40px]" title="${rptEsc(rptMonthLabel(b.monthKey))}: ${rptEsc(rptMoney(b.total))}">
-            <span class="text-[10px] font-bold ${b.now ? 'text-amber-400' : 'text-slate-500 dark:text-slate-300'} mb-1">${b.total > 0 ? rptEsc(rptMoney(b.total).replace(',00', '')) : '—'}</span>
-            <div class="w-6 sm:w-7 rounded-t-md ${b.now ? 'bg-amber-500' : 'bg-amber-500/45'}" style="height:${h}px"></div>
-            <span class="text-[10px] mt-1 ${b.now ? 'font-black text-slate-800 dark:text-white' : 'text-slate-400'}">${rptEsc(rptMonthLabel(b.monthKey).split(' ')[0])}</span></div>`;
-    }).join('');
-    const rows = ins.rows.slice(0, 5).map(r => `
-        <div class="flex items-center justify-between gap-2 text-[11px]">
-            <span class="truncate text-slate-700 dark:text-slate-200 font-semibold">${rptEsc(r.desc)} <span class="text-slate-400">(${r.cur}/${r.tot})</span></span>
-            <span class="whitespace-nowrap text-slate-500 dark:text-slate-400">${rptEsc(rptMoney(r.amount))} • acaba ${rptEsc(rptMonthLabel(r.endKey))}</span></div>`).join('');
-    const pctTxt = s.kpis.parcelas.pct === null ? '' : ` (${s.kpis.parcelas.pct}% da renda)`;
-    rptSet('rep-installments', `
-        <div class="flex flex-wrap gap-x-6 gap-y-1 text-xs">
-            <div><span class="text-slate-400">Parcelas neste mês</span><p class="font-extrabold text-slate-800 dark:text-white text-sm">${rptEsc(rptMoney(ins.nowTotal))}${pctTxt}</p></div>
-            <div><span class="text-slate-400">Ainda a pagar em parcelas</span><p class="font-extrabold text-slate-800 dark:text-white text-sm">${rptEsc(rptMoney(ins.debtRemaining))}</p></div>
-            ${ins.cardNow > 0 ? `<div><span class="text-slate-400">Dentro da fatura (identificado)</span><p class="font-extrabold text-slate-800 dark:text-white text-sm">${rptEsc(rptMoney(ins.cardNow))}</p></div>` : ''}
-        </div>
-        <div class="flex items-end justify-between gap-1 pt-3 pb-1 overflow-x-auto">${bars}</div>
-        ${rows ? `<div class="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">${rows}</div>` : ''}`);
-}
-
-function rptRenderCashflow(s) {
-    const chartEl = document.getElementById('rep-cashflow-chart');
-    const focusEl = document.getElementById('rep-cashflow-focus-card');
-    if (!chartEl) return;
-    const series = s.chart;
-    const maxVal = Math.max(1, ...series.map(c => Math.max(c.income, c.expense)));
-    window._setCashflowFocus = function (monthKey) {
-        const c = series.find(x => x.monthKey === monthKey) || series.find(x => x.selected) || series[0];
-        if (!focusEl || !c) return;
-        focusEl.innerHTML = `
-            <div class="flex items-center gap-2.5">
-                <span class="w-3 h-3 rounded-full ${c.selected ? 'bg-gradient-to-r from-[#FF2E4D] to-[#E61937] ring-4 ring-rose-500/30' : 'bg-slate-300 dark:bg-slate-600'}"></span>
-                <div><span class="font-extrabold text-slate-800 dark:text-white text-sm block leading-tight">${rptEsc(c.label)}</span>
-                <span class="text-[10px] text-slate-400 font-bold">${c.selected ? 'Mês em análise' : (c.forecast ? 'Previsão com o que já foi lançado' : 'Mês anterior')}</span></div>
-            </div>
-            <div class="flex items-center gap-2 sm:gap-4 flex-wrap">
-                <div class="bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-xl border border-emerald-200/60 dark:border-emerald-800/60"><span class="text-[10px] uppercase font-extrabold text-emerald-700 dark:text-emerald-400 block">Receitas</span><span class="text-xs sm:text-sm font-extrabold text-emerald-600 dark:text-emerald-400">+${rptEsc(rptMoney(c.income))}</span></div>
-                <div class="bg-rose-50 dark:bg-rose-950/40 px-2.5 py-1.5 rounded-xl border border-rose-200/60 dark:border-rose-800/60"><span class="text-[10px] uppercase font-extrabold text-rose-700 dark:text-rose-400 block">Despesas</span><span class="text-xs sm:text-sm font-extrabold text-rose-600 dark:text-rose-400">-${rptEsc(rptMoney(c.expense))}</span></div>
-                <div class="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700"><span class="text-[10px] uppercase font-extrabold text-slate-500 dark:text-slate-400 block">Resultado</span><span class="text-xs sm:text-sm font-extrabold ${c.result >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}">${c.result >= 0 ? '+' : ''}${rptEsc(rptMoney(c.result))}</span></div>
-                ${c.cumulative !== null ? `<div class="px-2.5 py-1.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200/60 dark:border-sky-800/60"><span class="text-[10px] uppercase font-extrabold text-sky-700 dark:text-sky-400 block">Saldo acumulado</span><span class="text-xs sm:text-sm font-extrabold ${c.cumulative >= 0 ? 'text-sky-600 dark:text-sky-300' : 'text-rose-600 dark:text-rose-400'}">${rptEsc(rptMoney(c.cumulative))}</span></div>` : ''}
-            </div>`;
-    };
-    window._setCashflowFocus(s.monthKey);
-    chartEl.innerHTML = series.map(c => {
-        const incH = c.income > 0 ? Math.max(6, Math.round((c.income / maxVal) * 110)) : 2;
-        const expH = c.expense > 0 ? Math.max(6, Math.round((c.expense / maxVal) * 110)) : 2;
-        const short = rptMoney(c.result).replace('R$', '').replace(',00', '').trim();
-        return `<div id="cashflow-col-${c.monthKey}" onclick="selectMonthByKey('${c.monthKey}')" onmouseenter="window._setCashflowFocus('${c.monthKey}')" ontouchstart="window._setCashflowFocus('${c.monthKey}')"
-            class="flex flex-col items-center cursor-pointer group flex-1 min-w-[52px] transition-all ${c.selected ? 'opacity-100' : (c.forecast ? 'opacity-70' : 'opacity-55')} hover:opacity-100">
-            <div class="flex items-end gap-1.5 h-32 pb-1 ${c.forecast ? 'border-b border-dashed border-slate-400/40' : ''}">
-                <div class="w-3.5 sm:w-4 rounded-t-[6px] bg-gradient-to-t from-[#059669] to-[#34d399] ${c.forecast ? 'opacity-70' : ''}" style="height:${incH}px"></div>
-                <div class="w-3.5 sm:w-4 rounded-t-[6px] bg-gradient-to-t from-[#FF2E4D] to-[#FF6B81] ${c.forecast ? 'opacity-70' : ''} ${c.selected ? 'ring-2 ring-[#FF2E4D]/60' : ''}" style="height:${expH}px"></div>
-            </div>
-            <span class="text-[10px] mt-1.5 font-bold ${c.selected ? 'px-2 py-0.5 rounded-full bg-gradient-to-r from-[#FF2E4D] to-[#E61937] text-white font-black' : 'text-slate-400'}">${rptEsc(c.label.split(' ')[0])}</span>
-            <span class="text-[9px] mt-0.5 font-bold ${c.result >= 0 ? 'text-emerald-500' : 'text-rose-500'}">${c.result >= 0 ? '+' : ''}${rptEsc(short)}</span>
-        </div>`;
-    }).join('');
-    setTimeout(() => {
-        const col = document.getElementById(`cashflow-col-${s.monthKey}`);
-        const wrap = document.getElementById('rep-cashflow-scroll-wrapper');
-        if (col && wrap) wrap.scrollTo({ left: col.offsetLeft - wrap.offsetWidth / 2 + col.offsetWidth / 2, behavior: 'smooth' });
-    }, 120);
-}
-
-function rptRenderWhereMoneyGoes(s) {
-    const tag = (b) => b === 'essential'
-        ? '<span class="px-1.5 py-0.5 rounded-md text-[9px] font-extrabold bg-sky-500/15 text-sky-400">essencial</span>'
-        : '<span class="px-1.5 py-0.5 rounded-md text-[9px] font-extrabold bg-violet-500/15 text-violet-400">estilo de vida</span>';
-    const cats = s.categories.filter(c => !/cart[aã]o de cr[eé]dito/i.test(c.cat)).slice(0, 8);
-    const maxC = Math.max(1, ...cats.map(c => c.amount));
-    const billTotal = s.groups.find(g => g.id === 'bill').amount;
-    let html = cats.map(c => `
-        <div class="space-y-1">
-            <div class="flex justify-between items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200"><span class="truncate">${typeof formatCategoryWithEmoji === 'function' ? formatCategoryWithEmoji(c.cat) : rptEsc(c.cat)} ${tag(c.bucket)}</span><span class="whitespace-nowrap">${rptEsc(rptMoney(c.amount))} <span class="text-slate-400">(${c.pctDespesa}%)</span></span></div>
-            <div class="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden"><div class="${c.bucket === 'essential' ? 'bg-sky-500' : 'bg-violet-500'} h-full rounded-full" style="width:${Math.round((c.amount / maxC) * 100)}%"></div></div>
-        </div>`).join('');
-    if (billTotal > 0) {
-        html += `<div class="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-200"><span>💳 Fatura do cartão (veja o raio-x ao lado)</span><span>${rptEsc(rptMoney(billTotal))} <span class="text-slate-400">(${s.totals.totalExpense > 0 ? Math.round(billTotal / s.totals.totalExpense * 100) : 0}%)</span></span></div>`;
-    }
-    rptSet('rep-categories', html || rptEmptyBox('Nenhuma despesa registrada neste mês.'));
-
-    const x = s.cardXray;
-    if (!x.available) {
-        rptSet('rep-card-xray', rptEmptyBox('Sem compras detalhadas do cartão neste mês.'));
-    } else {
-        const max = Math.max(1, ...x.byCat.map(c => c.amount));
-        const cov = x.coverage === null ? '' : (x.reliable
-            ? `Os itens detalhados somam ${x.coverage}% da fatura.`
-            : `Atenção: os itens detalhados somam só ${x.coverage}% da fatura, então esta composição é parcial.`);
-        rptSet('rep-card-xray', `
-            <p class="text-[11px] ${x.reliable ? 'text-slate-400' : 'text-amber-400'} leading-snug">${rptEsc(cov)}${x.installmentsInside > 0 ? ` ${rptEsc(rptMoney(x.installmentsInside))} são parcelas.` : ''}</p>
-            ${x.byCat.slice(0, 6).map(c => `<div class="space-y-1"><div class="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-200"><span class="truncate">${typeof formatCategoryWithEmoji === 'function' ? formatCategoryWithEmoji(c.cat) : rptEsc(c.cat)}</span><span>${rptEsc(rptMoney(c.amount))}</span></div><div class="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden"><div class="bg-rose-500 h-full rounded-full" style="width:${Math.round((c.amount / max) * 100)}%"></div></div></div>`).join('')}
-            <div class="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1">${x.top.map(i => `<div class="flex justify-between gap-2 text-[11px]"><span class="truncate text-slate-600 dark:text-slate-300">${rptEsc(i.desc)}${i.inst && i.inst.tot > 1 ? ` <span class="text-rose-400">(${i.inst.cur}/${i.inst.tot})</span>` : ''}</span><span class="whitespace-nowrap text-slate-500">${rptEsc(rptMoney(i.amount))}</span></div>`).join('')}</div>`);
-    }
-
-    rptSet('rep-top-expenses', s.topExpenses.length
-        ? s.topExpenses.map((t, i) => `
-            <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-1.5">
-                <div class="flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-2.5 min-w-0">
-                        <span class="w-6 h-6 rounded-lg font-extrabold flex items-center justify-center text-[10px] flex-shrink-0 bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">${i + 1}º</span>
-                        <div class="truncate"><p class="font-extrabold text-slate-800 dark:text-white truncate text-xs">${rptEsc(typeof getBaseDescription === 'function' ? getBaseDescription(t.desc) : t.desc)}${t.inst && t.inst.tot > 1 ? ` <span class="text-rose-400 font-bold">(${t.inst.cur}/${t.inst.tot})</span>` : ''}</p>
-                        <p class="text-[10px] text-slate-400">${rptEsc(t.cat)} • dia ${String(t.day).padStart(2, '0')}</p></div>
+            const insightsEl = document.getElementById('rep-insights-list');
+            if (insightsEl) {
+                insightsEl.innerHTML = `
+                    <div class="p-4 rounded-2xl bg-slate-800/70 dark:bg-slate-800/70 border border-white/5 dark:border-slate-700/80 space-y-1.5 shadow-sm">
+                        <span class="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">Maior Foco de Gastos</span>
+                        <p class="font-bold text-slate-800 dark:text-white truncate text-sm">${topCat ? `${formatCategoryWithEmoji(topCat[0])} (${formatBRL(topCat[1])})` : 'Sem despesas no mês'}</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">${topCat && totalExpense > 0 ? `Representa ${Math.round((topCat[1] / totalExpense) * 100)}% de todas as saídas deste mês.` : 'Adicione lançamentos para analisar.'}</p>
                     </div>
-                    <div class="text-right flex-shrink-0"><span class="font-extrabold text-rose-500 text-xs block">${rptEsc(rptMoney(t.amount))}</span><span class="text-[10px] font-bold text-slate-400">${t.pctDespesa}% das despesas</span></div>
+                    <div class="p-4 rounded-2xl bg-emerald-50/70 dark:bg-slate-800/70 border border-emerald-100 dark:border-slate-700/80 space-y-1.5 shadow-sm">
+                        <span class="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Alívio no Próximo Mês</span>
+                        <p class="font-bold text-slate-800 dark:text-white truncate text-sm">${finishingThisMonth.length > 0 ? `${finishingThisMonth.length} parcelamento(s) acabam!` : 'Nenhuma última parcela neste mês'}</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">${finishingThisMonth.length > 0 ? `Você abrirá ${formatBRL(finishingSum)} de folga mensal a partir do mês seguinte.` : 'Suas parcelas atuais continuam no próximo mês.'}</p>
+                    </div>
+                    <div class="p-4 rounded-2xl bg-amber-50/70 dark:bg-slate-800/70 border border-amber-100 dark:border-slate-700/80 space-y-1.5 shadow-sm">
+                        <span class="text-[10px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400">Peso das Compras Parceladas</span>
+                        <p class="font-bold text-slate-800 dark:text-white truncate text-sm">${instPct}% das despesas são parcelas</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">${instPct > 40 ? 'Evite novos parcelamentos até quitar as parcelas que estão no fim.' : 'Nível de parcelamento sob controle saudável.'}</p>
+                    </div>
+                `;
+            }
+
+            // PLANO DE AÇÃO PRÁTICO PASSO A PASSO
+            const actionPlanEl = document.getElementById('rep-action-plan');
+            if (actionPlanEl) {
+                const pendingList = expenses.filter(t => !t.paid).sort((a, b) => (Number(a.day) || 1) - (Number(b.day) || 1));
+                const pendingSum = pendingList.reduce((a, t) => a + Number(t.amount || 0), 0);
+                const nextDue = pendingList[0];
+
+                const targetSave20 = totalIncome > 0 ? totalIncome * 0.2 : 0;
+                const cutSuggestion = topCat ? topCat[1] * 0.15 : 0;
+                const reserveTotal = effectiveBanksList.filter(b => typeof isBankIncludedInTotal === 'function' ? !isBankIncludedInTotal(b) : false).reduce((a, b) => a + (typeof calculateBankBalance === 'function' ? calculateBankBalance(b, currentMonth.key) : 0), 0);
+                const idealEmergencyFund = totalExpense * 3;
+
+                const steps = [
+                    {
+                        num: '1',
+                        badge: pendingList.length > 0 ? `${pendingList.length} Contas Pendentes` : 'Em Dia',
+                        badgeColor: pendingList.length > 0 ? 'bg-amber-950/40 text-amber-300 dark:bg-amber-950/60 dark:text-amber-200' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300',
+                        title: pendingList.length > 0
+                            ? `Garantir pagamento de ${formatBRL(pendingSum)} pendente`
+                            : 'Nenhuma conta pendente para este mês!',
+                        desc: nextDue
+                            ? `Próximo vencimento: "${escapeHtml(getBaseDescription(nextDue.desc))}" (${formatBRL(nextDue.amount)}) previsto para o Dia ${String(nextDue.day).padStart(2, '0')}.`
+                            : 'Parabéns! Você não possui nenhuma conta pendente em aberto neste mês.'
+                    },
+                    {
+                        num: '2',
+                        badge: 'Otimização de Gastos',
+                        badgeColor: 'bg-rose-950/40 text-rose-300 dark:bg-rose-950/60 dark:text-rose-200',
+                        title: topCat
+                            ? `Teto para ${escapeHtml(topCat[0])}: reduzir 15% gera +${formatBRL(cutSuggestion)}/mês`
+                            : 'Registre categorias para calcular seu teto de gastos',
+                        desc: topCat
+                            ? `Se você limitar "${escapeHtml(topCat[0])}" a ${formatBRL(topCat[1] - cutSuggestion)}, economizará ${formatBRL(cutSuggestion * 12)} em 12 meses.`
+                            : 'Ao classificar suas despesas, o sistema calcula quanto economizar na categoria mais pesada.'
+                    },
+                    {
+                        num: '3',
+                        badge: savingAmount >= targetSave20 && totalIncome > 0 ? 'Meta Batida' : 'Meta de Poupança',
+                        badgeColor: savingAmount >= targetSave20 && totalIncome > 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300' : 'bg-rose-950/30 text-rose-200 dark:bg-rose-950/40 dark:text-rose-300',
+                        title: totalIncome > 0
+                            ? `Separar 20% da Renda (${formatBRL(targetSave20)}) no início do mês`
+                            : 'Cadastre suas receitas do mês para calcular sua meta de poupança',
+                        desc: totalIncome > 0
+                            ? (savingAmount >= targetSave20
+                                ? `Sua sobra prevista (${formatBRL(savingAmount)}) já supera a meta recomendada de 20%. Transfira o excedente para uma conta Reserva!`
+                                : `Para atingir 20% de poupança (${formatBRL(targetSave20)}), faltam ${formatBRL(Math.max(0, targetSave20 - Math.max(0, savingAmount)))} de ajuste nas saídas variáveis.`)
+                            : 'Informe seu salário ou entradas para acompanhar o indicador 50-30-20.'
+                    },
+                    {
+                        num: '4',
+                        badge: 'Segurança Patrimonial',
+                        badgeColor: 'bg-amber-950/40 text-amber-300 dark:bg-amber-950/60 dark:text-amber-200',
+                        title: `Meta de Reserva de Emergência (3 meses): ${formatBRL(idealEmergencyFund)}`,
+                        desc: `Saldo atual em contas Reserva: ${formatBRL(reserveTotal)}. ${finishingSum > 0 ? `Dica: direcione os ${formatBRL(finishingSum)} das parcelas que acabam neste mês direto para sua reserva.` : 'Mantenha constância nos aportes mensais para tranquilidade financeira.'}`
+                    }
+                ];
+
+                actionPlanEl.innerHTML = steps.map(s => `
+                    <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 flex items-start gap-3 hover:border-rose-500/30 dark:hover:border-rose-500/40 transition">
+                        <span class="w-6 h-6 rounded-lg bg-[#FF2E4D] text-white font-extrabold flex items-center justify-center text-[11px] flex-shrink-0 mt-0.5 shadow-sm">${s.num}</span>
+                        <div class="min-w-0 flex-1 space-y-1">
+                            <div class="flex items-center justify-between gap-2 flex-wrap">
+                                <p class="font-extrabold text-slate-800 dark:text-white text-xs">${s.title}</p>
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${s.badgeColor}">${s.badge}</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">${s.desc}</p>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            // BÚSSOLA 50-30-20
+            const ruleEl = document.getElementById('rep-rule-503020');
+            if (ruleEl) {
+                const baseRef = totalIncome > 0 ? totalIncome : Math.max(1, totalExpense);
+                const essPct = Math.round((fixedExpenses / baseRef) * 100);
+                const varPct = Math.round(((instExpenses + singleExpenses) / baseRef) * 100);
+                const savPctReal = totalIncome > 0 ? Math.max(0, Math.round(((totalIncome - totalExpense) / totalIncome) * 100)) : 0;
+
+                const pillars = [
+                    {
+                        label: '🏠 Essenciais & Fixas (Meta ≤ 50%)',
+                        val: fixedExpenses,
+                        pct: essPct,
+                        ideal: 50,
+                        ok: essPct <= 55,
+                        color: essPct <= 55 ? 'bg-emerald-500' : 'bg-rose-500'
+                    },
+                    {
+                        label: '💳 Estilo de Vida & Parcelas (Meta ≤ 30%)',
+                        val: instExpenses + singleExpenses,
+                        pct: varPct,
+                        ideal: 30,
+                        ok: varPct <= 35,
+                        color: varPct <= 35 ? 'bg-amber-500' : 'bg-rose-500'
+                    },
+                    {
+                        label: '🚀 Poupança & Futuro (Meta ≥ 20%)',
+                        val: Math.max(0, savingAmount),
+                        pct: savPctReal,
+                        ideal: 20,
+                        ok: savPctReal >= 15,
+                        color: savPctReal >= 15 ? 'bg-emerald-500' : 'bg-amber-500'
+                    }
+                ];
+
+                ruleEl.innerHTML = pillars.map(p => `
+                    <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-2">
+                        <div class="flex items-center justify-between font-bold text-slate-700 dark:text-slate-200">
+                            <span class="truncate text-xs">${p.label}</span>
+                            <span class="${p.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'} whitespace-nowrap ml-2 text-xs font-extrabold">${p.pct}% (${formatBRL(p.val)})</span>
+                        </div>
+                        <div class="w-full bg-slate-200 dark:bg-slate-700 h-2.5 rounded-full overflow-hidden">
+                            <div class="${p.color} h-full rounded-full transition-all duration-500" style="width: ${Math.min(100, p.pct)}%"></div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            // GRÁFICO VISUAL DE EVOLUÇÃO DO FLUXO DE CAIXA (12 MESES COM CARD DE VALORES E SCROLL MOBILE)
+            const chartEl = document.getElementById('rep-cashflow-chart');
+            const focusCardEl = document.getElementById('rep-cashflow-focus-card');
+            if (chartEl) {
+                const sliceMonths = (Array.isArray(MONTHS) ? MONTHS : []).slice(0, 12);
+                let maxVal = 1;
+                const series = sliceMonths.map(m => {
+                    const mTxs = typeof getHomeVisibleTransactions === 'function'
+                        ? getHomeVisibleTransactions(m.key)
+                        : allEffectiveTransactions.filter(t => normalizeMonthKey(t.month, '2026-11') === m.key);
+                    const inc = mTxs.filter(t => t.type === 'income' && !t.isInitialBalance && !t.isBalanceAdjustment).reduce((a, t) => a + Number(t.amount || 0), 0);
+                    const exp = mTxs.filter(t => t.type === 'expense' && !t.isInitialBalance && !t.isBalanceAdjustment).reduce((a, t) => a + Number(t.amount || 0), 0);
+                    const bal = Number((inc - exp).toFixed(2));
+                    if (inc > maxVal) maxVal = inc;
+                    if (exp > maxVal) maxVal = exp;
+                    return { key: m.key, label: m.label.split(' ')[0], fullLabel: m.label, inc, exp, bal };
+                });
+
+                // Atualizador dinâmico de valores em tempo real ao tocar ou passar o mouse
+                window._setCashflowFocus = function(monthKey) {
+                    const s = series.find(x => x.key === monthKey) || series.find(x => x.key === currentMonth.key) || series[0];
+                    if (!focusCardEl || !s) return;
+                    const isPositive = s.bal >= 0;
+                    focusCardEl.innerHTML = `
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-3 h-3 rounded-full ${s.key === currentMonth.key ? 'bg-gradient-to-r from-[#FF2E4D] to-[#E61937] ring-4 ring-rose-500/30 shadow-sm' : 'bg-slate-300 dark:bg-slate-600'}"></span>
+                            <div>
+                                <span class="font-extrabold text-slate-800 dark:text-white text-sm block leading-tight">${escapeHtml(s.fullLabel)}</span>
+                                <span class="text-[10px] text-slate-400 font-bold">${s.key === currentMonth.key ? 'Mês Ativo no Sistema' : 'Toque nas barras para visualizar'}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 sm:gap-6 flex-wrap">
+                            <div class="bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-xl border border-emerald-200/60 dark:border-emerald-800/60">
+                                <span class="text-[10px] uppercase font-extrabold text-emerald-700 dark:text-emerald-400 block">Receitas</span>
+                                <span class="text-xs sm:text-sm font-extrabold text-emerald-600 dark:text-emerald-400">+${formatBRL(s.inc)}</span>
+                            </div>
+                            <div class="bg-rose-50 dark:bg-rose-950/40 px-2.5 py-1.5 rounded-xl border border-rose-200/60 dark:border-rose-800/60">
+                                <span class="text-[10px] uppercase font-extrabold text-rose-700 dark:text-rose-400 block">Despesas</span>
+                                <span class="text-xs sm:text-sm font-extrabold text-rose-600 dark:text-rose-400">-${formatBRL(s.exp)}</span>
+                            </div>
+                            <div class="${isPositive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400'} px-2.5 py-1.5 rounded-xl border">
+                                <span class="text-[10px] uppercase font-extrabold block">Saldo do Mês</span>
+                                <span class="text-xs sm:text-sm font-black">${isPositive ? '+' : ''}${formatBRL(s.bal)}</span>
+                            </div>
+                        </div>
+                    `;
+                };
+
+                // Inicializa o card com o mês selecionado
+                window._setCashflowFocus(currentMonth.key);
+
+                chartEl.innerHTML = series.map((s) => {
+                    const incH = Math.max(6, Math.round((s.inc / maxVal) * 100));
+                    const expH = Math.max(6, Math.round((s.exp / maxVal) * 100));
+                    const isSelected = s.key === currentMonth.key;
+
+                    return `
+                        <div class="flex-1 flex flex-col items-center h-full justify-end group cursor-pointer relative px-0.5 sm:px-1"
+                             onmouseenter="window._setCashflowFocus('${s.key}')"
+                             onclick="window._setCashflowFocus('${s.key}')"
+                             title="${s.fullLabel}: Receitas ${formatBRL(s.inc)} | Despesas ${formatBRL(s.exp)}">
+                            
+                            <!-- Tooltip flutuante rápido para desktop -->
+                            <div class="opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none absolute -top-8 bg-slate-900 text-white text-[10px] font-black py-1 px-2 rounded-lg shadow-xl whitespace-nowrap z-20 hidden sm:block">
+                                ${s.label}: ${s.bal >= 0 ? '+' : ''}${formatBRL(s.bal)}
+                            </div>
+
+                            <div class="w-full flex items-end justify-center gap-1 sm:gap-1.5 h-36 pb-1">
+                                <!-- Barra Receitas -->
+                                <div class="w-2.5 sm:w-4 rounded-t-md bg-emerald-500 hover:brightness-110 transition-all duration-300" 
+                                     style="height: ${incH}%"></div>
+                                <!-- Barra Despesas -->
+                                <div class="w-2.5 sm:w-4 rounded-t-md bg-[#FF2E4D] hover:brightness-110 transition-all duration-300" 
+                                     style="height: ${expH}%"></div>
+                            </div>
+                            
+                            <!-- Rótulo do Mês -->
+                            <span class="text-[10px] sm:text-[11px] font-extrabold tracking-tight mt-1.5 transition-colors ${isSelected ? 'text-[#FF2E4D] dark:text-[#FF2E4D] scale-105' : 'text-slate-600 dark:text-slate-400 group-hover:text-slate-900 dark:group-hover:text-white'}">
+                                ${s.label}
+                            </span>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // TOP 5 MAIORES DESPESAS DO MÊS
+            const topEl = document.getElementById('rep-top-expenses');
+            if (topEl) {
+                const top5 = [...expenses].sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0)).slice(0, 5);
+                if (top5.length === 0) {
+                    topEl.innerHTML = `
+                        <div class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-800 text-center">
+                            <i data-lucide="inbox" class="w-6 h-6 text-slate-400 mx-auto mb-1.5"></i>
+                            <p class="text-xs text-slate-400">Nenhuma despesa registrada neste mês.</p>
+                        </div>
+                    `;
+                } else {
+                    topEl.innerHTML = top5.map((t, idx) => {
+                        const pct = totalExpense > 0 ? Math.round((Number(t.amount) / totalExpense) * 100) : 0;
+                        const rankColors = [
+                            'bg-amber-100 text-amber-700 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300 dark:border-amber-800',
+                            'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+                            'bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-400',
+                            'bg-slate-800 text-rose-400 dark:bg-rose-950/50 dark:text-rose-300',
+                            'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                        ];
+                        const badgeStyle = rankColors[idx] || rankColors[4];
+
+                        return `
+                            <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-1.5 hover:border-rose-500/30 dark:hover:border-rose-500/40 transition">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="flex items-center gap-2.5 min-w-0">
+                                        <span class="w-6 h-6 rounded-lg font-extrabold flex items-center justify-center text-[10px] flex-shrink-0 shadow-sm ${badgeStyle}">${idx + 1}º</span>
+                                        <div class="truncate">
+                                            <p class="font-extrabold text-slate-800 dark:text-white truncate text-xs">${escapeHtml(getBaseDescription(t.desc))} ${t.inst && t.inst.includes('/') ? `<span class="text-rose-400 font-bold">(${escapeHtml(t.inst)})</span>` : ''}</p>
+                                            <p class="text-[10px] text-slate-400">${formatCategoryWithEmoji(t.cat)} • Dia ${String(t.day).padStart(2, '0')}</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right flex-shrink-0">
+                                        <span class="font-extrabold text-rose-600 dark:text-rose-400 text-xs block">${formatBRL(t.amount)}</span>
+                                        <span class="text-[10px] font-bold text-slate-400">${pct}% do total</span>
+                                    </div>
+                                </div>
+                                <div class="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
+                                    <div class="bg-rose-500 h-full rounded-full transition-all duration-300" style="width: ${Math.min(100, pct)}%"></div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            // COMPOSIÇÃO DAS DESPESAS POR NATUREZA
+            const natEl = document.getElementById('rep-nature-breakdown');
+            if (natEl) {
+                const rows = [
+                    { label: '📌 Despesas Fixas Recorrentes', val: fixedExpenses, color: 'bg-[#FF2E4D]' },
+                    { label: '💳 Compras Parceladas', val: instExpenses, color: 'bg-amber-500' },
+                    { label: '⚡ Despesas Únicas / Avulsas', val: singleExpenses, color: 'bg-amber-500' }
+                ];
+                natEl.innerHTML = rows.map(r => {
+                    const pct = totalExpense > 0 ? Math.round((r.val / totalExpense) * 100) : 0;
+                    return `
+                        <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-1.5">
+                            <div class="flex justify-between font-bold text-slate-700 dark:text-slate-200 text-xs">
+                                <span>${r.label}</span>
+                                <span class="font-extrabold">${formatBRL(r.val)} (${pct}%)</span>
+                            </div>
+                            <div class="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full overflow-hidden">
+                                <div class="${r.color} h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        async function runAiExecutiveDiagnosis() {
+            const btn = document.getElementById('btn-rep-ai-audit');
+            const box = document.getElementById('rep-ai-opinion-box');
+            if (!box) return;
+
+            box.classList.remove('hidden');
+            box.innerHTML = `<span class="flex items-center gap-2 text-rose-300 font-bold"><i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> O Consultor IA está auditando suas receitas, despesas e parcelas...</span>`;
+            if (window.lucide) window.lucide.createIcons();
+
+            const todayStr = ((typeof getSaoPauloDateYYYYMMDD === 'function') ? getSaoPauloDateYYYYMMDD() : new Date().toISOString().slice(0, 10));
+            const ctx = typeof buildFinancialAiContext === 'function' ? buildFinancialAiContext(todayStr) : null;
+            const auditData = (ctx && typeof buildDetailedTransactionsSummaryForAi === 'function') ? buildDetailedTransactionsSummaryForAi(ctx.curMonthKey) : { installmentList: [] };
+
+            const systemPrompt = `Você é um Auditor e Estrategista Financeiro de Alto Nível.
+Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIRÚRGICO em 3 seções curtas:
+1. 🩺 DIAGNÓSTICO DO MÊS: Diga sem rodeios se a situação está sob controle, apertada ou crítica, citando a relação receitas x despesas.
+2. ✂️ ONDE AGIR HOJE: Indique qual conta ou categoria deve ser travada para proteger o caixa.
+3. 🎯 DIRECIONAMENTO ESTRATÉGICO: 2 ações concretas para fechar o mês no azul e aumentar a reserva.`;
+
+            const userPrompt = ctx ? `DADOS FINANCEIROS REAIS:
+- Mês: ${ctx.currentMonthLabel}
+- Saldo Hoje: ${formatSimMoney(ctx.totalBankBalance)}
+- Receitas: ${formatSimMoney(ctx.totalIncome)} (Pendentes: ${formatSimMoney(ctx.pendingIncome)})
+- Despesas: ${formatSimMoney(ctx.totalExpense)} (Pendentes: ${formatSimMoney(ctx.pendingExpense)})
+- Saldo Projetado: ${formatSimMoney(ctx.projectedMonthBalance)}
+- Compras Parceladas Ativas: ${auditData.installmentList.length} parcelamentos (total restante: ${formatSimMoney(auditData.installmentList.reduce((a, b) => a + b.totalRemaining, 0))})` : 'Auditoria do mês';
+
+            let reply = null;
+            if (typeof queryGeminiApi === 'function') {
+                try {
+                    reply = await queryGeminiApi(systemPrompt, userPrompt);
+                } catch (e) {
+                    console.warn('Erro ao chamar IA para parecer:', e);
+                }
+            }
+
+            if (!reply && ctx) {
+                const deficit = ctx.totalExpense - ctx.totalIncome;
+                reply = deficit > 0
+                    ? `**🩺 DIAGNÓSTICO:** Suas despesas superam suas receitas em ${formatBRL(deficit)}. O orçamento está deficitário.
+
+**✂️ ONDE AGIR HOJE:** Você ainda tem ${formatBRL(ctx.pendingExpense)} em despesas pendentes. Suspenda novos gastos no cartão até o fechamento da fatura.
+
+**🎯 DIRECIONAMENTO:** Reduza 20% das saídas flexíveis e priorize liquidar contas com juros primeiro.`
+                    : `**🩺 DIAGNÓSTICO:** Orçamento no azul com sobra projetada de ${formatBRL(ctx.projectedMonthBalance)}. Situação saudável.
+
+**✂️ ONDE AGIR HOJE:** Monitore os ${formatBRL(ctx.pendingExpense)} de contas pendentes para manter a previsibilidade.
+
+**🎯 DIRECIONAMENTO:** Reserve metade da sobra livre para a sua reserva de emergência e evite comprometer mais de 30% da renda em novas parcelas.`;
+            } else if (!reply) {
+                reply = `**🩺 DIAGNÓSTICO:** Orçamento monitorado pelo sistema com integridade financeira.`;
+            }
+
+            const formatted = escapeHtml(reply)
+                .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-extrabold">$1</strong>')
+                .replace(/\n\n/g, '<div class="my-2"></div>')
+                .replace(/\n/g, '<br>');
+
+            box.innerHTML = `
+                <div class="flex items-center justify-between pb-1 border-b border-rose-500/20 mb-2">
+                    <span class="text-[11px] font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Parecer Estratégico da IA
+                    </span>
+                    <button onclick="document.getElementById('rep-ai-opinion-box').classList.add('hidden')" class="text-[10px] text-slate-400 hover:text-white font-bold">Fechar</button>
                 </div>
-                <div class="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden"><div class="bg-rose-500 h-full rounded-full" style="width:${Math.min(100, t.pctDespesa)}%"></div></div>
-            </div>`).join('')
-        : rptEmptyBox('Nenhuma despesa registrada neste mês.'));
-}
+                <div>${formatted}</div>
+            `;
+            if (window.lucide) window.lucide.createIcons();
+        }
+        window.runAiExecutiveDiagnosis = runAiExecutiveDiagnosis;
 
-function rptRenderAll(s) {
-    rptRenderSummary(s);
-    rptRenderKpis(s);
-    rptRenderAlerts(s);
-    rptRenderPlan(s);
-    rptRenderRule(s);
-    rptRenderTimeline(s);
-    rptRenderInstallments(s);
-    rptRenderCashflow(s);
-    rptRenderWhereMoneyGoes(s);
-    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
-}
-
-function renderFinancialAnalysisAndReports(currentMonth) {
-    const titleEl = document.getElementById('rep-month-title');
-    if (titleEl) titleEl.textContent = currentMonth.label;
-    try {
-        const snap = rptBuildSnapshot(rptCollectInput(currentMonth));
-        window.__lastReportsSnapshot = snap;
-        rptRenderAll(snap);
-    } catch (err) {
-        console.error('[Relatórios v2] falha ao montar a análise:', err);
-        const t = document.getElementById('rep-executive-title');
-        if (t) t.textContent = 'Não foi possível montar a análise deste mês';
-        rptSet('rep-executive-desc', '<p>Abra o console do navegador (F12) para ver o detalhe do erro.</p>');
-    }
-}
-
-// ---- Parecer com IA: usa o MESMO retrato do mês que está na tela ----
-function rptBuildAiFacts(s) {
-    const m = rptFmt;
-    const g = s.groups.filter(x => x.amount > 0).map(x => `${x.label}: ${m(x.amount)} (${x.pctRenda === null ? 's/ renda' : x.pctRenda + '% da renda'})`).join(' | ');
-    const cats = s.categories.slice(0, 6).map(c => `${c.cat} ${m(c.amount)} [${c.bucket === 'essential' ? 'essencial' : 'estilo de vida'}]`).join(' | ');
-    const alerts = s.alerts.slice(0, 5).map(a => `- (${a.severity}) ${a.title}: ${a.detail}`).join('\n');
-    const plan = s.plan.slice(0, 4).map(p => `- ${p.title}: ${p.desc}`).join('\n');
-    const sched = s.installments.schedule.slice(0, 4).map(x => `${rptMonthLabel(x.monthKey)} ${m(x.total)}`).join(' | ');
-    const a = s.allowance;
-    return `MÊS ANALISADO: ${s.label} (${s.state === 'past' ? 'mês encerrado' : (s.state === 'current' ? `mês em andamento, ${s.daysLeft} dias restantes` : 'mês futuro')})
-VEREDITO DO SISTEMA: ${s.headline}
-CAIXA: em conta hoje ${m(s.cash.saldoHoje)} (inclui ${m(s.cash.carryIn)} vindos de meses anteriores) | a receber ${m(s.totals.pendingIncome)} | a pagar ${m(s.totals.pendingExpense)} | SALDO PREVISTO ${m(s.cash.saldoPrevisto)}
-RESULTADO DO MÊS (receitas - despesas): ${m(s.totals.resultadoMes)} (receitas ${m(s.totals.totalIncome)}, despesas ${m(s.totals.totalExpense)})
-COMPROMETIMENTO DA RENDA: ${s.kpis.commit.pct === null ? 'sem receita lançada' : s.kpis.commit.pct + '%'}
-COMPOSIÇÃO: ${g}
-PARCELAS: ${m(s.installments.nowTotal)}/mês${s.kpis.parcelas.pct === null ? '' : ` (${s.kpis.parcelas.pct}% da renda)`}; cronograma: ${sched || 'sem parcelas'}; ainda a pagar em parcelas: ${m(s.installments.debtRemaining)}
-${a ? `MARGEM: ${a.falta > 0 ? 'faltam ' + m(a.falta) + ' para fechar o mês' : 'teto de ' + m(a.tetoDia) + '/dia'}; ritmo de gastos avulsos ${a.ritmoVarDia === null ? 'n/d' : m(a.ritmoVarDia) + '/dia'}; projeção realista ${a.saldoRealista === null ? 'n/d' : m(a.saldoRealista)}` : ''}
-PRINCIPAIS CATEGORIAS: ${cats || 'n/d'}
-RESERVA: ${s.kpis.reserve.registered ? m(s.kpis.reserve.amount) + ' (meta ' + m(s.kpis.reserve.target) + ')' : 'sem conta de reserva cadastrada'}
-ALERTAS DO SISTEMA:
-${alerts || '- nenhum'}
-AÇÕES CANDIDATAS (já calculadas):
-${plan || '- nenhuma'}`;
-}
-
-async function runAiExecutiveDiagnosis() {
-    const box = document.getElementById('rep-ai-opinion-box');
-    if (!box) return;
-    box.classList.remove('hidden');
-    box.innerHTML = `<span class="flex items-center gap-2 text-rose-300 font-bold"><i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> O Consultor IA está analisando o retrato deste mês...</span>`;
-    if (window.lucide) window.lucide.createIcons();
-
-    let snap = window.__lastReportsSnapshot;
-    try {
-        const cm = (Array.isArray(MONTHS) && MONTHS[currentMonthIndex]) ? MONTHS[currentMonthIndex] : MONTHS[0];
-        if (!snap || snap.monthKey !== cm.key) snap = rptBuildSnapshot(rptCollectInput(cm));
-    } catch (err) {
-        console.warn('[Relatórios v2] snapshot indisponível para a IA:', err);
-    }
-    if (!snap) {
-        box.innerHTML = '<span class="text-amber-300 font-bold">Não consegui montar os dados do mês para a análise.</span>';
-        return;
-    }
-
-    const systemPrompt = `Você é o auditor financeiro pessoal do usuário. Escreva um PARECER curto, humano e direto sobre o mês descrito nos FATOS.
-
-REGRAS
-- Use SOMENTE os números dos FATOS. Não invente valores, datas, contas ou categorias. Se algo não estiver nos fatos, não comente.
-- Quando o RESULTADO DO MÊS (receitas - despesas) e o SALDO PREVISTO forem diferentes, explique a diferença: o saldo que veio de meses anteriores (e que não se repete).
-- Para mês encerrado, fale no passado; para mês futuro, deixe claro que é previsão com o que já foi lançado.
-- Priorize o que mais pesa: caixa negativo primeiro, depois parcelas, depois cortes, depois reserva.
-- Cada ação precisa ter valor em R$ e prazo ou mês. Nada de conselhos genéricos.
-- Máximo de 170 palavras, português do Brasil, sem jargão.
-
-FORMATO (use exatamente estes 3 títulos, em negrito)
-**🩺 Diagnóstico:** 2 a 3 frases.
-**✂️ Onde agir:** 1 a 2 ações concretas, com valores.
-**🎯 Próximo passo:** 1 ação para fazer ainda hoje.`;
-
-    let reply = null;
-    try {
-        reply = await queryGeminiApi(systemPrompt, `FATOS:\n${rptBuildAiFacts(snap)}`, { temperature: 0.3 });
-    } catch (e) {
-        console.warn('Erro ao chamar IA para parecer:', e);
-    }
-    if (!reply) {
-        const first = snap.plan[0];
-        reply = `**🩺 Diagnóstico:** ${snap.headline}. ${snap.lead.join(' ')}\n\n**✂️ Onde agir:** ${first ? `${first.title}. ${first.desc}` : 'Nenhuma ação urgente identificada.'}\n\n**🎯 Próximo passo:** ${snap.plan[1] ? snap.plan[1].title : 'Revise os alertas desta tela.'}\n\n(Parecer gerado sem IA: conecte a chave do Gemini para uma análise personalizada.)`;
-    }
-    const formatted = rptEsc(reply)
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-extrabold">$1</strong>')
-        .replace(/\n\n/g, '<div class="my-2"></div>')
-        .replace(/\n/g, '<br>');
-    box.innerHTML = `
-        <div class="flex items-center justify-between pb-1 border-b border-rose-500/20 mb-2">
-            <span class="text-[11px] font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Parecer da IA — ${rptEsc(snap.label)}</span>
-            <button onclick="document.getElementById('rep-ai-opinion-box').classList.add('hidden')" class="text-[10px] text-slate-400 hover:text-white font-bold">Fechar</button>
-        </div>
-        <div>${formatted}</div>`;
-    if (window.lucide) window.lucide.createIcons();
-}
-window.runAiExecutiveDiagnosis = runAiExecutiveDiagnosis;
-// RELATÓRIOS v2 — FIM (tela)
 
         function renderCategories(expenses, totalExpense) {
             const container = document.getElementById('category-breakdown-list');
