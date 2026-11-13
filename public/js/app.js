@@ -8642,6 +8642,194 @@ function openBankModal() {
         // =========================================================================
         // RELATÓRIOS & ANÁLISE FINANCEIRA EXECUTIVA (AUDITORIA E PROJEÇÕES)
         // =========================================================================
+        function getReserveAccountsBalance(monthKey) {
+            const effectiveBanksList = typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : (Array.isArray(banks) ? banks : []);
+            const total = effectiveBanksList.reduce((acc, b) => {
+                if (!b || (typeof isCreditCardBank === 'function' && isCreditCardBank(b))) return acc;
+                const vaultVal = typeof getBankVaultBalance === 'function' ? Number(getBankVaultBalance(b) || 0) : 0;
+                const isIncluded = typeof isBankIncludedInTotal === 'function' ? isBankIncludedInTotal(b) : (b.includeInTotal !== false);
+                if (!isIncluded) {
+                    const bankBal = typeof calculateBankBalance === 'function' ? Number(calculateBankBalance(b, monthKey) || 0) : 0;
+                    return acc + Math.max(0, bankBal, vaultVal);
+                }
+                return acc + Math.max(0, vaultVal);
+            }, 0);
+            return Number(total.toFixed(2));
+        }
+
+        function formatMonthKeyLabelBR(monthKey) {
+            if (!monthKey || !String(monthKey).includes('-')) return String(monthKey || '');
+            const existing = Array.isArray(MONTHS) ? MONTHS.find(m => m.key === monthKey) : null;
+            if (existing && existing.label) return existing.label;
+            const [y, m] = String(monthKey).split('-').map(Number);
+            const shortNames = (typeof MONTH_NAMES_SHORT !== 'undefined' && Array.isArray(MONTH_NAMES_SHORT))
+                ? MONTH_NAMES_SHORT
+                : ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+            return `${shortNames[(m || 1) - 1] || 'Mês'} ${y}`;
+        }
+
+        function extractCategoryExpensesMap(monthKey) {
+            const mTxs = typeof getHomeVisibleTransactions === 'function' ? getHomeVisibleTransactions(monthKey) : [];
+            const map = {};
+            mTxs.forEach(t => {
+                if (!t || t.type !== 'expense' || t.isInitialBalance || t.isBalanceAdjustment) return;
+                const amt = t.isConsolidatedBill
+                    ? Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0)
+                    : Number(t.amount || 0);
+                if (amt <= 0) return;
+                const catName = t.cat || 'Geral';
+                map[catName] = Number(((map[catName] || 0) + amt).toFixed(2));
+            });
+            return map;
+        }
+
+        function computeCategoryLeakInsights(monthKey, cutPct = 15) {
+            const pct = Math.max(5, Math.min(50, Number(cutPct || 15)));
+            const currentMap = extractCategoryExpensesMap(monthKey);
+            const histTotals = {};
+            let activeHistoryMonths = 0;
+
+            for (let offset = 1; offset <= 3; offset++) {
+                const prevKey = typeof addMonthsToKey === 'function' ? addMonthsToKey(monthKey, -offset) : null;
+                if (!prevKey) continue;
+                const prevMap = extractCategoryExpensesMap(prevKey);
+                const prevSum = Object.values(prevMap).reduce((a, v) => a + Number(v || 0), 0);
+                if (prevSum > 0) {
+                    activeHistoryMonths++;
+                    Object.entries(prevMap).forEach(([cat, val]) => {
+                        histTotals[cat] = (histTotals[cat] || 0) + Number(val || 0);
+                    });
+                }
+            }
+
+            const items = Object.entries(currentMap).map(([cat, amount]) => {
+                const avg3m = activeHistoryMonths > 0 ? Number(((histTotals[cat] || 0) / activeHistoryMonths).toFixed(2)) : 0;
+                const deltaAmount = activeHistoryMonths > 0 ? Number((amount - avg3m).toFixed(2)) : 0;
+                const deltaPct = avg3m > 0 ? Math.round((deltaAmount / avg3m) * 100) : null;
+                const cutMonthly = Number((amount * (pct / 100)).toFixed(2));
+                const cutAnnual = Number((cutMonthly * 12).toFixed(2));
+                return { cat, amount, avg3m, deltaAmount, deltaPct, cutMonthly, cutAnnual };
+            }).sort((a, b) => {
+                // Prioriza categorias com histórico que subiram acima da média; depois novos gastos e maiores valores
+                const aRank = (a.avg3m > 0 && a.deltaAmount > 0) ? 2 : (a.deltaAmount > 0 ? 1 : 0);
+                const bRank = (b.avg3m > 0 && b.deltaAmount > 0) ? 2 : (b.deltaAmount > 0 ? 1 : 0);
+                if (bRank !== aRank) return bRank - aRank;
+                if (b.deltaAmount !== a.deltaAmount) return b.deltaAmount - a.deltaAmount;
+                return b.amount - a.amount;
+            }).slice(0, 4);
+
+            const totalMonthlyCut = Number(items.reduce((acc, item) => acc + item.cutMonthly, 0).toFixed(2));
+            const totalAnnualCut = Number((totalMonthlyCut * 12).toFixed(2));
+            return { pct, activeHistoryMonths, items, totalMonthlyCut, totalAnnualCut };
+        }
+
+        function computeUpcomingInstallmentsRelief(monthKey) {
+            const effectiveTxs = typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : []);
+            const months = [];
+            let totalReliefUpcoming = 0;
+
+            for (let offset = 0; offset <= 3; offset++) {
+                const targetKey = typeof addMonthsToKey === 'function' ? addMonthsToKey(monthKey, offset) : monthKey;
+                const endingItems = [];
+                effectiveTxs.forEach(t => {
+                    if (!t || t.type !== 'expense' || t.isInitialBalance || t.isBalanceAdjustment || t.isConsolidatedBill) return;
+                    const mk = typeof normalizeMonthKey === 'function' ? normalizeMonthKey(t.month, monthKey) : t.month;
+                    if (mk !== targetKey) return;
+
+                    let cur = null;
+                    let tot = null;
+                    if (t.inst && String(t.inst).includes('/')) {
+                        const parts = String(t.inst).split('/').map(Number);
+                        cur = parts[0];
+                        tot = parts[1];
+                    } else {
+                        const match = String(t.desc || '').match(/\((\d+)\s*\/\s*(\d+)\)/);
+                        if (match) {
+                            cur = parseInt(match[1], 10);
+                            tot = parseInt(match[2], 10);
+                        }
+                    }
+
+                    if (cur && tot && tot > 1 && cur === tot) {
+                        const amt = Number(t.amount || 0);
+                        if (amt > 0) {
+                            endingItems.push({
+                                name: typeof getBaseDescription === 'function' ? getBaseDescription(t.desc) : String(t.desc || ''),
+                                inst: `${cur}/${tot}`,
+                                amount: amt
+                            });
+                        }
+                    }
+                });
+
+                const monthTotal = Number(endingItems.reduce((acc, item) => acc + item.amount, 0).toFixed(2));
+                if (offset >= 0) totalReliefUpcoming = Number((totalReliefUpcoming + monthTotal).toFixed(2));
+                months.push({
+                    offset,
+                    monthKey: targetKey,
+                    monthLabel: formatMonthKeyLabelBR(targetKey),
+                    count: endingItems.length,
+                    totalAmount: monthTotal,
+                    items: endingItems
+                });
+            }
+
+            return { months, totalReliefUpcoming };
+        }
+
+        // Regra única para Meta de Reserva Mensal (R$ e % da renda) compartilhada entre gráficos, análises e IA
+        function computeRecommendedSavingsPlan({ totalIncome = 0, totalExpense = 0, reserveBalance = 0 } = {}) {
+            const inc = Math.max(0, Number(totalIncome || 0));
+            const exp = Math.max(0, Number(totalExpense || 0));
+            const surplus = Number((inc - exp).toFixed(2));
+            const reserveBal = Math.max(0, Number(reserveBalance || 0));
+            const idealEmergencyFund = Number((exp > 0 ? exp * 3 : 0).toFixed(2));
+            const emergencyMissing = Number(Math.max(0, idealEmergencyFund - reserveBal).toFixed(2));
+            const reserveCompletedPct = idealEmergencyFund > 0 ? Math.min(100, Math.round((reserveBal / idealEmergencyFund) * 100)) : 0;
+            const reserveCompleted = idealEmergencyFund > 0 && emergencyMissing <= 0.01;
+
+            let recommendedSaveAmount = 0;
+            if (surplus > 0) {
+                if (inc > 0) {
+                    if (!reserveCompleted && surplus >= inc * 0.40) {
+                        // Folga alta com reserva ainda incompleta: acelera a reserva com metade da sobra até 35% da renda
+                        recommendedSaveAmount = Math.min(surplus * 0.50, inc * 0.35);
+                    } else if (surplus >= inc * 0.20) {
+                        recommendedSaveAmount = inc * 0.20;
+                    } else {
+                        // Mês positivo porém apertado (< 20%): separa metade da sobra para não apertar o caixa
+                        recommendedSaveAmount = surplus * 0.50;
+                    }
+                } else {
+                    recommendedSaveAmount = surplus * 0.50;
+                }
+                recommendedSaveAmount = Number(Math.min(surplus, Math.max(0, recommendedSaveAmount)).toFixed(2));
+            }
+
+            const recommendedIncomePct = inc > 0 && recommendedSaveAmount > 0
+                ? Math.max(1, Math.round((recommendedSaveAmount / inc) * 100))
+                : 0;
+            const remainingAfterReserve = Number((surplus - recommendedSaveAmount).toFixed(2));
+            const deficitAmount = surplus < 0 ? Number(Math.abs(surplus).toFixed(2)) : 0;
+            const monthsToCompleteReserve = !reserveCompleted && recommendedSaveAmount > 0 && emergencyMissing > 0
+                ? Math.ceil(emergencyMissing / recommendedSaveAmount)
+                : null;
+
+            return {
+                surplus,
+                deficitAmount,
+                reserveBal,
+                idealEmergencyFund,
+                emergencyMissing,
+                reserveCompletedPct,
+                reserveCompleted,
+                recommendedSaveAmount,
+                recommendedIncomePct,
+                remainingAfterReserve,
+                monthsToCompleteReserve
+            };
+        }
+
         function renderFinancialAnalysisAndReports(currentMonth, monthTxs, totalIncome, totalExpense) {
             const titleEl = document.getElementById('rep-month-title');
             if (titleEl) titleEl.textContent = currentMonth.label;
@@ -8651,8 +8839,13 @@ function openBankModal() {
                 aiOpinionBox.classList.add('hidden');
             }
 
-            const effectiveBanksList = typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : (banks || []);
             const allEffectiveTransactions = typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (transactions || []);
+            const reserveTotal = getReserveAccountsBalance(currentMonth.key);
+            const savingsPlan = computeRecommendedSavingsPlan({
+                totalIncome,
+                totalExpense,
+                reserveBalance: reserveTotal
+            });
 
             const expenses = monthTxs.filter(t => t.type === 'expense');
             const paidExpense = expenses.reduce((acc, t) => {
@@ -8669,7 +8862,7 @@ function openBankModal() {
             const singleExpenses = Math.max(0, totalExpense - fixedExpenses - instExpenses);
 
             const commitPct = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : (totalExpense > 0 ? 100 : 0);
-            const savingAmount = totalIncome - totalExpense;
+            const savingAmount = savingsPlan.surplus;
             const savingPct = totalIncome > 0 ? Math.max(0, Math.round((savingAmount / totalIncome) * 100)) : 0;
 
             const fixedPct = totalExpense > 0 ? Math.round((fixedExpenses / totalExpense) * 100) : 0;
@@ -8688,7 +8881,11 @@ function openBankModal() {
             const savSub = document.getElementById('rep-kpi-saving-sub');
             if (savEl) {
                 savEl.textContent = `${savingPct}%`;
-                if (savSub) savSub.textContent = `Saldo livre: ${formatBRL(savingAmount)}`;
+                if (savSub) {
+                    savSub.textContent = savingsPlan.recommendedSaveAmount > 0
+                        ? `Sobra: ${formatBRL(savingAmount)} • Guardar: ${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}%)`
+                        : `Saldo livre: ${formatBRL(savingAmount)}`;
+                }
             }
 
             const splitEl = document.getElementById('rep-kpi-split');
@@ -8715,7 +8912,7 @@ function openBankModal() {
             const finishingSum = finishingThisMonth.reduce((a, t) => a + Number(t.amount || 0), 0);
 
             // =========================================================================
-            // DIAGNÓSTICO EXECUTIVO CONCRETO & TETO DIÁRIO PERMITIDO
+            // DIAGNÓSTICO EXECUTIVO CONCRETO & TETO DIÁRIO PERMITIDO (PROTEGENDO A RESERVA)
             // =========================================================================
             const spToday = (typeof getSaoPauloDateYYYYMMDD === 'function') ? getSaoPauloDateYYYYMMDD() : '2026-11-10';
             const [spYear, spMonth, spDay] = spToday.split('-').map(Number);
@@ -8731,11 +8928,11 @@ function openBankModal() {
                 daysLeft = daysInCurrentMonth;
             }
 
-            const execCard = document.getElementById('rep-executive-card');
             const execTitle = document.getElementById('rep-executive-title');
             const execDesc = document.getElementById('rep-executive-desc');
             const execBadge = document.getElementById('rep-status-badge');
             const dailyAllowanceEl = document.getElementById('rep-daily-allowance');
+            const reserveGoalEl = document.getElementById('rep-reserve-goal');
             const daysLeftEl = document.getElementById('rep-days-left');
 
             if (daysLeftEl) {
@@ -8748,34 +8945,50 @@ function openBankModal() {
                 }
             }
 
-            // Cálculo do Teto Diário Seguro
-            const projectedSurplus = savingAmount;
-            let dailyAllowance = 0;
-            if (projectedSurplus > 0) {
-                dailyAllowance = projectedSurplus / daysLeft;
-            }
+            // Teto diário já preserva a meta sugerida para a reserva no mês
+            const freeCashAfterReserve = Math.max(0, savingsPlan.remainingAfterReserve);
+            const dailyAllowance = savingsPlan.surplus > 0 ? (freeCashAfterReserve / daysLeft) : 0;
 
             if (dailyAllowanceEl) {
-                dailyAllowanceEl.textContent = projectedSurplus > 0 ? `${formatBRL(dailyAllowance)}/dia` : 'R$ 0,00 (Trava de Gastos)';
-                dailyAllowanceEl.className = projectedSurplus > 0 ? 'font-black text-emerald-400 text-sm' : 'font-black text-rose-400 text-sm';
+                dailyAllowanceEl.textContent = savingsPlan.surplus > 0 ? `${formatBRL(dailyAllowance)}/dia` : 'R$ 0,00 (Trava de Gastos)';
+                dailyAllowanceEl.className = savingsPlan.surplus > 0 ? 'font-black text-emerald-400 text-sm whitespace-nowrap' : 'font-black text-rose-400 text-sm whitespace-nowrap';
+                dailyAllowanceEl.title = savingsPlan.recommendedSaveAmount > 0
+                    ? `Já reservando ${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}%) para sua Reserva`
+                    : '';
+            }
+
+            if (reserveGoalEl) {
+                if (savingsPlan.recommendedSaveAmount > 0) {
+                    reserveGoalEl.textContent = savingsPlan.recommendedIncomePct > 0
+                        ? `${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}%)`
+                        : formatBRL(savingsPlan.recommendedSaveAmount);
+                    reserveGoalEl.className = 'font-black text-sky-400 text-sm whitespace-nowrap';
+                } else if (savingsPlan.deficitAmount > 0) {
+                    reserveGoalEl.textContent = 'R$ 0,00 (Déficit)';
+                    reserveGoalEl.className = 'font-black text-rose-400 text-sm whitespace-nowrap';
+                } else {
+                    reserveGoalEl.textContent = 'R$ 0,00 (0%)';
+                    reserveGoalEl.className = 'font-black text-slate-400 text-sm whitespace-nowrap';
+                }
             }
 
             if (execTitle && execDesc && execBadge) {
-                if (commitPct > 100) {
+                if (commitPct > 100 || savingsPlan.deficitAmount > 0) {
                     execBadge.textContent = 'Déficit no Mês';
                     execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30';
-                    execTitle.textContent = `Atenção: Suas despesas superam suas receitas em ${formatBRL(totalExpense - totalIncome)}`;
-                    execDesc.innerHTML = `Você está com <strong>${commitPct}% da sua renda comprometida</strong>. Para não fechar o mês no vermelho, corte despesas supérfluas pendentes (${formatBRL(pendingExpense)} ainda não foram pagas) e suspenda novas compras parceladas.`;
+                    execTitle.textContent = `Atenção: Suas despesas superam suas receitas em ${formatBRL(savingsPlan.deficitAmount)}`;
+                    execDesc.innerHTML = `Você está com <strong>${commitPct}% da sua renda comprometida</strong>. Meta de reserva travada em <strong>R$ 0,00 (0%)</strong>: corte ${formatBRL(savingsPlan.deficitAmount)} em despesas pendentes (${formatBRL(pendingExpense)}) e evite novas parcelas para voltar a guardar.`;
                 } else if (commitPct >= 85) {
                     execBadge.textContent = 'Orçamento Apertado';
                     execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30';
                     execTitle.textContent = `Folga curta: Sobra prevista de apenas ${formatBRL(savingAmount)}`;
-                    execDesc.innerHTML = `Seu custo diário até o fim do mês não pode ultrapassar <strong>${formatBRL(dailyAllowance)}/dia</strong>. Fique atento às compras no cartão para não queimar a margem de segurança.`;
+                    execDesc.innerHTML = `Meta de economia: separe <strong>${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}% da renda)</strong> para a reserva e mantenha seu gasto diário livre abaixo de <strong>${formatBRL(dailyAllowance)}/dia</strong> para não queimar a margem.`;
                 } else {
                     execBadge.textContent = 'Saúde Excelente';
                     execBadge.className = 'px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
                     execTitle.textContent = `Mês no Azul: Margem livre de ${formatBRL(savingAmount)} (${savingPct}% da renda)`;
-                    execDesc.innerHTML = `Seu fluxo de caixa está sob controle. Recomendação prática: direcione pelo menos <strong>${formatBRL(savingAmount * 0.5)}</strong> para a sua Reserva de Emergência ou conta Poupança logo no início da semana.`;
+                    const reserveDestination = savingsPlan.reserveCompleted ? 'Reserva / Investimentos' : 'Reserva de Emergência';
+                    execDesc.innerHTML = `Seu fluxo de caixa está sob controle. Recomendação prática: transfira <strong>${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}% da renda)</strong> para sua ${reserveDestination} no início do ciclo — ainda ficam <strong>${formatBRL(freeCashAfterReserve)}</strong> (${formatBRL(dailyAllowance)}/dia) livres.`;
                 }
             }
 
@@ -8790,7 +9003,7 @@ function openBankModal() {
                     <div class="p-4 rounded-2xl bg-emerald-50/70 dark:bg-slate-800/70 border border-emerald-100 dark:border-slate-700/80 space-y-1.5 shadow-sm">
                         <span class="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Alívio no Próximo Mês</span>
                         <p class="font-bold text-slate-800 dark:text-white truncate text-sm">${finishingThisMonth.length > 0 ? `${finishingThisMonth.length} parcelamento(s) acabam!` : 'Nenhuma última parcela neste mês'}</p>
-                        <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">${finishingThisMonth.length > 0 ? `Você abrirá ${formatBRL(finishingSum)} de folga mensal a partir do mês seguinte.` : 'Suas parcelas atuais continuam no próximo mês.'}</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">${finishingThisMonth.length > 0 ? `Você abrirá ${formatBRL(finishingSum)} de folga mensal para direcionar à barra azul da reserva.` : 'Suas parcelas atuais continuam no próximo mês.'}</p>
                     </div>
                     <div class="p-4 rounded-2xl bg-amber-50/70 dark:bg-slate-800/70 border border-amber-100 dark:border-slate-700/80 space-y-1.5 shadow-sm">
                         <span class="text-[10px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400">Peso das Compras Parceladas</span>
@@ -8809,8 +9022,28 @@ function openBankModal() {
 
                 const targetSave20 = totalIncome > 0 ? totalIncome * 0.2 : 0;
                 const cutSuggestion = topCat ? topCat[1] * 0.15 : 0;
-                const reserveTotal = effectiveBanksList.filter(b => typeof isBankIncludedInTotal === 'function' ? !isBankIncludedInTotal(b) : false).reduce((a, b) => a + (typeof calculateBankBalance === 'function' ? calculateBankBalance(b, currentMonth.key) : 0), 0);
-                const idealEmergencyFund = totalExpense * 3;
+
+                const step3Title = savingsPlan.recommendedSaveAmount > 0
+                    ? `Guardar ${formatBRL(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}% da renda) na Reserva`
+                    : (savingsPlan.deficitAmount > 0
+                        ? `Recuperar ${formatBRL(savingsPlan.deficitAmount)} para destravar sua reserva mensal`
+                        : 'Cadastre suas receitas do mês para calcular a porcentagem ideal de reserva');
+
+                const step3Desc = savingsPlan.recommendedSaveAmount > 0
+                    ? `${savingsPlan.monthsToCompleteReserve ? `Nesse ritmo, você completa os 3 meses de reserva em cerca de ${savingsPlan.monthsToCompleteReserve} mês(es). ` : ''}Ainda ficam ${formatBRL(savingsPlan.remainingAfterReserve)} livres para o mês.`
+                    : (savingsPlan.deficitAmount > 0
+                        ? `Cortando o déficit atual (${formatBRL(savingsPlan.deficitAmount)}), você abre caminho para voltar a guardar ${totalIncome > 0 ? `${formatBRL(targetSave20)} (20% da renda)` : 'todo mês'}.`
+                        : 'Informe seu salário ou entradas para acompanhar o indicador de reserva e a barra azul.');
+
+                const step3Badge = savingsPlan.recommendedSaveAmount > 0
+                    ? (savingsPlan.recommendedIncomePct > 0 ? `Meta: ${savingsPlan.recommendedIncomePct}% da Renda` : 'Reserva do Mês')
+                    : (savingsPlan.deficitAmount > 0 ? 'Ajuste Necessário' : 'Meta de Reserva');
+
+                const step3BadgeColor = savingsPlan.recommendedSaveAmount > 0
+                    ? 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300'
+                    : 'bg-rose-950/30 text-rose-200 dark:bg-rose-950/40 dark:text-rose-300';
+
+                const step4Desc = `Saldo atual em contas Reserva: ${formatBRL(savingsPlan.reserveBal)} (${savingsPlan.reserveCompletedPct}% da meta). ${savingsPlan.reserveCompleted ? 'Reserva concluída! Direcione a barra azul para metas e investimentos.' : `Faltam ${formatBRL(savingsPlan.emergencyMissing)} para completar a meta.`}${finishingSum > 0 ? ` Dica: redirecione os ${formatBRL(finishingSum)} das parcelas que acabam neste mês direto para sua reserva.` : ''}`;
 
                 const steps = [
                     {
@@ -8832,28 +9065,22 @@ function openBankModal() {
                             ? `Teto para ${escapeHtml(topCat[0])}: reduzir 15% gera +${formatBRL(cutSuggestion)}/mês`
                             : 'Registre categorias para calcular seu teto de gastos',
                         desc: topCat
-                            ? `Se você limitar "${escapeHtml(topCat[0])}" a ${formatBRL(topCat[1] - cutSuggestion)}, economizará ${formatBRL(cutSuggestion * 12)} em 12 meses.`
+                            ? `Se você limitar "${escapeHtml(topCat[0])}" a ${formatBRL(topCat[1] - cutSuggestion)}, liberará ${formatBRL(cutSuggestion * 12)} extras em 12 meses para a sua reserva.`
                             : 'Ao classificar suas despesas, o sistema calcula quanto economizar na categoria mais pesada.'
                     },
                     {
                         num: '3',
-                        badge: savingAmount >= targetSave20 && totalIncome > 0 ? 'Meta Batida' : 'Meta de Poupança',
-                        badgeColor: savingAmount >= targetSave20 && totalIncome > 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300' : 'bg-rose-950/30 text-rose-200 dark:bg-rose-950/40 dark:text-rose-300',
-                        title: totalIncome > 0
-                            ? `Separar 20% da Renda (${formatBRL(targetSave20)}) no início do mês`
-                            : 'Cadastre suas receitas do mês para calcular sua meta de poupança',
-                        desc: totalIncome > 0
-                            ? (savingAmount >= targetSave20
-                                ? `Sua sobra prevista (${formatBRL(savingAmount)}) já supera a meta recomendada de 20%. Transfira o excedente para uma conta Reserva!`
-                                : `Para atingir 20% de poupança (${formatBRL(targetSave20)}), faltam ${formatBRL(Math.max(0, targetSave20 - Math.max(0, savingAmount)))} de ajuste nas saídas variáveis.`)
-                            : 'Informe seu salário ou entradas para acompanhar o indicador 50-30-20.'
+                        badge: step3Badge,
+                        badgeColor: step3BadgeColor,
+                        title: step3Title,
+                        desc: step3Desc
                     },
                     {
                         num: '4',
-                        badge: 'Segurança Patrimonial',
-                        badgeColor: 'bg-amber-950/40 text-amber-300 dark:bg-amber-950/60 dark:text-amber-200',
-                        title: `Meta de Reserva de Emergência (3 meses): ${formatBRL(idealEmergencyFund)}`,
-                        desc: `Saldo atual em contas Reserva: ${formatBRL(reserveTotal)}. ${finishingSum > 0 ? `Dica: direcione os ${formatBRL(finishingSum)} das parcelas que acabam neste mês direto para sua reserva.` : 'Mantenha constância nos aportes mensais para tranquilidade financeira.'}`
+                        badge: savingsPlan.reserveCompleted ? 'Reserva 100%' : `Reserva: ${savingsPlan.reserveCompletedPct}%`,
+                        badgeColor: savingsPlan.reserveCompleted ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300' : 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300',
+                        title: `Meta de Reserva de Emergência (3 meses): ${formatBRL(savingsPlan.idealEmergencyFund)}`,
+                        desc: step4Desc
                     }
                 ];
 
@@ -8919,9 +9146,10 @@ function openBankModal() {
                 `).join('');
             }
 
-            // GRÁFICO VISUAL DE EVOLUÇÃO DO FLUXO DE CAIXA (12 MESES COM CARD DE VALORES E SCROLL MOBILE)
+            // GRÁFICO VISUAL DE EVOLUÇÃO DO FLUXO DE CAIXA (12 MESES: RECEITAS, DESPESAS E BARRA AZUL DE RESERVA)
             const chartEl = document.getElementById('rep-cashflow-chart');
             const focusCardEl = document.getElementById('rep-cashflow-focus-card');
+            const reserveSummaryEl = document.getElementById('rep-cashflow-reserve-summary');
             if (chartEl) {
                 // REGRA DE NEGÓCIO: Iniciar com NO MÁXIMO 4 meses para trás a partir do mês ativo/selecionado
                 const curKey = currentMonth?.key || '2026-11';
@@ -8959,14 +9187,43 @@ function openBankModal() {
                         ? getHomeVisibleTransactions(m.key)
                         : allEffectiveTransactions.filter(t => normalizeMonthKey(t.month, '2026-11') === m.key);
                     const inc = mTxs.filter(t => t.type === 'income' && !t.isInitialBalance && !t.isBalanceAdjustment).reduce((a, t) => a + Number(t.amount || 0), 0);
-                    const exp = mTxs.filter(t => t.type === 'expense' && !t.isInitialBalance && !t.isBalanceAdjustment).reduce((a, t) => a + Number(t.amount || 0), 0);
+                    const exp = mTxs.filter(t => t.type === 'expense' && !t.isInitialBalance && !t.isBalanceAdjustment).reduce((a, t) => {
+                        if (t.isConsolidatedBill) {
+                            return a + Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
+                        }
+                        return a + Number(t.amount || 0);
+                    }, 0);
                     const bal = Number((inc - exp).toFixed(2));
+                    const mPlan = computeRecommendedSavingsPlan({
+                        totalIncome: inc,
+                        totalExpense: exp,
+                        reserveBalance: reserveTotal
+                    });
+                    const saveGoal = mPlan.recommendedSaveAmount;
+                    const savePct = mPlan.recommendedIncomePct;
                     if (inc > maxVal) maxVal = inc;
                     if (exp > maxVal) maxVal = exp;
-                    return { key: m.key, label: m.label.split(' ')[0], fullLabel: m.label, inc, exp, bal };
+                    if (saveGoal > maxVal) maxVal = saveGoal;
+                    return { key: m.key, label: m.label.split(' ')[0], fullLabel: m.label, inc, exp, bal, saveGoal, savePct };
                 });
 
-                // Atualizador dinâmico de valores em tempo real ao tocar ou passar o mouse
+                if (reserveSummaryEl) {
+                    const total12MSaveGoal = Number(series.reduce((a, s) => a + s.saveGoal, 0).toFixed(2));
+                    const projectedReserve12M = Number((reserveTotal + total12MSaveGoal).toFixed(2));
+                    if (total12MSaveGoal > 0) {
+                        reserveSummaryEl.innerHTML = `
+                            <span class="font-bold">Potência da Reserva em 12 meses (barras azuis): <strong class="text-sky-600 dark:text-sky-300">+${formatBRL(total12MSaveGoal)}</strong></span>
+                            <span class="text-[11px] font-semibold text-sky-700 dark:text-sky-300">Reserva atual (${formatBRL(reserveTotal)}) → Estimada em 12 meses: <strong>${formatBRL(projectedReserve12M)}</strong></span>
+                        `;
+                    } else {
+                        reserveSummaryEl.innerHTML = `
+                            <span class="font-bold">Nenhuma sobra positiva projetada na janela de 12 meses para aporte azul.</span>
+                            <span class="text-[11px] font-semibold text-sky-700 dark:text-sky-300">Reduza despesas ou lance receitas futuras para destravar sua reserva mensal.</span>
+                        `;
+                    }
+                }
+
+                // Atualizador dinâmico de valores em tempo real ao tocar ou passar o cursor
                 window._setCashflowFocus = function(monthKey) {
                     const s = series.find(x => x.key === monthKey) || series.find(x => x.key === currentMonth.key) || series[0];
                     if (!focusCardEl || !s) return;
@@ -8979,7 +9236,7 @@ function openBankModal() {
                                 <span class="text-[10px] text-slate-400 font-bold">${s.key === currentMonth.key ? 'Mês Ativo no Sistema' : 'Toque nas barras para visualizar'}</span>
                             </div>
                         </div>
-                        <div class="flex items-center gap-3 sm:gap-6 flex-wrap">
+                        <div class="flex items-center gap-2.5 sm:gap-4 flex-wrap">
                             <div class="bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-xl border border-emerald-200/60 dark:border-emerald-800/60">
                                 <span class="text-[10px] uppercase font-extrabold text-emerald-700 dark:text-emerald-400 block">Receitas</span>
                                 <span class="text-xs sm:text-sm font-extrabold text-emerald-600 dark:text-emerald-400">+${formatBRL(s.inc)}</span>
@@ -8992,6 +9249,10 @@ function openBankModal() {
                                 <span class="text-[10px] uppercase font-extrabold block">Saldo do Mês</span>
                                 <span class="text-xs sm:text-sm font-black">${isPositive ? '+' : ''}${formatBRL(s.bal)}</span>
                             </div>
+                            <div class="bg-sky-50 dark:bg-sky-950/40 px-2.5 py-1.5 rounded-xl border border-sky-200/70 dark:border-sky-800/60">
+                                <span class="text-[10px] uppercase font-extrabold text-sky-700 dark:text-sky-400 block">Guardar (Reserva)</span>
+                                <span class="text-xs sm:text-sm font-black text-sky-600 dark:text-sky-400">${formatBRL(s.saveGoal)}${s.savePct > 0 ? ` (${s.savePct}%)` : ''}</span>
+                            </div>
                         </div>
                     `;
                 };
@@ -9000,37 +9261,52 @@ function openBankModal() {
                 window._setCashflowFocus(currentMonth.key);
 
                 chartEl.innerHTML = series.map((s) => {
-                    const incH = Math.max(6, Math.round((s.inc / maxVal) * 100));
-                    const expH = Math.max(6, Math.round((s.exp / maxVal) * 100));
+                    const incH = s.inc > 0 ? Math.max(6, Math.round((s.inc / maxVal) * 100)) : 2;
+                    const expH = s.exp > 0 ? Math.max(6, Math.round((s.exp / maxVal) * 100)) : 2;
+                    const saveH = s.saveGoal > 0 ? Math.max(6, Math.round((s.saveGoal / maxVal) * 100)) : 2;
                     const isSelected = s.key === currentMonth.key;
 
                     return `
                         <div class="flex-1 flex flex-col items-center h-full justify-end group cursor-pointer relative px-0.5 sm:px-1"
-                             onmouseenter="window._setCashflowFocus('${s.key}')"
-                             onclick="window._setCashflowFocus('${s.key}')"
-                             title="${s.fullLabel}: Receitas ${formatBRL(s.inc)} | Despesas ${formatBRL(s.exp)}">
+                             data-cashflow-month="${escapeHtml(s.key)}"
+                             title="${escapeHtml(s.fullLabel)}: Receitas ${formatBRL(s.inc)} | Despesas ${formatBRL(s.exp)} | Guardar ${formatBRL(s.saveGoal)} (${s.savePct}%)">
                             
-                            <!-- Tooltip flutuante rápido para desktop -->
+                            <!-- Dica flutuante rápida para desktop -->
                             <div class="opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none absolute -top-8 bg-slate-900 text-white text-[10px] font-black py-1 px-2 rounded-lg shadow-xl whitespace-nowrap z-20 hidden sm:block">
-                                ${s.label}: ${s.bal >= 0 ? '+' : ''}${formatBRL(s.bal)}
+                                ${escapeHtml(s.label)}: ${s.saveGoal > 0 ? `Guardar ${formatBRL(s.saveGoal)}` : `${s.bal >= 0 ? '+' : ''}${formatBRL(s.bal)}`}
                             </div>
 
-                            <div class="w-full flex items-end justify-center gap-1 sm:gap-1.5 h-36 pb-1">
+                            <div class="w-full flex items-end justify-center gap-0.5 sm:gap-1 h-36 pb-1">
                                 <!-- Barra Receitas -->
-                                <div class="w-2.5 sm:w-4 rounded-t-md bg-emerald-500 hover:brightness-110 transition-all duration-300" 
+                                <div class="w-2 sm:w-3 rounded-t-md bg-emerald-500 hover:brightness-110 transition-all duration-300" 
                                      style="height: ${incH}%"></div>
                                 <!-- Barra Despesas -->
-                                <div class="w-2.5 sm:w-4 rounded-t-md bg-[#FF2E4D] hover:brightness-110 transition-all duration-300" 
+                                <div class="w-2 sm:w-3 rounded-t-md bg-[#FF2E4D] hover:brightness-110 transition-all duration-300" 
                                      style="height: ${expH}%"></div>
+                                <!-- Barra Azul: Meta para Guardar na Reserva -->
+                                <div class="w-2 sm:w-3 rounded-t-md ${s.saveGoal > 0 ? 'bg-gradient-to-t from-sky-600 to-sky-400 shadow-sm shadow-sky-500/25' : 'bg-sky-500/20'} hover:brightness-110 transition-all duration-300" 
+                                     style="height: ${saveH}%"></div>
                             </div>
                             
                             <!-- Rótulo do Mês -->
                             <span class="text-[10px] sm:text-[11px] font-extrabold tracking-tight mt-1.5 transition-colors ${isSelected ? 'text-[#FF2E4D] dark:text-[#FF2E4D] scale-105' : 'text-slate-600 dark:text-slate-400 group-hover:text-slate-900 dark:group-hover:text-white'}">
-                                ${s.label}
+                                ${escapeHtml(s.label)}
                             </span>
                         </div>
                     `;
                 }).join('');
+
+                if (!chartEl.dataset.cashflowDelegated) {
+                    const activateMonthColumn = (ev) => {
+                        const col = ev.target && ev.target.closest ? ev.target.closest('[data-cashflow-month]') : null;
+                        if (col && col.dataset.cashflowMonth && typeof window._setCashflowFocus === 'function') {
+                            window._setCashflowFocus(col.dataset.cashflowMonth);
+                        }
+                    };
+                    chartEl.addEventListener('click', activateMonthColumn);
+                    chartEl.addEventListener('mouseover', activateMonthColumn);
+                    chartEl.dataset.cashflowDelegated = '1';
+                }
             }
 
             // TOP 5 MAIORES DESPESAS DO MÊS
@@ -9103,6 +9379,445 @@ function openBankModal() {
                     `;
                 }).join('');
             }
+
+            // ETAPA 2: Termômetro da Reserva, Detector de Vazamentos & Radar de Parcelas
+            renderReserveThermometer(currentMonth, savingsPlan);
+            renderLeakDetectorSection(currentMonth, savingsPlan);
+            renderInstallmentReliefRadar(currentMonth);
+        }
+
+        function renderReserveThermometer(currentMonth, savingsPlan) {
+            const container = document.getElementById('rep-reserve-thermometer');
+            if (!container) return;
+
+            const isReadOnlyFamily = typeof familySharingEnabled !== 'undefined' && familySharingEnabled &&
+                typeof activeFamilyView !== 'undefined' && activeFamilyView !== 'individual' && activeFamilyView !== 'joint';
+
+            const pct = savingsPlan.reserveCompletedPct;
+            const barColor = savingsPlan.reserveCompleted
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                : 'bg-gradient-to-r from-sky-600 to-sky-400';
+
+            let timelineText = '';
+            if (savingsPlan.idealEmergencyFund <= 0) {
+                timelineText = 'Cadastre despesas no mês para calcular sua meta ideal de 3 meses de reserva.';
+            } else if (savingsPlan.reserveCompleted) {
+                timelineText = 'Reserva de emergência concluída! A barra azul agora potencializa seus objetivos e investimentos.';
+            } else if (savingsPlan.monthsToCompleteReserve) {
+                const targetFinishKey = typeof addMonthsToKey === 'function'
+                    ? addMonthsToKey(currentMonth.key, savingsPlan.monthsToCompleteReserve)
+                    : currentMonth.key;
+                const finishLabel = formatMonthKeyLabelBR(targetFinishKey);
+                timelineText = `Guardando ${formatBRL(savingsPlan.recommendedSaveAmount)}/mês (${savingsPlan.recommendedIncomePct}%), você completa 100% da reserva em <strong>${escapeHtml(finishLabel)}</strong> (~${savingsPlan.monthsToCompleteReserve} mês(es)).`;
+            } else {
+                timelineText = `Faltam ${formatBRL(savingsPlan.emergencyMissing)} para completar 3 meses de segurança. Reduza gastos variáveis para liberar sua barra azul.`;
+            }
+
+            const btnLabel = savingsPlan.recommendedSaveAmount > 0
+                ? `Separar ${formatBRL(savingsPlan.recommendedSaveAmount)}`
+                : 'Guardar na Reserva';
+
+            container.innerHTML = `
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div class="space-y-1 flex-1 min-w-0">
+                        <div class="flex items-center justify-between gap-2 flex-wrap text-xs">
+                            <span class="font-extrabold text-sky-300 flex items-center gap-1.5">
+                                <i data-lucide="shield-check" class="w-4 h-4 text-sky-400"></i>
+                                Termômetro da Reserva (Meta 3 meses)
+                            </span>
+                            <span class="font-black text-white text-xs">
+                                ${formatBRL(savingsPlan.reserveBal)} / ${formatBRL(savingsPlan.idealEmergencyFund)}
+                                <span class="text-sky-400">(${pct}%)</span>
+                            </span>
+                        </div>
+                        <div class="w-full h-2.5 rounded-full bg-white/10 overflow-hidden">
+                            <div class="${barColor} h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                        </div>
+                        <p class="text-[11px] text-slate-300/90 leading-snug">${timelineText}</p>
+                    </div>
+                    ${!isReadOnlyFamily ? `
+                        <button type="button" id="btn-rep-save-reserve"
+                            class="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs shadow-md shadow-sky-950/40 transition flex items-center justify-center gap-1.5 whitespace-nowrap self-start sm:self-center active:scale-95">
+                            <i data-lucide="piggy-bank" class="w-3.5 h-3.5"></i>
+                            <span>${btnLabel}</span>
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+
+            const saveBtn = document.getElementById('btn-rep-save-reserve');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    openReserveTransferModal(savingsPlan.recommendedSaveAmount, currentMonth.key);
+                });
+            }
+        }
+
+        function renderLeakDetectorSection(currentMonth, savingsPlan) {
+            const listEl = document.getElementById('rep-leak-list');
+            const impactEl = document.getElementById('rep-leak-impact');
+            const btnsWrap = document.getElementById('rep-leak-pct-buttons');
+            if (!listEl || !impactEl) return;
+
+            const cutPct = Number(window._repLeakCutPct || 15);
+            window._repLastLeakRenderArgs = { currentMonth, savingsPlan };
+
+            if (btnsWrap) {
+                Array.from(btnsWrap.querySelectorAll('[data-leak-pct]')).forEach(btn => {
+                    const p = Number(btn.getAttribute('data-leak-pct'));
+                    btn.className = p === cutPct
+                        ? 'px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition bg-sky-600 text-white shadow-sm'
+                        : 'px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-700';
+                });
+                if (!btnsWrap.dataset.leakBound) {
+                    btnsWrap.addEventListener('click', (ev) => {
+                        const btn = ev.target && ev.target.closest ? ev.target.closest('[data-leak-pct]') : null;
+                        if (!btn) return;
+                        window._repLeakCutPct = Number(btn.getAttribute('data-leak-pct') || 15);
+                        if (window._repLastLeakRenderArgs) {
+                            renderLeakDetectorSection(window._repLastLeakRenderArgs.currentMonth, window._repLastLeakRenderArgs.savingsPlan);
+                            if (window.lucide) window.lucide.createIcons();
+                        }
+                    });
+                    btnsWrap.dataset.leakBound = '1';
+                }
+            }
+
+            const leaks = computeCategoryLeakInsights(currentMonth.key, cutPct);
+            if (!leaks.items.length) {
+                impactEl.innerHTML = `<span class="font-semibold">Sem despesas categorizadas em ${escapeHtml(currentMonth.label)} para comparar com os últimos 3 meses.</span>`;
+                listEl.innerHTML = `
+                    <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-700 text-center text-slate-400">
+                        Adicione lançamentos neste mês para identificar onde cortar e acelerar sua barra azul.
+                    </div>
+                `;
+                return;
+            }
+
+            const acceleratedTotal = Number((savingsPlan.recommendedSaveAmount + leaks.totalMonthlyCut).toFixed(2));
+            const monthsBefore = savingsPlan.monthsToCompleteReserve;
+            const monthsAfter = (!savingsPlan.reserveCompleted && savingsPlan.emergencyMissing > 0 && acceleratedTotal > 0)
+                ? Math.ceil(savingsPlan.emergencyMissing / acceleratedTotal)
+                : null;
+            const savedMonths = (monthsBefore && monthsAfter && monthsBefore > monthsAfter)
+                ? monthsBefore - monthsAfter
+                : 0;
+
+            impactEl.innerHTML = `
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span>Simulando <strong>-${cutPct}%</strong> nas 4 categorias prioritárias: libera <strong class="text-sky-600 dark:text-sky-300">+${formatBRL(leaks.totalMonthlyCut)}/mês</strong> (<strong class="text-sky-600 dark:text-sky-300">+${formatBRL(leaks.totalAnnualCut)}/ano</strong> para a reserva)</span>
+                    ${savedMonths > 0 ? `<span class="font-extrabold text-emerald-600 dark:text-emerald-400">Antecipa sua reserva em ${savedMonths} mês(es)!</span>` : ''}
+                </div>
+            `;
+
+            listEl.innerHTML = leaks.items.map(item => {
+                let statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Sem histórico de 3m</span>`;
+                if (leaks.activeHistoryMonths > 0) {
+                    if (item.avg3m === 0) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">Gasto novo vs. 3m</span>`;
+                    } else if (item.deltaPct > 5) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 dark:bg-rose-950/70 dark:text-rose-300">+${item.deltaPct}% acima da média (+${formatBRL(item.deltaAmount)})</span>`;
+                    } else if (item.deltaPct < -5) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300">${Math.abs(item.deltaPct)}% abaixo da média</span>`;
+                    } else {
+                        statusBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Na média dos últimos 3m</span>`;
+                    }
+                }
+
+                const avgLabel = leaks.activeHistoryMonths > 0 ? `Média 3m: ${formatBRL(item.avg3m)}` : '1º mês observado';
+
+                return `
+                    <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div class="min-w-0 space-y-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-extrabold text-slate-800 dark:text-white text-xs">${formatCategoryWithEmoji(item.cat)}</span>
+                                ${statusBadge}
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                                Neste mês: <strong class="text-slate-700 dark:text-slate-200">${formatBRL(item.amount)}</strong> • ${avgLabel}
+                            </p>
+                        </div>
+                        <div class="sm:text-right flex-shrink-0 bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5 rounded-xl">
+                            <span class="block text-[10px] font-bold uppercase text-sky-600 dark:text-sky-400">Corte -${cutPct}% → Reserva</span>
+                            <span class="font-black text-sky-600 dark:text-sky-300 text-xs">+${formatBRL(item.cutMonthly)}/mês (${formatBRL(item.cutAnnual)}/ano)</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderInstallmentReliefRadar(currentMonth) {
+            const listEl = document.getElementById('rep-installment-radar-list');
+            if (!listEl) return;
+
+            const radar = computeUpcomingInstallmentsRelief(currentMonth.key);
+            const activeMonths = radar.months.filter(m => m.count > 0);
+
+            if (!activeMonths.length) {
+                listEl.innerHTML = `
+                    <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-700 text-center space-y-1">
+                        <p class="font-bold text-slate-500 dark:text-slate-300 text-xs">Nenhum parcelamento encerrando nos próximos 3 meses.</p>
+                        <p class="text-[11px] text-slate-400">Quando suas parcelas estiverem na última prestação, o valor liberado aparecerá aqui para ir direto para sua reserva.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            listEl.innerHTML = `
+                <div class="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/50 text-xs">
+                    <span class="text-[10px] font-extrabold uppercase text-emerald-700 dark:text-emerald-400 block">Folga Nova até ${escapeHtml(radar.months[radar.months.length - 1].monthLabel)}</span>
+                    <strong class="text-sm font-black text-emerald-600 dark:text-emerald-300">+${formatBRL(radar.totalReliefUpcoming)}/mês livres</strong>
+                    <span class="block text-[11px] text-emerald-700/90 dark:text-emerald-300/80 mt-0.5">Converta cada parcela quitada em aporte azul antes de parcelar de novo.</span>
+                </div>
+                ${activeMonths.map(m => `
+                    <div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-1">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="font-extrabold text-slate-800 dark:text-white text-xs">${escapeHtml(m.monthLabel)}${m.offset === 0 ? ' (Mês atual)' : ''}</span>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-500/15 text-sky-600 dark:text-sky-300">+${formatBRL(m.totalAmount)}/mês</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 truncate" title="${m.items.map(i => `${escapeHtml(i.name)} (${i.inst})`).join(', ')}">
+                            ${m.count} fim(ns): ${m.items.slice(0, 2).map(i => `${escapeHtml(i.name)} (${escapeHtml(i.inst)})`).join(', ')}${m.count > 2 ? ` e +${m.count - 2}` : ''}
+                        </p>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        function getReserveDestinationOptions() {
+            const effBanks = typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : (Array.isArray(banks) ? banks : []);
+            const nonCredit = effBanks.filter(b => b && b._isMine !== false && !(typeof isCreditCardBank === 'function' && isCreditCardBank(b)));
+            const dedicatedReserves = nonCredit.filter(b => !(typeof isBankIncludedInTotal === 'function' ? isBankIncludedInTotal(b) : true));
+            const regularAccounts = nonCredit.filter(b => typeof isBankIncludedInTotal === 'function' ? isBankIncludedInTotal(b) : true);
+            return { dedicatedReserves, regularAccounts };
+        }
+
+        function toggleReserveSourceVisibility() {
+            const destSel = document.getElementById('rep-reserve-dest');
+            const srcGroup = document.getElementById('rep-reserve-source-group');
+            const srcSel = document.getElementById('rep-reserve-source');
+            const hintEl = document.getElementById('rep-reserve-mode-hint');
+            if (!destSel || !srcGroup || !hintEl) return;
+
+            const destVal = destSel.value || '';
+            const isBankDest = destVal.startsWith('bank:');
+            const hasManualSource = srcSel && srcSel.options.length > 1;
+
+            if (isBankDest && hasManualSource) {
+                srcGroup.classList.remove('hidden');
+                hintEl.textContent = 'Registra o aporte na sua conta Reserva sem duplicar despesas do mês. Se selecionar uma conta manual de origem, o valor sai dela automaticamente.';
+            } else if (isBankDest) {
+                srcGroup.classList.add('hidden');
+                hintEl.textContent = 'Credita o valor na sua conta Reserva escolhida (sem alterar seu saldo automático via Open Finance e sem inflar gastos do mês).';
+            } else {
+                srcGroup.classList.add('hidden');
+                hintEl.textContent = 'Reserva o valor diretamente no Cofrinho / Saldo Reservado da conta selecionada e atualiza o Termômetro na hora.';
+            }
+        }
+
+        function openReserveTransferModal(prefillAmount = 0, targetMonthKey = null) {
+            const modal = document.getElementById('rep-reserve-transfer-modal');
+            const amountEl = document.getElementById('rep-reserve-amount');
+            const destSel = document.getElementById('rep-reserve-dest');
+            const srcSel = document.getElementById('rep-reserve-source');
+            const monthHidden = document.getElementById('rep-reserve-month-key');
+            const subtitleEl = document.getElementById('rep-reserve-modal-subtitle');
+            if (!modal || !amountEl || !destSel || !srcSel) return;
+
+            const activeKey = targetMonthKey || (MONTHS[currentMonthIndex]?.key) || '2026-11';
+            if (monthHidden) monthHidden.value = activeKey;
+            if (subtitleEl) subtitleEl.textContent = `Referente a ${formatMonthKeyLabelBR(activeKey)} • Proteja sua meta mensal antes de gastar.`;
+
+            const safeAmt = Number(Number(prefillAmount || 0).toFixed(2));
+            amountEl.value = safeAmt > 0 ? String(safeAmt) : '';
+
+            const { dedicatedReserves, regularAccounts } = getReserveDestinationOptions();
+            const destOptions = [];
+            dedicatedReserves.forEach(b => {
+                destOptions.push(`<option value="bank:${escapeHtml(String(b.id))}">🏦 Conta Reserva: ${escapeHtml(b.name)}</option>`);
+            });
+            regularAccounts.forEach(b => {
+                const curVault = typeof getBankVaultBalance === 'function' ? getBankVaultBalance(b) : 0;
+                destOptions.push(`<option value="vault:${escapeHtml(String(b.id))}">🐷 Cofrinho em ${escapeHtml(b.name)} (atual: ${formatBRL(curVault)})</option>`);
+            });
+            if (!destOptions.length) {
+                destOptions.push(`<option value="">Nenhuma conta disponível — clique em "+ Nova Conta Reserva"</option>`);
+            }
+            destSel.innerHTML = destOptions.join('');
+
+            const manualSources = regularAccounts.filter(b => typeof getPluggyLiveBalanceForBank === 'function' ? getPluggyLiveBalanceForBank(b) === null : true);
+            srcSel.innerHTML = `<option value="">Apenas creditar na Reserva (não mexer em outra conta)</option>` +
+                manualSources.map(b => `<option value="${escapeHtml(String(b.id))}">${escapeHtml(b.emoji || '🏦')} ${escapeHtml(b.name)}</option>`).join('');
+
+            toggleReserveSourceVisibility();
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function closeReserveTransferModal() {
+            const modal = document.getElementById('rep-reserve-transfer-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function handleSaveReserveTransfer(e) {
+            if (e) e.preventDefault();
+            if (typeof familySharingEnabled !== 'undefined' && familySharingEnabled &&
+                typeof activeFamilyView !== 'undefined' && activeFamilyView !== 'individual' && activeFamilyView !== 'joint') {
+                showActionToast('Modo leitura familiar ativo: alteração bloqueada.', 'error');
+                return;
+            }
+
+            const amountVal = roundCurrency(parseFloat(document.getElementById('rep-reserve-amount')?.value || '0'));
+            const destVal = document.getElementById('rep-reserve-dest')?.value || '';
+            const srcBankId = document.getElementById('rep-reserve-source')?.value || '';
+            const monthKey = document.getElementById('rep-reserve-month-key')?.value || MONTHS[currentMonthIndex]?.key || '2026-11';
+
+            if (!Number.isFinite(amountVal) || amountVal <= 0) {
+                showActionToast('Informe um valor maior que zero para guardar na reserva.', 'error');
+                return;
+            }
+            if (!destVal) {
+                showActionToast('Crie ou selecione uma conta de destino para sua reserva.', 'error');
+                return;
+            }
+
+            const submitBtn = document.getElementById('btn-submit-rep-reserve');
+            if (submitBtn) submitBtn.disabled = true;
+
+            try {
+                if (destVal.startsWith('vault:')) {
+                    const bankId = destVal.slice(6);
+                    const targetBank = (Array.isArray(banks) ? banks : []).find(b => String(b.id) === String(bankId));
+                    if (!targetBank) {
+                        showActionToast('Conta de destino não encontrada.', 'error');
+                        return;
+                    }
+                    const currentVault = typeof getBankVaultBalance === 'function' ? getBankVaultBalance(targetBank) : 0;
+                    const newVault = roundCurrency(currentVault + amountVal);
+                    targetBank.vaultBalance = newVault;
+                    targetBank.vault_balance = newVault;
+                    targetBank.hasCustomVaultBalance = true;
+                    targetBank.customVaultBalanceValue = newVault;
+                    showActionToast(`${formatBRL(amountVal)} reservado no Cofrinho de ${targetBank.name}!`, 'success');
+                } else if (destVal.startsWith('bank:')) {
+                    const reserveBankId = destVal.slice(5);
+                    const reserveBank = (Array.isArray(banks) ? banks : []).find(b => String(b.id) === String(reserveBankId));
+                    if (!reserveBank) {
+                        showActionToast('Conta Reserva não encontrada.', 'error');
+                        return;
+                    }
+                    const spDate = typeof getSaoPauloDateYYYYMMDD === 'function'
+                        ? getSaoPauloDateYYYYMMDD()
+                        : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+                    const dayNum = Number(spDate.slice(8, 10)) || 1;
+                    const baseTs = Date.now();
+                    if (typeof ensureMonthExists === 'function') ensureMonthExists(monthKey);
+
+                    transactions.push({
+                        id: baseTs,
+                        fitid: `reserve_in_${baseTs}`,
+                        isBalanceAdjustment: true,
+                        lockedSeries: true,
+                        month: monthKey,
+                        day: dayNum,
+                        type: 'income',
+                        desc: `Reserva programada — ${reserveBank.name}`,
+                        amount: amountVal,
+                        cat: 'Ajuste de Saldo',
+                        bankId: reserveBank.id,
+                        cardId: '',
+                        inst: 'Única',
+                        paid: true,
+                        paidAt: spDate
+                    });
+
+                    if (srcBankId && String(srcBankId) !== String(reserveBank.id)) {
+                        const srcBank = (Array.isArray(banks) ? banks : []).find(b => String(b.id) === String(srcBankId));
+                        if (srcBank) {
+                            transactions.push({
+                                id: baseTs + 1,
+                                fitid: `reserve_out_${baseTs}`,
+                                isBalanceAdjustment: true,
+                                lockedSeries: true,
+                                month: monthKey,
+                                day: dayNum,
+                                type: 'expense',
+                                desc: `Reserva programada — Envio para ${reserveBank.name}`,
+                                amount: amountVal,
+                                cat: 'Ajuste de Saldo',
+                                bankId: srcBank.id,
+                                cardId: '',
+                                inst: 'Única',
+                                paid: true,
+                                paidAt: spDate
+                            });
+                        }
+                    }
+                    showActionToast(`${formatBRL(amountVal)} adicionado à Reserva (${reserveBank.name})!`, 'success');
+                }
+
+                closeReserveTransferModal();
+                renderAll();
+
+                if (currentUser) {
+                    currentUser.settings_json = currentUser.settings_json || {};
+                    currentUser.settings_json.banks = banks;
+                    await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                }
+            } catch (err) {
+                console.warn('Erro ao salvar aporte de reserva:', err);
+                showActionToast('Não foi possível salvar a reserva no servidor. Tente novamente.', 'error');
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
+        function initReserveModalListeners() {
+            const modal = document.getElementById('rep-reserve-transfer-modal');
+            const closeBtn = document.getElementById('btn-close-rep-reserve-modal');
+            const cancelBtn = document.getElementById('btn-cancel-rep-reserve-modal');
+            const form = document.getElementById('rep-reserve-transfer-form');
+            const destSel = document.getElementById('rep-reserve-dest');
+            const newBankBtn = document.getElementById('btn-new-reserve-bank');
+
+            if (closeBtn && !closeBtn.dataset.bound) {
+                closeBtn.addEventListener('click', closeReserveTransferModal);
+                closeBtn.dataset.bound = '1';
+            }
+            if (cancelBtn && !cancelBtn.dataset.bound) {
+                cancelBtn.addEventListener('click', closeReserveTransferModal);
+                cancelBtn.dataset.bound = '1';
+            }
+            if (modal && !modal.dataset.bound) {
+                modal.addEventListener('click', (ev) => {
+                    if (ev.target === modal) closeReserveTransferModal();
+                });
+                modal.dataset.bound = '1';
+            }
+            if (destSel && !destSel.dataset.bound) {
+                destSel.addEventListener('change', toggleReserveSourceVisibility);
+                destSel.dataset.bound = '1';
+            }
+            if (newBankBtn && !newBankBtn.dataset.bound) {
+                newBankBtn.addEventListener('click', () => {
+                    closeReserveTransferModal();
+                    if (typeof openBankModal === 'function') {
+                        openBankModal();
+                        const typeSel = document.getElementById('bank-type');
+                        const incChk = document.getElementById('bank-include-total');
+                        if (typeSel) typeSel.value = 'Poupança / Reserva';
+                        if (incChk) incChk.checked = false;
+                        if (typeof handleBankTypeChange === 'function') handleBankTypeChange();
+                    }
+                });
+                newBankBtn.dataset.bound = '1';
+            }
+            if (form && !form.dataset.bound) {
+                form.addEventListener('submit', handleSaveReserveTransfer);
+                form.dataset.bound = '1';
+            }
         }
 
         async function runAiExecutiveDiagnosis() {
@@ -9155,13 +9870,31 @@ function openBankModal() {
                 .join('\n') || '- Nenhuma despesa lançada neste mês.';
 
             const activeInstallmentsTotal = auditData.installmentList.reduce((acc, item) => acc + Number(item.totalRemaining || 0), 0);
+            const reserveBalance = typeof getReserveAccountsBalance === 'function' ? getReserveAccountsBalance(targetMonthKey) : 0;
+            const savingsPlan = (typeof computeRecommendedSavingsPlan === 'function' && ctx)
+                ? computeRecommendedSavingsPlan({
+                    totalIncome: ctx.totalIncome,
+                    totalExpense: ctx.totalExpense,
+                    reserveBalance
+                })
+                : computeRecommendedSavingsPlan({ reserveBalance });
+
+            const reserveStatusLine = savingsPlan.idealEmergencyFund > 0
+                ? `${formatSimMoney(savingsPlan.reserveBal)} de ${formatSimMoney(savingsPlan.idealEmergencyFund)} (${savingsPlan.reserveCompletedPct}% da meta de 3 meses; faltam ${formatSimMoney(savingsPlan.emergencyMissing)})`
+                : `${formatSimMoney(savingsPlan.reserveBal)}`;
+
+            const saveRecommendationLine = savingsPlan.recommendedSaveAmount > 0
+                ? `${formatSimMoney(savingsPlan.recommendedSaveAmount)} (${savingsPlan.recommendedIncomePct}% da renda)${savingsPlan.monthsToCompleteReserve ? ` — mantendo esse aporte, completa a reserva em ~${savingsPlan.monthsToCompleteReserve} mês(es)` : ''}`
+                : (savingsPlan.deficitAmount > 0
+                    ? `R$ 0,00 (0%) neste mês por déficit de ${formatSimMoney(savingsPlan.deficitAmount)} — corte ao menos ${formatSimMoney(savingsPlan.deficitAmount)} para voltar a guardar`
+                    : `R$ 0,00 (0%) — sem margem positiva informada`);
 
             const systemPrompt = `Você é um Auditor e Estrategista Financeiro de Alto Nível.
 Analise EXCLUSIVAMENTE o mês selecionado pelo usuário (${targetMonthLabel} — ${monthRelation}), nunca substitua pelo mês atual do calendário a menos que coincidam.
 Gere um PARECER EXECUTIVO CIRÚRGICO em 3 seções curtas usando APENAS os números fornecidos:
 1. 🩺 DIAGNÓSTICO DO MÊS (${targetMonthLabel}): Diga sem rodeios se o mês está no azul, apertado ou deficitário, citando a relação Receitas x Despesas e a margem/resultado do mês.
 2. ✂️ ONDE AGIR (${isFutureMonth ? 'NO PLANEJAMENTO' : (isPastMonth ? 'PONTOS DE ATENÇÃO' : 'HOJE')}): Indique qual conta, categoria ou parcelamento merece controle imediato com base nas despesas listadas.
-3. 🎯 DIRECIONAMENTO ESTRATÉGICO: 2 ações concretas e adequadas ao status temporal do mês (${monthRelation}) para proteger o caixa e fortalecer a reserva.`;
+3. 🎯 DIRECIONAMENTO ESTRATÉGICO E RESERVA: Dê 2 ações concretas adequadas ao status temporal (${monthRelation}) e SEMPRE recomende explicitamente a porcentagem (%) da renda e o valor em R$ para guardar visando montar/fortalecer a reserva de emergência (ou quanto cortar para destravar a meta, se houver déficit).`;
 
             const userPrompt = ctx ? `DADOS FINANCEIROS REAIS DO MÊS SELECIONADO:
 - Mês Analisado: ${targetMonthLabel} (${targetMonthKey}) — ${monthRelation}
@@ -9169,6 +9902,9 @@ Gere um PARECER EXECUTIVO CIRÚRGICO em 3 seções curtas usando APENAS os núme
 - Receitas do Mês: ${formatSimMoney(ctx.totalIncome)} (Pendentes: ${formatSimMoney(ctx.pendingIncome)})
 - Despesas do Mês: ${formatSimMoney(ctx.totalExpense)} (Pendentes: ${formatSimMoney(ctx.pendingExpense)})
 - Margem / Resultado do Mês (Receitas - Despesas): ${formatSimMoney(ctx.monthlySurplus)}
+- Reserva Atual vs. Meta (3 meses): ${reserveStatusLine}
+- Meta Calculada para Guardar na Reserva (Barra Azul): ${saveRecommendationLine}
+- Sobra Livre Após Guardar a Meta da Reserva: ${formatSimMoney(Math.max(0, savingsPlan.remainingAfterReserve))}
 - Saldo Atual Hoje em Contas: ${formatSimMoney(ctx.totalBankBalance)}
 ${!isFutureMonth ? `- Saldo Projetado Considerando Saldo Hoje e Pendências do Mês: ${formatSimMoney(ctx.projectedMonthBalance)}\n` : ''}- Parcelamentos Ativos Neste Mês: ${auditData.installmentList.length} parcelamento(s) (saldo restante somado a vencer após este mês: ${formatSimMoney(activeInstallmentsTotal)})
 - Principais Despesas de ${targetMonthLabel}:
@@ -9188,21 +9924,26 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
             if (!stillSameMonth) return;
 
             if (!reply && ctx) {
-                const deficit = Number((ctx.totalExpense - ctx.totalIncome).toFixed(2));
+                const deficit = savingsPlan.deficitAmount;
                 const surplus = Number(ctx.monthlySurplus || 0);
                 if (deficit > 0) {
+                    const nextTargetSave = ctx.totalIncome > 0 ? `${formatBRL(ctx.totalIncome * 0.2)} (20% da renda)` : 'um aporte fixo mensal';
                     reply = `**🩺 DIAGNÓSTICO DE ${targetMonthLabel.toUpperCase()}:** Suas despesas superam suas receitas em ${formatBRL(deficit)}. O orçamento previsto para este mês está deficitário.
 
 **✂️ ONDE AGIR ${isFutureMonth ? 'NO PLANEJAMENTO' : 'HOJE'}:** Você possui ${formatBRL(ctx.pendingExpense)} em despesas pendentes em ${targetMonthLabel}. Evite assumir novas compras parceladas que pressionem este mês.
 
-**🎯 DIRECIONAMENTO:** Reduza saídas flexíveis antes da virada do ciclo e priorize quitar faturas e contas essenciais sem juros.`;
+**🎯 DIRECIONAMENTO E RESERVA:** Meta de reserva travada em **R$ 0,00 (0%)** neste mês. Corte ao menos ${formatBRL(deficit)} em gastos flexíveis para zerar o déficit e destravar sua meta de guardar ${nextTargetSave} (reserva atual: ${formatBRL(savingsPlan.reserveBal)} / ${savingsPlan.reserveCompletedPct}%).`;
                 } else {
                     const actionTimeLabel = isFutureMonth ? 'NO PLANEJAMENTO' : (isPastMonth ? 'NA REVISÃO' : 'HOJE');
+                    const pctTxt = savingsPlan.recommendedIncomePct > 0 ? ` (${savingsPlan.recommendedIncomePct}% da renda)` : '';
+                    const timelineTxt = savingsPlan.monthsToCompleteReserve
+                        ? ` Nesse ritmo, você fecha sua reserva de emergência em cerca de ${savingsPlan.monthsToCompleteReserve} mês(es).`
+                        : '';
                     reply = `**🩺 DIAGNÓSTICO DE ${targetMonthLabel.toUpperCase()}:** Orçamento no azul com margem livre de ${formatBRL(surplus)} entre receitas e despesas. Situação saudável.
 
 **✂️ ONDE AGIR ${actionTimeLabel}:** Monitore os ${formatBRL(ctx.pendingExpense)} de contas pendentes neste mês para manter a previsibilidade do caixa.
 
-**🎯 DIRECIONAMENTO:** Direcione parte da margem livre (${formatBRL(Math.max(0, surplus * 0.5))}) para a reserva de emergência e limite novos parcelamentos.`;
+**🎯 DIRECIONAMENTO E RESERVA:** Separe **${formatBRL(savingsPlan.recommendedSaveAmount)}${pctTxt}** logo no início do ciclo para a sua Reserva de Emergência (atualmente em ${formatBRL(savingsPlan.reserveBal)} — ${savingsPlan.reserveCompletedPct}% da meta), restando ${formatBRL(Math.max(0, savingsPlan.remainingAfterReserve))} livres para o mês.${timelineTxt}`;
                 }
             } else if (!reply) {
                 reply = `**🩺 DIAGNÓSTICO:** Orçamento de ${targetMonthLabel} monitorado pelo sistema com integridade financeira.`;
@@ -11916,6 +12657,7 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
             populateBankSelectors();
             renderCategorySelects();
             initImprovementSuggestionSlots();
+            initReserveModalListeners();
             lucide.createIcons();
 
             const { data } = await supabaseClient.auth.getSession();
