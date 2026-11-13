@@ -8646,6 +8646,11 @@ function openBankModal() {
             const titleEl = document.getElementById('rep-month-title');
             if (titleEl) titleEl.textContent = currentMonth.label;
 
+            const aiOpinionBox = document.getElementById('rep-ai-opinion-box');
+            if (aiOpinionBox && aiOpinionBox.dataset.monthKey && aiOpinionBox.dataset.monthKey !== currentMonth.key) {
+                aiOpinionBox.classList.add('hidden');
+            }
+
             const effectiveBanksList = typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : (banks || []);
             const allEffectiveTransactions = typeof getEffectiveTransactions === 'function' ? getEffectiveTransactions() : (transactions || []);
 
@@ -9101,31 +9106,73 @@ function openBankModal() {
         }
 
         async function runAiExecutiveDiagnosis() {
-            const btn = document.getElementById('btn-rep-ai-audit');
             const box = document.getElementById('rep-ai-opinion-box');
             if (!box) return;
 
+            const todayStr = ((typeof getSaoPauloDateYYYYMMDD === 'function')
+                ? getSaoPauloDateYYYYMMDD()
+                : new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()));
+            const todayMonthKey = todayStr.slice(0, 7);
+            const selectedMonth = (Array.isArray(MONTHS) && MONTHS[currentMonthIndex])
+                ? MONTHS[currentMonthIndex]
+                : (MONTHS?.[0] || { key: todayMonthKey, label: todayMonthKey });
+            const selectedMonthKey = selectedMonth.key || todayMonthKey;
+
+            box.dataset.monthKey = selectedMonthKey;
             box.classList.remove('hidden');
-            box.innerHTML = `<span class="flex items-center gap-2 text-rose-300 font-bold"><i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> O Consultor IA está auditando suas receitas, despesas e parcelas...</span>`;
+            box.innerHTML = `<span class="flex items-center gap-2 text-rose-300 font-bold"><i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> O Consultor IA está auditando suas receitas, despesas e parcelas de ${escapeHtml(selectedMonth.label || selectedMonthKey)}...</span>`;
             if (window.lucide) window.lucide.createIcons();
 
-            const todayStr = ((typeof getSaoPauloDateYYYYMMDD === 'function') ? getSaoPauloDateYYYYMMDD() : new Date().toISOString().slice(0, 10));
-            const ctx = typeof buildFinancialAiContext === 'function' ? buildFinancialAiContext(todayStr) : null;
-            const auditData = (ctx && typeof buildDetailedTransactionsSummaryForAi === 'function') ? buildDetailedTransactionsSummaryForAi(ctx.curMonthKey) : { installmentList: [] };
+            const ctx = typeof buildFinancialAiContext === 'function' ? buildFinancialAiContext(selectedMonthKey) : null;
+            const targetMonthKey = ctx?.curMonthKey || selectedMonthKey;
+            const targetMonthLabel = ctx?.currentMonthLabel || selectedMonth.label || targetMonthKey;
+            const auditData = (ctx && typeof buildDetailedTransactionsSummaryForAi === 'function')
+                ? buildDetailedTransactionsSummaryForAi(targetMonthKey, { onlyActiveInTargetMonth: true })
+                : { installmentList: [], currentMonthExpenses: [] };
+
+            const isFutureMonth = targetMonthKey > todayMonthKey;
+            const isPastMonth = targetMonthKey < todayMonthKey;
+            const monthRelation = isFutureMonth
+                ? 'MÊS FUTURO (planejamento/projeção)'
+                : (isPastMonth ? 'MÊS PASSADO (encerrado)' : 'MÊS ATUAL (em andamento)');
+
+            const visibleTxs = (typeof getHomeVisibleTransactions === 'function')
+                ? getHomeVisibleTransactions(targetMonthKey)
+                : (auditData.currentMonthExpenses || []);
+            const topExpensesText = visibleTxs
+                .filter(t => t && t.type === 'expense')
+                .map(t => ({
+                    desc: t.desc || 'Despesa',
+                    amount: t.isConsolidatedBill
+                        ? Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0)
+                        : Number(t.amount || 0),
+                    cat: t.cat || 'Geral',
+                    paid: Boolean(t.paid)
+                }))
+                .sort((a, b) => b.amount - a.amount)
+                .slice(0, 8)
+                .map(d => `- ${d.desc} (${d.cat}): ${formatSimMoney(d.amount)} [${d.paid ? 'Pago' : 'Pendente'}]`)
+                .join('\n') || '- Nenhuma despesa lançada neste mês.';
+
+            const activeInstallmentsTotal = auditData.installmentList.reduce((acc, item) => acc + Number(item.totalRemaining || 0), 0);
 
             const systemPrompt = `Você é um Auditor e Estrategista Financeiro de Alto Nível.
-Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIRÚRGICO em 3 seções curtas:
-1. 🩺 DIAGNÓSTICO DO MÊS: Diga sem rodeios se a situação está sob controle, apertada ou crítica, citando a relação receitas x despesas.
-2. ✂️ ONDE AGIR HOJE: Indique qual conta ou categoria deve ser travada para proteger o caixa.
-3. 🎯 DIRECIONAMENTO ESTRATÉGICO: 2 ações concretas para fechar o mês no azul e aumentar a reserva.`;
+Analise EXCLUSIVAMENTE o mês selecionado pelo usuário (${targetMonthLabel} — ${monthRelation}), nunca substitua pelo mês atual do calendário a menos que coincidam.
+Gere um PARECER EXECUTIVO CIRÚRGICO em 3 seções curtas usando APENAS os números fornecidos:
+1. 🩺 DIAGNÓSTICO DO MÊS (${targetMonthLabel}): Diga sem rodeios se o mês está no azul, apertado ou deficitário, citando a relação Receitas x Despesas e a margem/resultado do mês.
+2. ✂️ ONDE AGIR (${isFutureMonth ? 'NO PLANEJAMENTO' : (isPastMonth ? 'PONTOS DE ATENÇÃO' : 'HOJE')}): Indique qual conta, categoria ou parcelamento merece controle imediato com base nas despesas listadas.
+3. 🎯 DIRECIONAMENTO ESTRATÉGICO: 2 ações concretas e adequadas ao status temporal do mês (${monthRelation}) para proteger o caixa e fortalecer a reserva.`;
 
-            const userPrompt = ctx ? `DADOS FINANCEIROS REAIS:
-- Mês: ${ctx.currentMonthLabel}
-- Saldo Hoje: ${formatSimMoney(ctx.totalBankBalance)}
-- Receitas: ${formatSimMoney(ctx.totalIncome)} (Pendentes: ${formatSimMoney(ctx.pendingIncome)})
-- Despesas: ${formatSimMoney(ctx.totalExpense)} (Pendentes: ${formatSimMoney(ctx.pendingExpense)})
-- Saldo Projetado: ${formatSimMoney(ctx.projectedMonthBalance)}
-- Compras Parceladas Ativas: ${auditData.installmentList.length} parcelamentos (total restante: ${formatSimMoney(auditData.installmentList.reduce((a, b) => a + b.totalRemaining, 0))})` : 'Auditoria do mês';
+            const userPrompt = ctx ? `DADOS FINANCEIROS REAIS DO MÊS SELECIONADO:
+- Mês Analisado: ${targetMonthLabel} (${targetMonthKey}) — ${monthRelation}
+- Data de Referência Hoje: ${todayStr}
+- Receitas do Mês: ${formatSimMoney(ctx.totalIncome)} (Pendentes: ${formatSimMoney(ctx.pendingIncome)})
+- Despesas do Mês: ${formatSimMoney(ctx.totalExpense)} (Pendentes: ${formatSimMoney(ctx.pendingExpense)})
+- Margem / Resultado do Mês (Receitas - Despesas): ${formatSimMoney(ctx.monthlySurplus)}
+- Saldo Atual Hoje em Contas: ${formatSimMoney(ctx.totalBankBalance)}
+${!isFutureMonth ? `- Saldo Projetado Considerando Saldo Hoje e Pendências do Mês: ${formatSimMoney(ctx.projectedMonthBalance)}\n` : ''}- Parcelamentos Ativos Neste Mês: ${auditData.installmentList.length} parcelamento(s) (saldo restante somado a vencer após este mês: ${formatSimMoney(activeInstallmentsTotal)})
+- Principais Despesas de ${targetMonthLabel}:
+${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
 
             let reply = null;
             if (typeof queryGeminiApi === 'function') {
@@ -9136,21 +9183,29 @@ Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIR�
                 }
             }
 
+            // Ignora a resposta se o usuário já trocou para outro mês enquanto aguardava a IA
+            const stillSameMonth = (MONTHS[currentMonthIndex]?.key || selectedMonthKey) === selectedMonthKey;
+            if (!stillSameMonth) return;
+
             if (!reply && ctx) {
-                const deficit = ctx.totalExpense - ctx.totalIncome;
-                reply = deficit > 0
-                    ? `**🩺 DIAGNÓSTICO:** Suas despesas superam suas receitas em ${formatBRL(deficit)}. O orçamento está deficitário.
+                const deficit = Number((ctx.totalExpense - ctx.totalIncome).toFixed(2));
+                const surplus = Number(ctx.monthlySurplus || 0);
+                if (deficit > 0) {
+                    reply = `**🩺 DIAGNÓSTICO DE ${targetMonthLabel.toUpperCase()}:** Suas despesas superam suas receitas em ${formatBRL(deficit)}. O orçamento previsto para este mês está deficitário.
 
-**✂️ ONDE AGIR HOJE:** Você ainda tem ${formatBRL(ctx.pendingExpense)} em despesas pendentes. Suspenda novos gastos no cartão até o fechamento da fatura.
+**✂️ ONDE AGIR ${isFutureMonth ? 'NO PLANEJAMENTO' : 'HOJE'}:** Você possui ${formatBRL(ctx.pendingExpense)} em despesas pendentes em ${targetMonthLabel}. Evite assumir novas compras parceladas que pressionem este mês.
 
-**🎯 DIRECIONAMENTO:** Reduza 20% das saídas flexíveis e priorize liquidar contas com juros primeiro.`
-                    : `**🩺 DIAGNÓSTICO:** Orçamento no azul com sobra projetada de ${formatBRL(ctx.projectedMonthBalance)}. Situação saudável.
+**🎯 DIRECIONAMENTO:** Reduza saídas flexíveis antes da virada do ciclo e priorize quitar faturas e contas essenciais sem juros.`;
+                } else {
+                    const actionTimeLabel = isFutureMonth ? 'NO PLANEJAMENTO' : (isPastMonth ? 'NA REVISÃO' : 'HOJE');
+                    reply = `**🩺 DIAGNÓSTICO DE ${targetMonthLabel.toUpperCase()}:** Orçamento no azul com margem livre de ${formatBRL(surplus)} entre receitas e despesas. Situação saudável.
 
-**✂️ ONDE AGIR HOJE:** Monitore os ${formatBRL(ctx.pendingExpense)} de contas pendentes para manter a previsibilidade.
+**✂️ ONDE AGIR ${actionTimeLabel}:** Monitore os ${formatBRL(ctx.pendingExpense)} de contas pendentes neste mês para manter a previsibilidade do caixa.
 
-**🎯 DIRECIONAMENTO:** Reserve metade da sobra livre para a sua reserva de emergência e evite comprometer mais de 30% da renda em novas parcelas.`;
+**🎯 DIRECIONAMENTO:** Direcione parte da margem livre (${formatBRL(Math.max(0, surplus * 0.5))}) para a reserva de emergência e limite novos parcelamentos.`;
+                }
             } else if (!reply) {
-                reply = `**🩺 DIAGNÓSTICO:** Orçamento monitorado pelo sistema com integridade financeira.`;
+                reply = `**🩺 DIAGNÓSTICO:** Orçamento de ${targetMonthLabel} monitorado pelo sistema com integridade financeira.`;
             }
 
             const formatted = escapeHtml(reply)
@@ -9158,15 +9213,22 @@ Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIR�
                 .replace(/\n\n/g, '<div class="my-2"></div>')
                 .replace(/\n/g, '<br>');
 
+            box.dataset.monthKey = selectedMonthKey;
             box.innerHTML = `
                 <div class="flex items-center justify-between pb-1 border-b border-rose-500/20 mb-2">
                     <span class="text-[11px] font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Parecer Estratégico da IA
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Parecer Estratégico da IA — ${escapeHtml(targetMonthLabel)}
                     </span>
-                    <button onclick="document.getElementById('rep-ai-opinion-box').classList.add('hidden')" class="text-[10px] text-slate-400 hover:text-white font-bold">Fechar</button>
+                    <button type="button" id="btn-close-rep-ai-opinion" class="text-[10px] text-slate-400 hover:text-white font-bold">Fechar</button>
                 </div>
                 <div>${formatted}</div>
             `;
+            const closeBtn = document.getElementById('btn-close-rep-ai-opinion');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    box.classList.add('hidden');
+                });
+            }
             if (window.lucide) window.lucide.createIcons();
         }
         window.runAiExecutiveDiagnosis = runAiExecutiveDiagnosis;
@@ -15683,13 +15745,16 @@ function renderAiChatMessages() {
 }
 
 // Função auxiliar para mapear todas as compras parceladas e transações reais do usuário
-function buildDetailedTransactionsSummaryForAi(curMonthKey) {
+function buildDetailedTransactionsSummaryForAi(curMonthKey, options = {}) {
+    const onlyActiveInTargetMonth = Boolean(options && options.onlyActiveInTargetMonth);
     const effectiveTxs = (typeof getEffectiveTransactions === 'function') ? getEffectiveTransactions() : (Array.isArray(transactions) ? transactions : []);
     
-    // Mapeamento de compras parceladas em todo o histórico e futuro
+    // Mapeamento de compras parceladas em todo o histórico e futuro (ou estritamente ativas no mês auditado)
     const installmentMap = new Map();
     effectiveTxs.forEach(t => {
         if (!t || t.type !== 'expense' || t.isInitialBalance || t.isBalanceAdjustment) return;
+        const txMonthKey = (typeof normalizeMonthKey === 'function') ? normalizeMonthKey(t.month, curMonthKey) : t.month;
+        if (onlyActiveInTargetMonth && txMonthKey !== curMonthKey) return;
         
         let cur = null, tot = null;
         if (t.inst && t.inst.includes('/')) {
@@ -15710,8 +15775,8 @@ function buildDetailedTransactionsSummaryForAi(curMonthKey) {
                 : t.desc.replace(/\s*\(\d+\/\d+\).*/, '').trim();
 
             const entryKey = cleanName.toLowerCase();
-            // Mantém a versão do mês atual ou mais recente
-            if (!installmentMap.has(entryKey) || t.month === curMonthKey) {
+            // Mantém a versão do mês selecionado ou mais recente
+            if (!installmentMap.has(entryKey) || txMonthKey === curMonthKey) {
                 installmentMap.set(entryKey, {
                     name: cleanName,
                     fullDesc: t.desc,
@@ -15719,7 +15784,7 @@ function buildDetailedTransactionsSummaryForAi(curMonthKey) {
                     currentInst: cur,
                     totalInst: tot,
                     remainingInst: Math.max(0, tot - cur),
-                    monthKey: t.month,
+                    monthKey: txMonthKey,
                     paid: Boolean(t.paid),
                     category: t.cat || 'Geral',
                     sampleTx: t
