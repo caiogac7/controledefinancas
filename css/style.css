@@ -206,6 +206,24 @@ html.light .pluggy-bank-card .w-full.bg-slate-800 {
     .pluggy-card:active, .pluggy-bank-card:active {
         transform: scale(0.98) !important;
     }
+    .pluggy-card.no-tap-scale:active {
+        transform: none !important;
+    }
+}
+
+/* Navegação rápida por sub-abas nos Relatórios apenas em telas mobile */
+@media screen and (max-width: 767px) {
+    .rep-mob-hidden {
+        display: none !important;
+    }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 /* BADGES FLUTUANTES EM RELEVO 3D */
