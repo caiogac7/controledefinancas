@@ -394,7 +394,7 @@ html.dark [class*="dark:border-slate-700"] {
 }
 
 @media print {
-    aside, header, nav, .no-print { display: none !important; }
+    aside, header, nav, .no-print, .help-tip-btn { display: none !important; }
     main { margin-left: 0 !important; padding: 0 !important; }
     body { background: #ffffff !important; color: #000000 !important; }
 }
@@ -463,5 +463,65 @@ button, [role="button"], a {
         padding-top: 0.35rem !important;
         padding-bottom: 0.35rem !important;
         font-size: 0.7rem !important;
+    }
+}
+
+/* ==========================================================================
+   SISTEMA DISCRETO DE AJUDA CONTEXTUAL (?) E MODAL EXPLICATIVO
+   ========================================================================== */
+.help-tip-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 17px;
+    height: 17px;
+    min-width: 17px;
+    border-radius: 9999px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    cursor: pointer;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: all 0.18s ease;
+}
+
+/* Expande área invisível de toque em celulares sem alterar o tamanho visual */
+.help-tip-btn::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+}
+
+.help-tip-btn:hover,
+.help-tip-btn:focus-visible {
+    color: #ffffff;
+    background: #0284c7;
+    border-color: #38bdf8;
+    outline: none;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
+}
+
+.help-tip-btn--on-dark {
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.24);
+}
+
+body.hide-help-tips .help-tip-btn {
+    display: none !important;
+}
+
+@media (max-width: 640px) {
+    .help-tip-btn {
+        width: 18px;
+        height: 18px;
+        min-width: 18px;
+        font-size: 11px;
     }
 }

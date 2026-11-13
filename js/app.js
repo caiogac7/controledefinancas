@@ -324,6 +324,50 @@
         let familyLinks = [];       // Vínculos e convites da tabela public.account_links
         let familyMemberProfiles = {}; // Perfis/dados carregados de contas familiares aceitas
         let activeFamilyView = 'individual'; // 'individual' | 'joint' | '<user_id>'
+        let showHelpTips = true;    // Preferência global das dicas discretas (?)
+        let _activeViewName = 'dashboard';
+        const _dirtyViews = { dashboard: false, banks: true, installments: true, reports: true, settings: true };
+        let _effectiveCacheVersion = 1;
+        let _effectiveTxCache = null;
+        let _effectiveTxCacheKey = '';
+        let _effectiveBanksCache = null;
+        let _effectiveBanksCacheKey = '';
+        let _txByMonthCache = null;
+        let _txByMonthCacheKey = '';
+        const _bankMetricsCache = new Map();
+        const _profileLoadPromises = new Map();
+        let _dailyPluggySyncInFlight = false;
+
+        function invalidateEffectiveDataCache(options = {}) {
+            _effectiveCacheVersion += 1;
+            _effectiveTxCache = null;
+            _effectiveTxCacheKey = '';
+            _effectiveBanksCache = null;
+            _effectiveBanksCacheKey = '';
+            _txByMonthCache = null;
+            _txByMonthCacheKey = '';
+            _bankMetricsCache.clear();
+            if (!options.keepInvoiceCache && typeof invalidateCardInvoiceCache === 'function') {
+                invalidateCardInvoiceCache();
+            }
+        }
+
+        function refreshLucideIcons(rootEl) {
+            if (!window.lucide || typeof window.lucide.createIcons !== 'function') return;
+            try {
+                if (rootEl && typeof rootEl.querySelector === 'function') {
+                    const pendingIcons = rootEl.querySelector('i[data-lucide]');
+                    if (!pendingIcons) return;
+                    window.lucide.createIcons({ root: rootEl });
+                    return;
+                }
+                if (document.querySelector('i[data-lucide]')) {
+                    window.lucide.createIcons();
+                }
+            } catch (_) {
+                try { window.lucide.createIcons(); } catch (__) {}
+            }
+        }
 
         // Retorna o dia atual (1..31) no fuso America/Sao_Paulo
         function getSaoPauloCurrentDay() {
@@ -811,7 +855,7 @@
             const idx = MONTHS.findIndex(m => m.key === monthKey);
             if (idx !== -1) {
                 currentMonthIndex = idx;
-                renderAll();
+                renderAll({ isMonthSwitch: true });
             }
             closeMonthPickerModal();
         }
@@ -1793,103 +1837,147 @@
 
             async fetchOrCreateProfile(authUser) {
                 const userId = authUser.id;
+                if (_profileLoadPromises.has(userId)) {
+                    return _profileLoadPromises.get(userId);
+                }
 
-                // Busca completa e paginada de extratos (bank_statements) sem truncamento pelo limite padrão de 1.000 linhas do PostgREST
-                async function fetchAllStatements(uId) {
-                    let stmts = [];
-                    const pageSize = 1000;
-                    let from = 0;
-                    while (true) {
-                        const { data, error } = await supabaseClient
-                            .from('bank_statements')
-                            .select('*')
+                const loadTask = (async () => {
+                    // Busca completa e paginada em paralelo quando houver > 1.000 linhas
+                    async function fetchPaginatedTable(tableName, uId) {
+                        const pageSize = 1000;
+                        const { data: firstData, count, error } = await supabaseClient
+                            .from(tableName)
+                            .select('*', { count: 'exact' })
                             .eq('user_id', uId)
                             .order('id', { ascending: false })
-                            .range(from, from + pageSize - 1);
+                            .range(0, pageSize - 1);
+
                         if (error) {
-                            console.error('[fetchAllStatements] Erro ao carregar extratos:', error);
-                            break;
+                            console.error(`[${tableName}] Erro ao carregar dados:`, error);
+                            return [];
                         }
-                        if (!Array.isArray(data) || data.length === 0) break;
-                        stmts.push(...data);
-                        if (data.length < pageSize) break;
-                        from += pageSize;
-                        if (from >= 40000) break;
-                    }
-                    console.log(`[fetchAllStatements] ✅ ${stmts.length} extratos carregados com sucesso do Supabase.`);
-                    return stmts;
-                }
-
-                // Busca completa e paginada de transações (transactions) sem truncamento
-                async function fetchAllTransactions(uId) {
-                    let txs = [];
-                    const pageSize = 1000;
-                    let from = 0;
-                    while (true) {
-                        const { data, error } = await supabaseClient
-                            .from('transactions')
-                            .select('*')
-                            .eq('user_id', uId)
-                            .order('id', { ascending: false })
-                            .range(from, from + pageSize - 1);
-                        if (error) {
-                            console.error('[fetchAllTransactions] Erro ao carregar transações:', error);
-                            break;
+                        const firstRows = Array.isArray(firstData) ? firstData : [];
+                        if (firstRows.length < pageSize) {
+                            return firstRows;
                         }
-                        if (!Array.isArray(data) || data.length === 0) break;
-                        txs.push(...data);
-                        if (data.length < pageSize) break;
-                        from += pageSize;
-                        if (from >= 40000) break;
+
+                        const rows = [...firstRows];
+                        if (typeof count === 'number' && count > pageSize) {
+                            const maxRows = Math.min(count, 40000);
+                            const offsets = [];
+                            for (let from = pageSize; from < maxRows; from += pageSize) {
+                                offsets.push(from);
+                            }
+                            if (offsets.length > 0) {
+                                const pages = await Promise.all(
+                                    offsets.map(from =>
+                                        supabaseClient
+                                            .from(tableName)
+                                            .select('*')
+                                            .eq('user_id', uId)
+                                            .order('id', { ascending: false })
+                                            .range(from, from + pageSize - 1)
+                                    )
+                                );
+                                pages.forEach(pRes => {
+                                    if (!pRes?.error && Array.isArray(pRes.data)) {
+                                        rows.push(...pRes.data);
+                                    }
+                                });
+                            }
+                        } else {
+                            let from = pageSize;
+                            while (from < 40000) {
+                                const { data: nextData, error: nextErr } = await supabaseClient
+                                    .from(tableName)
+                                    .select('*')
+                                    .eq('user_id', uId)
+                                    .order('id', { ascending: false })
+                                    .range(from, from + pageSize - 1);
+                                if (nextErr || !Array.isArray(nextData) || nextData.length === 0) break;
+                                rows.push(...nextData);
+                                if (nextData.length < pageSize) break;
+                                from += pageSize;
+                            }
+                        }
+                        return rows;
                     }
-                    console.log(`[fetchAllTransactions] ✅ ${txs.length} transações carregadas com sucesso do Supabase.`);
-                    return txs;
+
+                    async function fetchLightProfile(uId) {
+                        const lightCols = 'id, name, email, phone, photo, terms_accepted, terms_accepted_at, settings_json, updated_at';
+                        const res = await supabaseClient.from('profiles').select(lightCols).eq('id', uId).maybeSingle();
+                        if (!res.error) return res;
+                        return await supabaseClient.from('profiles').select('*').eq('id', uId).maybeSingle();
+                    }
+
+                    const [profRes, banksRes, catsRes, allTxs, allStmts, auditsRes, cardsRes, creditBillsRes] = await Promise.all([
+                        fetchLightProfile(userId),
+                        supabaseClient.from('banks').select('*').eq('user_id', userId),
+                        supabaseClient.from('categories').select('*').eq('user_id', userId),
+                        fetchPaginatedTable('transactions', userId),
+                        fetchPaginatedTable('bank_statements', userId),
+                        supabaseClient.from('balance_audits').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
+                        supabaseClient.from('credit_cards').select('*').eq('user_id', userId),
+                        supabaseClient.from('credit_bills').select('*').eq('user_id', userId)
+                    ]);
+
+                    let profile = profRes.data;
+                    const meta = authUser.user_metadata || {};
+                    const googleName = meta.full_name || meta.name || authUser.email.split('@')[0];
+                    const googlePhoto = meta.avatar_url || meta.picture || '';
+
+                    // Busca transactions_json sob demanda apenas se o relacional estiver vazio ou divergir da contagem salva
+                    if (profile && !Array.isArray(profile.transactions_json)) {
+                        const savedCount = profile?.settings_json?.savedTxCount;
+                        const needJsonFallback = allTxs.length === 0 || savedCount == null || Number(savedCount) !== allTxs.length;
+                        if (needJsonFallback) {
+                            const { data: txJsonRow } = await supabaseClient
+                                .from('profiles')
+                                .select('transactions_json')
+                                .eq('id', userId)
+                                .maybeSingle();
+                            profile.transactions_json = Array.isArray(txJsonRow?.transactions_json) ? txJsonRow.transactions_json : [];
+                        } else {
+                            profile.transactions_json = [];
+                        }
+                    }
+
+                    if (!profile) {
+                        profile = {
+                            id: userId,
+                            name: googleName,
+                            email: authUser.email,
+                            phone: '',
+                            photo: googlePhoto,
+                            terms_accepted: true,
+                            terms_accepted_at: getSaoPauloTimestamp(),
+                            transactions_json: [],
+                            settings_json: { banks: DEFAULT_BANKS, categories: DEFAULT_CATEGORIES, customEmojis: {}, bankStatements: [], creditBills: [], showHelpTips: true },
+                            updated_at: getSaoPauloTimestamp()
+                        };
+                        await supabaseClient.from('profiles').upsert(profile);
+                    } else if (!profile.photo && googlePhoto) {
+                        profile.photo = googlePhoto;
+                        await supabaseClient.from('profiles').update({ photo: googlePhoto }).eq('id', userId);
+                    }
+
+                    profile._relBanks = (!banksRes.error && Array.isArray(banksRes.data)) ? banksRes.data : [];
+                    profile._relCategories = (!catsRes.error && Array.isArray(catsRes.data)) ? catsRes.data : [];
+                    profile._relTransactions = Array.isArray(allTxs) ? allTxs : [];
+                    profile._relStatements = Array.isArray(allStmts) ? allStmts : [];
+                    profile._relAudits = (!auditsRes?.error && Array.isArray(auditsRes?.data)) ? auditsRes.data : [];
+                    profile._relCards = (!cardsRes?.error && Array.isArray(cardsRes?.data)) ? cardsRes.data : [];
+                    profile._relCreditBills = (!creditBillsRes?.error && Array.isArray(creditBillsRes?.data)) ? creditBillsRes.data : [];
+
+                    return profile;
+                })();
+
+                _profileLoadPromises.set(userId, loadTask);
+                try {
+                    return await loadTask;
+                } finally {
+                    _profileLoadPromises.delete(userId);
                 }
-
-                const [profRes, banksRes, catsRes, allTxs, allStmts, auditsRes, cardsRes, creditBillsRes] = await Promise.all([
-                    supabaseClient.from('profiles').select('*').eq('id', userId).maybeSingle(),
-                    supabaseClient.from('banks').select('*').eq('user_id', userId),
-                    supabaseClient.from('categories').select('*').eq('user_id', userId),
-                    fetchAllTransactions(userId),
-                    fetchAllStatements(userId),
-                    supabaseClient.from('balance_audits').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
-                    supabaseClient.from('credit_cards').select('*').eq('user_id', userId),
-                    supabaseClient.from('credit_bills').select('*').eq('user_id', userId)
-                ]);
-
-                let profile = profRes.data;
-                const meta = authUser.user_metadata || {};
-                const googleName = meta.full_name || meta.name || authUser.email.split('@')[0];
-                const googlePhoto = meta.avatar_url || meta.picture || '';
-
-                if (!profile) {
-                    profile = {
-                        id: userId,
-                        name: googleName,
-                        email: authUser.email,
-                        phone: '',
-                        photo: googlePhoto,
-                        terms_accepted: true,
-                        terms_accepted_at: getSaoPauloTimestamp(),
-                        transactions_json: [],
-                        settings_json: { banks: DEFAULT_BANKS, categories: DEFAULT_CATEGORIES, customEmojis: {}, bankStatements: [], creditBills: [] },
-                        updated_at: getSaoPauloTimestamp()
-                    };
-                    await supabaseClient.from('profiles').upsert(profile);
-                } else if (!profile.photo && googlePhoto) {
-                    profile.photo = googlePhoto;
-                    await supabaseClient.from('profiles').update({ photo: googlePhoto }).eq('id', userId);
-                }
-
-                profile._relBanks = (!banksRes.error && Array.isArray(banksRes.data)) ? banksRes.data : [];
-                profile._relCategories = (!catsRes.error && Array.isArray(catsRes.data)) ? catsRes.data : [];
-                profile._relTransactions = Array.isArray(allTxs) ? allTxs : [];
-                profile._relStatements = Array.isArray(allStmts) ? allStmts : [];
-                profile._relAudits = (!auditsRes?.error && Array.isArray(auditsRes?.data)) ? auditsRes.data : [];
-                profile._relCards = (!cardsRes?.error && Array.isArray(cardsRes?.data)) ? cardsRes.data : [];
-                profile._relCreditBills = (!creditBillsRes?.error && Array.isArray(creditBillsRes?.data)) ? creditBillsRes.data : [];
-
-                return profile;
             },
 
             async recordBalanceAudit(userId, auditRow) {
@@ -1951,6 +2039,8 @@
                         const k = String((typeof getStoredAiKey === 'function' ? getStoredAiKey() : '') || profileData?.settings_json?.geminiApiKey || '').trim();
                         return k;
                     })(),
+                    showHelpTips: typeof showHelpTips === 'boolean' ? showHelpTips : true,
+                    savedTxCount: Array.isArray(transactionsArray) ? transactionsArray.length : 0,
                     ...(existingTerms ? { termsAcceptance: existingTerms } : {})
                 };
 
@@ -2466,6 +2556,14 @@
             const bId = String(bankObj.id);
             const rawBId = String(bankObj._rawBankId || bankObj.id);
             const curMonthKey = targetMonthKey || MONTHS[currentMonthIndex]?.key || '2026-11';
+            const pluggyLiveBal = getPluggyLiveBalanceForBank(bankObj);
+            const txLen = Array.isArray(transactions) ? transactions.length : 0;
+            const cacheKey = !txList
+                ? `${_effectiveCacheVersion}|${activeFamilyView}|${txLen}|${bId}|${rawBId}|${curMonthKey}|${typeof pluggyLiveBal === 'number' ? pluggyLiveBal : 'm'}`
+                : '';
+            if (cacheKey && _bankMetricsCache.has(cacheKey)) {
+                return _bankMetricsCache.get(cacheKey);
+            }
 
             let sourceTxs = txList;
             if (!sourceTxs) {
@@ -2506,7 +2604,6 @@
             });
 
             // Para contas sincronizadas via Open Finance (Pluggy), o saldo da Pluggy já inclui todas as transações liquidadas pelo banco
-            const pluggyLiveBal = getPluggyLiveBalanceForBank(bankObj);
             if (typeof pluggyLiveBal === 'number' && bankObj.type !== 'Cartão de Crédito') {
                 const pluggyBase = Number(pluggyLiveBal);
                 const syncIso = bankObj.lastSyncAt || bankObj.updated_at || getSaoPauloTimestamp();
@@ -2525,7 +2622,7 @@
                 const pendingNetMonth = Number((pendingIncomeMonth - pendingExpenseMonth).toFixed(2));
                 const projectedBalance = Number((currentBalance + pendingNetMonth).toFixed(2));
 
-                return {
+                const pluggyMetrics = {
                     carryIn: Number(pluggyBase.toFixed(2)),
                     paidIncomeMonth: Number(paidIncomeMonth.toFixed(2)),
                     paidExpenseMonth: Number(paidExpenseMonth.toFixed(2)),
@@ -2536,13 +2633,15 @@
                     pendingNetMonth,
                     projectedBalance
                 };
+                if (cacheKey) _bankMetricsCache.set(cacheKey, pluggyMetrics);
+                return pluggyMetrics;
             }
 
             const currentBalance = Number((carryIn + paidIncomeMonth - paidExpenseMonth + adjustmentsMonth).toFixed(2));
             const pendingNetMonth = Number((pendingIncomeMonth - pendingExpenseMonth).toFixed(2));
             const projectedBalance = Number((currentBalance + pendingNetMonth).toFixed(2));
 
-            return {
+            const metricsResult = {
                 carryIn: Number(carryIn.toFixed(2)),
                 paidIncomeMonth: Number(paidIncomeMonth.toFixed(2)),
                 paidExpenseMonth: Number(paidExpenseMonth.toFixed(2)),
@@ -2553,6 +2652,8 @@
                 pendingNetMonth,
                 projectedBalance
             };
+            if (cacheKey) _bankMetricsCache.set(cacheKey, metricsResult);
+            return metricsResult;
         }
 
         function calculateBankBalance(bankObj, targetMonthKey = null, txList = null) {
@@ -5766,14 +5867,43 @@ function openBankModal() {
         }
 
         async function syncAllPluggyItemsBackground() {
-            if (!Array.isArray(pluggyItems) || pluggyItems.length === 0) return;
+            if (!Array.isArray(pluggyItems) || pluggyItems.length === 0) return { synced: 0, importedCount: 0, allAttempted: true };
+            let synced = 0;
+            let importedCount = 0;
+            let networkFailed = 0;
+
             for (const item of pluggyItems) {
                 try {
-                    await syncPluggyItem(item.id, { silent: true, fromAutoPoll: true });
+                    const res = await syncPluggyItem(item.id, {
+                        silent: true,
+                        fromAutoPoll: true,
+                        triggerUpdate: true,
+                        syncMode: '7d',
+                        isBatch: true,
+                        preserveCurrentMonth: true
+                    });
+                    if (res && res.ok) {
+                        synced += 1;
+                        importedCount += Number(res.importedCount || 0);
+                    } else if (res && res.error && String(res.error).toLowerCase().includes('failed to fetch')) {
+                        networkFailed += 1;
+                    }
                 } catch (e) {
-                    console.warn("Auto-sync background falhou para item:", item.id, e);
+                    console.warn('Auto-sync silencioso em segundo plano falhou para item:', item.id, e);
+                    networkFailed += 1;
                 }
             }
+
+            if (synced > 0) {
+                if (typeof cleanupStatementAndCreditNoise === 'function') cleanupStatementAndCreditNoise();
+                if (typeof recalculateAllCardCyclesAndBills === 'function') recalculateAllCardCyclesAndBills();
+            }
+
+            return {
+                synced,
+                importedCount,
+                allAttempted: networkFailed < pluggyItems.length
+            };
         }
 
         function openPluggyGuideModal() {
@@ -6446,26 +6576,28 @@ function openBankModal() {
                     computeCardInvoicesForMonth(m);
                 });
 
-                // 5. Muda automaticamente o seletor de mês para o mês das transações importadas (ex: Out 2026)
+                // 5. Muda automaticamente o seletor de mês para o mês das transações importadas apenas em ações manuais
                 const curMonthKey = MONTHS[currentMonthIndex]?.key;
-                if (importedMonths.size > 0 && !importedMonths.has(curMonthKey)) {
+                if (!options.preserveCurrentMonth && !silent && importedMonths.size > 0 && !importedMonths.has(curMonthKey)) {
                     const sortedMonths = Array.from(importedMonths).sort();
                     const targetMonth = sortedMonths[sortedMonths.length - 1];
                     const mIdx = MONTHS.findIndex(m => m.key === targetMonth);
                     if (mIdx !== -1) currentMonthIndex = mIdx;
                 }
 
-                populateBankSelectors();
-                renderAll();
-                if (currentUser && !options.isBatch) {
-                    try {
-                        await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
-                    } catch (saveErr) {
-                        console.warn('[CloudDB] Aviso ao salvar dados do item:', saveErr);
+                if (!options.isBatch) {
+                    populateBankSelectors();
+                    renderAll();
+                    if (currentUser) {
+                        try {
+                            await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                        } catch (saveErr) {
+                            console.warn('[CloudDB] Aviso ao salvar dados do item:', saveErr);
+                        }
                     }
                 }
 
-                if (!silent || (options.fromAutoPoll && addedMonthlyCount > 0)) {
+                if (!silent) {
                     const summaryBalances = accounts.map(a => `• ${a.type === 'CREDIT' ? '💳' : '🏦'} ${a.name}: ${formatBRL(a.balance)}`).join('\n');
                     const lastUpdatedStr = itemInfo.lastUpdatedAt ? formatSaoPauloDateTimeBR(itemInfo.lastUpdatedAt) : 'Agora';
                     const bankStatusMsg = itemInfo.bankRefreshed
@@ -7778,6 +7910,20 @@ function openBankModal() {
 
             familySharingEnabled = Boolean(profile.sharing_enabled || remoteSettings.familySharingEnabled);
 
+            // Preferência de exibição dos botões discretos de ajuda (?)
+            let resolvedHelpTips = true;
+            if (typeof remoteSettings.showHelpTips === 'boolean') {
+                resolvedHelpTips = remoteSettings.showHelpTips;
+            } else {
+                try {
+                    const localTipPref = localStorage.getItem(`finan_show_help_tips_${profile.id}`);
+                    if (localTipPref === 'false') resolvedHelpTips = false;
+                } catch (_) {}
+            }
+            if (typeof applyHelpTipsPreference === 'function') {
+                applyHelpTipsPreference(resolvedHelpTips, { persist: false });
+            }
+
             // 3.6 Carrega Status de Aceite dos Termos de Uso & Privacidade (LGPD)
             let localTerms = null;
             try {
@@ -7933,14 +8079,20 @@ function openBankModal() {
             applyLastSummaryCache(profile.id);
             updateProfileUI();
             updateTermsAcceptanceUI();
-            renderAll();
+            _activeViewName = 'dashboard';
+            _dirtyViews.dashboard = false;
+            _dirtyViews.banks = true;
+            _dirtyViews.installments = true;
+            _dirtyViews.reports = true;
+            _dirtyViews.settings = true;
+            invalidateEffectiveDataCache({ keepInvoiceCache: true });
+            renderAll({ preserveInvoiceCache: true, activeViewOnly: true });
 
             // Se a rotina de auto-reparo corrigiu meses, projetou séries, moveu extratos órfãos ou consolidou faturas futuras, persiste no banco
             if (repairedCount > 0 || movedStmts > 0 || expandedOnLoad > 0 || autoRepairedBills > 0) {
                 CloudDB.saveUserData(profile.id, currentUser, transactions).catch(() => {});
             }
 
-            renderSavedCardsList();
             populateCardSelectors();
             loadFamilyAccountLinks();
 
@@ -7950,22 +8102,36 @@ function openBankModal() {
             } else {
                 checkAndShowTour();
 
-                // Auto-sync inteligente ao entrar no aplicativo:
-                // Se possui bancos conectados e a última verificação ocorreu há mais de 4 horas,
-                // busca silenciosamente os dados atualizados na Pluggy sem travar a navegação.
-                if (Array.isArray(pluggyItems) && pluggyItems.length > 0) {
-                    const lastAutoSync = Number(localStorage.getItem('finan_last_pluggy_sync_at') || 0);
-                    const fourHoursMs = 4 * 60 * 60 * 1000;
-                    if (Date.now() - lastAutoSync > fourHoursMs) {
+                // Auto-sync silencioso na 1ª abertura do dia (fuso America/Sao_Paulo) de todas as contas Pluggy conectadas
+                if (Array.isArray(pluggyItems) && pluggyItems.length > 0 && navigator.onLine !== false) {
+                    const todaySp = getSaoPauloDateYYYYMMDD();
+                    const dailySyncKey = `finan_pluggy_daily_sync_${profile.id}`;
+                    let lastSyncDay = '';
+                    try { lastSyncDay = localStorage.getItem(dailySyncKey) || ''; } catch (_) {}
+
+                    if (lastSyncDay !== todaySp && !_dailyPluggySyncInFlight) {
+                        _dailyPluggySyncInFlight = true;
+                        const targetUserId = profile.id;
                         setTimeout(async () => {
                             try {
-                                await syncAllPluggyItemsBackground();
-                                localStorage.setItem('finan_last_pluggy_sync_at', String(Date.now()));
-                                renderAll();
+                                if (!currentUser || currentUser.id !== targetUserId) return;
+                                const summary = await syncAllPluggyItemsBackground();
+                                if (!currentUser || currentUser.id !== targetUserId) return;
+                                if (summary && summary.allAttempted) {
+                                    safeLocalStorageSet(dailySyncKey, todaySp);
+                                    safeLocalStorageSet('finan_last_pluggy_sync_at', String(Date.now()));
+                                }
+                                if (summary && summary.synced > 0) {
+                                    populateBankSelectors();
+                                    renderAll();
+                                    await CloudDB.saveUserData(currentUser.id, currentUser, transactions).catch(() => {});
+                                }
                             } catch (e) {
-                                console.warn('Auto-sync silencioso ao abrir:', e);
+                                console.warn('Auto-sync diário silencioso ao abrir:', e);
+                            } finally {
+                                _dailyPluggySyncInFlight = false;
                             }
-                        }, 1000);
+                        }, 1200);
                     }
                 }
             }
@@ -7981,6 +8147,13 @@ function openBankModal() {
             transactions = [];
             bankStatements = [];
             savedCards = [];
+            pluggyItems = [];
+            creditBills = [];
+            familyMemberProfiles = {};
+            activeFamilyView = 'individual';
+            _dailyPluggySyncInFlight = false;
+            _activeViewName = 'dashboard';
+            invalidateEffectiveDataCache();
             document.getElementById('app-screen').classList.add('hidden');
             document.getElementById('auth-screen').classList.remove('hidden');
         }
@@ -8188,36 +8361,47 @@ function openBankModal() {
         // ==========================================
         function switchView(viewName, options = {}) {
             const views = ['dashboard', 'banks', 'installments', 'advisor', 'reports', 'settings'];
+            _activeViewName = views.includes(viewName) ? viewName : 'dashboard';
+
             views.forEach(v => {
                 const sec = document.getElementById(`view-${v}`);
-                if (sec) sec.classList.toggle('hidden', v !== viewName);
+                if (sec) sec.classList.toggle('hidden', v !== _activeViewName);
 
                 const deskBtn = document.getElementById(`nav-desk-${v}`);
                 if (deskBtn) {
-                    deskBtn.className = v === viewName
+                    deskBtn.className = v === _activeViewName
                         ? 'w-full flex items-center justify-start gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-extrabold bg-gradient-to-r from-[#FF2E4D] to-[#E61937] text-white shadow-lg shadow-rose-950/40 border border-rose-500/30 transition-all text-left'
                         : 'w-full flex items-center justify-start gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100/80 dark:hover:bg-white/[0.06] transition-all text-left';
                 }
 
                 const mobBtn = document.getElementById(`nav-mob-${v}`);
                 if (mobBtn) {
-                    mobBtn.className = v === viewName
+                    mobBtn.className = v === _activeViewName
                         ? 'flex flex-col items-center py-1 px-2 text-[#FF2E4D] dark:text-[#FF2E4D] font-bold'
                         : 'flex flex-col items-center py-1 px-2 text-slate-400 font-semibold';
                 }
             });
+
+            if (_dirtyViews[_activeViewName] && typeof renderSingleView === 'function') {
+                renderSingleView(_activeViewName);
+                _dirtyViews[_activeViewName] = false;
+            }
+
             if (!options.skipScroll) {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
-            if (familySharingEnabled) {
+            if (familySharingEnabled && !options.skipFamilyReload) {
                 loadFamilyAccountLinks(true).catch(() => {});
             }
-            if (viewName === 'advisor') {
+            if (_activeViewName === 'advisor') {
+                if (typeof populateAiSimPaymentSelect === 'function') {
+                    populateAiSimPaymentSelect();
+                }
                 if (typeof refreshAiAdvisorView === 'function') {
                     refreshAiAdvisorView();
                 }
             }
-            if (viewName === 'reports') {
+            if (_activeViewName === 'reports') {
                 if (typeof applyReportMobileSubtab === 'function') {
                     applyReportMobileSubtab(window._repActiveMobileTab || 'overview');
                 }
@@ -8225,6 +8409,11 @@ function openBankModal() {
                     requestAnimationFrame(() => centerCashflowChartOnActiveMonth());
                 }
             }
+            if (_activeViewName === 'settings' && typeof updateHelpTipsToggleUI === 'function') {
+                updateHelpTipsToggleUI();
+            }
+            const activeSection = document.getElementById(`view-${_activeViewName}`);
+            refreshLucideIcons(activeSection);
             if (typeof updateBatchActionBarUI === 'function') {
                 updateBatchActionBarUI();
             }
@@ -8292,7 +8481,7 @@ function openBankModal() {
 
         function changeMonth(delta) {
             currentMonthIndex = Math.max(0, Math.min(MONTHS.length - 1, currentMonthIndex + delta));
-            renderAll();
+            renderAll({ isMonthSwitch: true });
         }
 
         function selectMonthByKey(monthKey) {
@@ -8300,14 +8489,22 @@ function openBankModal() {
             const idx = MONTHS.findIndex(m => m.key === monthKey);
             if (idx !== -1) {
                 currentMonthIndex = idx;
-                switchView('dashboard');
-                renderAll();
+                _dirtyViews.dashboard = true;
+                _dirtyViews.banks = true;
+                _dirtyViews.installments = true;
+                _dirtyViews.reports = true;
+                _dirtyViews.settings = true;
+                const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
+                document.getElementById('current-month-label').textContent = currentMonth.label;
+                const instMonthTitle = document.getElementById('inst-month-title');
+                if (instMonthTitle) instMonthTitle.textContent = currentMonth.label;
+                switchView('dashboard', { skipFamilyReload: true });
             }
         }
 
         function togglePrivacy() {
             privacyMode = !privacyMode;
-            renderAll();
+            renderAll({ isMonthSwitch: true });
         }
 
         function setFilterType(type) {
@@ -8320,7 +8517,7 @@ function openBankModal() {
                         : 'px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-white';
                 }
             });
-            renderAll();
+            renderAll({ isMonthSwitch: true });
         }
 
         function formatBRL(val) {
@@ -8354,82 +8551,199 @@ function openBankModal() {
             }
         }
 
-        // Retorna os lançamentos e bancos conforme a visão ativa (Individual, Conjunta ou Familiar específico)
+        // Retorna os lançamentos e bancos conforme a visão ativa (Individual, Conjunta ou Familiar específico) com memoização por versão
         function getEffectiveTransactions() {
-            const myTagged = transactions.map(t => ({ ...t, _ownerId: currentUser?.id || 'me', _ownerName: currentUser?.name || 'Minha Conta', _isMine: true }));
-            if (!familySharingEnabled || activeFamilyView === 'individual') {
-                return myTagged;
+            const txLen = Array.isArray(transactions) ? transactions.length : 0;
+            const cacheKey = `${_effectiveCacheVersion}|${txLen}|${familySharingEnabled}|${activeFamilyView}|${currentUser?.id || 'me'}`;
+            if (_effectiveTxCache && _effectiveTxCacheKey === cacheKey) {
+                return _effectiveTxCache;
             }
-            const memberEntries = Object.values(familyMemberProfiles || {});
-            if (activeFamilyView === 'joint') {
-                const combined = [...myTagged];
-                memberEntries.forEach(mem => {
-                    if (Array.isArray(mem.transactions)) {
-                        mem.transactions.forEach(mt => {
-                            combined.push({
-                                ...mt,
-                                _ownerId: mem.id,
-                                _ownerName: mem.name || mem.email || 'Familiar',
-                                _relation: mem.relation || 'Família',
-                                _isMine: false
+
+            const myOwnerId = currentUser?.id || 'me';
+            const myOwnerName = currentUser?.name || 'Minha Conta';
+            const myTagged = (Array.isArray(transactions) ? transactions : []).map(t => ({
+                ...t,
+                _ownerId: myOwnerId,
+                _ownerName: myOwnerName,
+                _isMine: true
+            }));
+
+            let result = myTagged;
+            if (familySharingEnabled && activeFamilyView !== 'individual') {
+                const memberEntries = Object.values(familyMemberProfiles || {});
+                if (activeFamilyView === 'joint') {
+                    const combined = [...myTagged];
+                    memberEntries.forEach(mem => {
+                        if (Array.isArray(mem.transactions)) {
+                            mem.transactions.forEach(mt => {
+                                combined.push({
+                                    ...mt,
+                                    _ownerId: mem.id,
+                                    _ownerName: mem.name || mem.email || 'Familiar',
+                                    _relation: mem.relation || 'Família',
+                                    _isMine: false
+                                });
                             });
-                        });
+                        }
+                    });
+                    result = combined;
+                } else {
+                    const targetMember = familyMemberProfiles[activeFamilyView];
+                    if (targetMember && Array.isArray(targetMember.transactions)) {
+                        result = targetMember.transactions.map(mt => ({
+                            ...mt,
+                            _ownerId: targetMember.id,
+                            _ownerName: targetMember.name || targetMember.email || 'Familiar',
+                            _relation: targetMember.relation || 'Família',
+                            _isMine: false
+                        }));
                     }
-                });
-                return combined;
+                }
             }
-            const targetMember = familyMemberProfiles[activeFamilyView];
-            if (targetMember && Array.isArray(targetMember.transactions)) {
-                return targetMember.transactions.map(mt => ({
-                    ...mt,
-                    _ownerId: targetMember.id,
-                    _ownerName: targetMember.name || targetMember.email || 'Familiar',
-                    _relation: targetMember.relation || 'Família',
-                    _isMine: false
-                }));
-            }
-            return myTagged;
+
+            _effectiveTxCache = result;
+            _effectiveTxCacheKey = cacheKey;
+            _txByMonthCache = null;
+            _txByMonthCacheKey = '';
+            return result;
         }
 
         function getEffectiveBanks() {
-            const myBanks = banks.map(b => ({ ...b, _ownerId: currentUser?.id || 'me', _ownerName: currentUser?.name || 'Minha Conta', _isMine: true }));
-            if (!familySharingEnabled || activeFamilyView === 'individual') {
-                return myBanks;
+            const banksLen = Array.isArray(banks) ? banks.length : 0;
+            const cacheKey = `${_effectiveCacheVersion}|${banksLen}|${familySharingEnabled}|${activeFamilyView}|${currentUser?.id || 'me'}`;
+            if (_effectiveBanksCache && _effectiveBanksCacheKey === cacheKey) {
+                return _effectiveBanksCache;
             }
-            const memberEntries = Object.values(familyMemberProfiles || {});
-            if (activeFamilyView === 'joint') {
-                const combined = [...myBanks];
-                memberEntries.forEach(mem => {
-                    if (Array.isArray(mem.banks)) {
-                        mem.banks.forEach(mb => {
-                            combined.push({
-                                ...mb,
-                                id: `${mem.id}_${mb.id}`,
-                                _rawBankId: mb.id,
-                                name: `${mb.name} (${(mem.name || 'Família').split(' ')[0]})`,
-                                _ownerId: mem.id,
-                                _ownerName: mem.name || mem.email || 'Familiar',
-                                _isMine: false
+
+            const myOwnerId = currentUser?.id || 'me';
+            const myOwnerName = currentUser?.name || 'Minha Conta';
+            const myBanks = (Array.isArray(banks) ? banks : []).map(b => ({
+                ...b,
+                _ownerId: myOwnerId,
+                _ownerName: myOwnerName,
+                _isMine: true
+            }));
+
+            let result = myBanks;
+            if (familySharingEnabled && activeFamilyView !== 'individual') {
+                const memberEntries = Object.values(familyMemberProfiles || {});
+                if (activeFamilyView === 'joint') {
+                    const combined = [...myBanks];
+                    memberEntries.forEach(mem => {
+                        if (Array.isArray(mem.banks)) {
+                            mem.banks.forEach(mb => {
+                                combined.push({
+                                    ...mb,
+                                    id: `${mem.id}_${mb.id}`,
+                                    _rawBankId: mb.id,
+                                    name: `${mb.name} (${(mem.name || 'Família').split(' ')[0]})`,
+                                    _ownerId: mem.id,
+                                    _ownerName: mem.name || mem.email || 'Familiar',
+                                    _isMine: false
+                                });
                             });
-                        });
+                        }
+                    });
+                    result = combined;
+                } else {
+                    const targetMember = familyMemberProfiles[activeFamilyView];
+                    if (targetMember) {
+                        const targetBanks = (Array.isArray(targetMember.banks) && targetMember.banks.length > 0)
+                            ? targetMember.banks
+                            : DEFAULT_BANKS;
+                        result = targetBanks.map(mb => ({
+                            ...mb,
+                            _rawBankId: mb.id,
+                            _ownerId: targetMember.id,
+                            _ownerName: targetMember.name || targetMember.email || 'Familiar',
+                            _isMine: false
+                        }));
                     }
-                });
-                return combined;
+                }
             }
-            const targetMember = familyMemberProfiles[activeFamilyView];
-            if (targetMember) {
-                const targetBanks = (Array.isArray(targetMember.banks) && targetMember.banks.length > 0)
-                    ? targetMember.banks
-                    : DEFAULT_BANKS;
-                return targetBanks.map(mb => ({
-                    ...mb,
-                    _rawBankId: mb.id,
-                    _ownerId: targetMember.id,
-                    _ownerName: targetMember.name || targetMember.email || 'Familiar',
-                    _isMine: false
-                }));
+
+            _effectiveBanksCache = result;
+            _effectiveBanksCacheKey = cacheKey;
+            return result;
+        }
+
+        // Índice O(1) de lançamentos por mês sobre getEffectiveTransactions()
+        function getIndexedMonthTransactions(monthKey) {
+            const effTxs = getEffectiveTransactions();
+            const mapKey = _effectiveTxCacheKey;
+            if (!_txByMonthCache || _txByMonthCacheKey !== mapKey) {
+                const grouped = new Map();
+                for (let i = 0; i < effTxs.length; i += 1) {
+                    const tx = effTxs[i];
+                    if (!tx) continue;
+                    const mKey = normalizeMonthKey(tx.month, '2026-11');
+                    let bucket = grouped.get(mKey);
+                    if (!bucket) {
+                        bucket = [];
+                        grouped.set(mKey, bucket);
+                    }
+                    bucket.push(tx);
+                }
+                _txByMonthCache = grouped;
+                _txByMonthCacheKey = mapKey;
             }
-            return myBanks;
+            const cleanKey = normalizeMonthKey(monthKey, '2026-11');
+            return _txByMonthCache.get(cleanKey) || [];
+        }
+
+        function computeMonthOperationalSummary(operationalMonthTxs) {
+            const list = Array.isArray(operationalMonthTxs) ? operationalMonthTxs : [];
+            const incomes = [];
+            const expenses = [];
+            let totalIncome = 0;
+            let receivedIncome = 0;
+            let totalExpense = 0;
+            let paidExpense = 0;
+
+            for (let i = 0; i < list.length; i += 1) {
+                const t = list[i];
+                if (!t) continue;
+                if (t.type === 'income') {
+                    incomes.push(t);
+                    const amt = Number(t.amount || 0);
+                    totalIncome += amt;
+                    if (t.paid) receivedIncome += amt;
+                } else {
+                    expenses.push(t);
+                    if (t.isConsolidatedBill) {
+                        const bTot = Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
+                        const bPaid = Number(t.paid_amount ?? t.paidAmount ?? (t.paid ? bTot : 0));
+                        totalExpense += bTot;
+                        paidExpense += Math.min(bTot, Math.max(0, bPaid));
+                    } else {
+                        const amt = Number(t.amount || 0);
+                        totalExpense += amt;
+                        if (t.paid) paidExpense += amt;
+                    }
+                }
+            }
+
+            const totalIncomeFixed = Number(totalIncome.toFixed(2));
+            const receivedIncomeFixed = Number(receivedIncome.toFixed(2));
+            const pendingIncome = Number((totalIncomeFixed - receivedIncomeFixed).toFixed(2));
+            const totalExpenseFixed = Number(totalExpense.toFixed(2));
+            const paidExpenseFixed = Number(paidExpense.toFixed(2));
+            const pendingExpense = Number(Math.max(0, totalExpenseFixed - paidExpenseFixed).toFixed(2));
+            const paidPct = totalExpenseFixed > 0
+                ? Math.round((paidExpenseFixed / totalExpenseFixed) * 100)
+                : (paidExpenseFixed === 0 && receivedIncomeFixed > 0 ? 100 : 0);
+
+            return {
+                incomes,
+                expenses,
+                totalIncome: totalIncomeFixed,
+                receivedIncome: receivedIncomeFixed,
+                pendingIncome,
+                totalExpense: totalExpenseFixed,
+                paidExpense: paidExpenseFixed,
+                pendingExpense,
+                paidPct
+            };
         }
 
         /**
@@ -8439,13 +8753,13 @@ function openBankModal() {
          */
         function getHomeVisibleTransactions(monthKey) {
             const curMonthKey = normalizeMonthKey(monthKey, '2026-11');
-            const effectiveTxs = getEffectiveTransactions();
+            const monthPool = getIndexedMonthTransactions(curMonthKey);
             const effBanks = getEffectiveBanks();
+            const bankById = new Map(effBanks.map(b => [String(b.id), b]));
 
-            // 1. Filtra lançamentos planejados da Home
-            const visibleBase = effectiveTxs.filter(t => {
+            // 1. Filtra apenas os lançamentos planejados do mês usando o índice pré-agrupado por mês
+            const visibleBase = monthPool.filter(t => {
                 if (!t) return false;
-                if (normalizeMonthKey(t.month, '2026-11') !== curMonthKey) return false;
                 if (typeof isImportedStatementTransaction === 'function' && isImportedStatementTransaction(t)) return false;
                 if (t.isInitialBalance || t.isBalanceAdjustment || t.cat === 'Saldo Inicial' || t.cat === 'Ajuste de Saldo') return false;
                 if (typeof isVaultTx === 'function' && isVaultTx(t.desc)) return false;
@@ -8458,7 +8772,7 @@ function openBankModal() {
                 if (fit.startsWith('pluggy_') && !isBill && !t.reconciledWithStatement) return false;
 
                 // Compras individuais de cartão de crédito não entram na Home (ficam no extrato do cartão para não duplicar com a fatura)
-                const targetBank = effBanks.find(b => String(b.id) === String(t.bankId));
+                const targetBank = bankById.get(String(t.bankId));
                 const isCardItem = Boolean(t.isCreditCardTx || (t.cardId && !isBill) || (targetBank && isCreditCardBank(targetBank) && !isBill));
                 if (isCardItem) return false;
 
@@ -8515,53 +8829,15 @@ function openBankModal() {
         }
 
         // ==========================================
-        // RENDERIZAÇÃO COMPLETA (CONTABILIDADE EXATA POR DATA E MÊS)
+        // RENDERIZAÇÃO SOB DEMANDA POR ABA + OTIMIZAÇÃO DE TROCA DE MÊS
         // ==========================================
-        function renderAll() {
-            invalidateCardInvoiceCache();
-            if (typeof restoreAccidentallyEvictedReconciledTransactions === 'function') {
-                restoreAccidentallyEvictedReconciledTransactions();
-            }
-            const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
-            document.getElementById('current-month-label').textContent = currentMonth.label;
-            const instMonthTitle = document.getElementById('inst-month-title');
-            if (instMonthTitle) instMonthTitle.textContent = currentMonth.label;
-
-            const effectiveTxs = getEffectiveTransactions();
-            const emptyBanner = document.getElementById('empty-db-banner');
-            if (emptyBanner) emptyBanner.classList.toggle('hidden', effectiveTxs.length > 0);
-
+        function renderDashboardSummaryAndLists(currentMonth) {
             renderFamilyAccountUI();
-            populateAiSimPaymentSelect();
             renderDashboardBankBalances();
-            renderBanksView();
 
-            // Filtra estritamente apenas os lançamentos do mês selecionado
-            const monthTxs = effectiveTxs.filter(t => normalizeMonthKey(t.month, '2026-11') === currentMonth.key);
-
-            // Obtenção da lista oficial de lançamentos visíveis na Home (Paridade absoluta com o print)
+            // Obtenção da lista oficial de lançamentos visíveis na Home (Paridade absoluta com o extrato)
             const operationalMonthTxs = getHomeVisibleTransactions(currentMonth.key);
-
-            const incomes = operationalMonthTxs.filter(t => t.type === 'income');
-            const expenses = operationalMonthTxs.filter(t => t.type === 'expense');
-
-            const totalIncome = Number(incomes.reduce((acc, t) => acc + Number(t.amount || 0), 0).toFixed(2));
-            const receivedIncome = Number(incomes.filter(t => t.paid).reduce((acc, t) => acc + Number(t.amount || 0), 0).toFixed(2));
-            const pendingIncome = Number((totalIncome - receivedIncome).toFixed(2));
-
-            const totalExpense = Number(expenses.reduce((acc, t) => {
-                if (t.isConsolidatedBill) return acc + Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
-                return acc + Number(t.amount || 0);
-            }, 0).toFixed(2));
-            const paidExpense = Number(expenses.reduce((acc, t) => {
-                if (t.isConsolidatedBill) {
-                    const bTot = Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
-                    const bPaid = Number(t.paid_amount ?? t.paidAmount ?? (t.paid ? bTot : 0));
-                    return acc + Math.min(bTot, Math.max(0, bPaid));
-                }
-                return acc + (t.paid ? Number(t.amount || 0) : 0);
-            }, 0).toFixed(2));
-            const pendingExpense = Number(Math.max(0, totalExpense - paidExpense).toFixed(2));
+            const summary = computeMonthOperationalSummary(operationalMonthTxs);
 
             // Soma contábil exata:
             // Saldo Realizado Hoje nas Contas Ativas = carryIn (meses anteriores) + recebidos no mês - pagos no mês (incluindo ajustes de saldo)
@@ -8575,8 +8851,7 @@ function openBankModal() {
                 currentRealActiveBalance += m.currentBalance;
             });
 
-            const balance = Number((currentRealActiveBalance + (pendingIncome - pendingExpense)).toFixed(2));
-            const paidPct = totalExpense > 0 ? Math.round((paidExpense / totalExpense) * 100) : (paidExpense === 0 && receivedIncome > 0 ? 100 : 0);
+            const balance = Number((currentRealActiveBalance + (summary.pendingIncome - summary.pendingExpense)).toFixed(2));
 
             // 1. Saldo Atual (Data de Hoje nas contas ativas)
             const currentBalEl = document.getElementById('card-balance-current');
@@ -8613,37 +8888,108 @@ function openBankModal() {
                 banksNote.classList.add('hidden');
             }
 
-            document.getElementById('card-income').textContent = formatBRL(totalIncome);
-            document.getElementById('card-income-sub').textContent = `Recebido: ${formatBRL(receivedIncome)}`;
+            document.getElementById('card-income').textContent = formatBRL(summary.totalIncome);
+            document.getElementById('card-income-sub').textContent = `Recebido: ${formatBRL(summary.receivedIncome)}`;
 
-            document.getElementById('card-expense').textContent = formatBRL(totalExpense);
-            document.getElementById('card-expense-sub').textContent = `Pago: ${formatBRL(paidExpense)} • Pendente: ${formatBRL(pendingExpense)}`;
+            document.getElementById('card-expense').textContent = formatBRL(summary.totalExpense);
+            document.getElementById('card-expense-sub').textContent = `Pago: ${formatBRL(summary.paidExpense)} • Pendente: ${formatBRL(summary.pendingExpense)}`;
 
-            document.getElementById('card-paid-pct').textContent = `${paidPct}%`;
-            document.getElementById('card-paid-bar').style.width = `${paidPct}%`;
+            document.getElementById('card-paid-pct').textContent = `${summary.paidPct}%`;
+            document.getElementById('card-paid-bar').style.width = `${summary.paidPct}%`;
 
             if (currentUser?.id) {
                 saveLastSummaryCache(currentUser.id, {
                     currentBalance: currentRealActiveBalance,
-                    totalIncome: totalIncome,
-                    receivedIncome: receivedIncome,
-                    totalExpense: totalExpense,
-                    paidExpense: paidExpense,
-                    pendingExpense: pendingExpense,
+                    totalIncome: summary.totalIncome,
+                    receivedIncome: summary.receivedIncome,
+                    totalExpense: summary.totalExpense,
+                    paidExpense: summary.paidExpense,
+                    pendingExpense: summary.pendingExpense,
                     balance: balance,
-                    paidPct: paidPct
+                    paidPct: summary.paidPct
                 });
             }
 
-            renderCategories(expenses, totalExpense);
+            renderCategories(summary.expenses, summary.totalExpense);
             renderTransactionsList(operationalMonthTxs);
-            renderInstallmentsAndProjection(monthTxs);
-            renderFinancialAnalysisAndReports(currentMonth, operationalMonthTxs, totalIncome, totalExpense);
-            renderSavedCardsList();
-            if (typeof renderReconciledHistorySettings === 'function') {
-                renderReconciledHistorySettings();
+        }
+
+        function renderSingleView(viewName) {
+            const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
+            if (viewName === 'dashboard') {
+                renderDashboardSummaryAndLists(currentMonth);
+                return;
             }
-            lucide.createIcons();
+            if (viewName === 'banks') {
+                renderBanksView();
+                return;
+            }
+            if (viewName === 'installments') {
+                const monthTxs = getIndexedMonthTransactions(currentMonth.key);
+                renderInstallmentsAndProjection(monthTxs);
+                return;
+            }
+            if (viewName === 'reports') {
+                const operationalMonthTxs = getHomeVisibleTransactions(currentMonth.key);
+                const summary = computeMonthOperationalSummary(operationalMonthTxs);
+                renderFinancialAnalysisAndReports(currentMonth, operationalMonthTxs, summary.totalIncome, summary.totalExpense);
+                return;
+            }
+            if (viewName === 'advisor') {
+                if (typeof populateAiSimPaymentSelect === 'function') populateAiSimPaymentSelect();
+                if (typeof refreshAiAdvisorView === 'function') refreshAiAdvisorView();
+                return;
+            }
+            if (viewName === 'settings') {
+                renderSavedCardsList();
+                if (typeof renderReconciledHistorySettings === 'function') {
+                    renderReconciledHistorySettings();
+                }
+                if (typeof updateHelpTipsToggleUI === 'function') {
+                    updateHelpTipsToggleUI();
+                }
+            }
+        }
+
+        function renderAll(options = {}) {
+            if (!options.isMonthSwitch) {
+                invalidateEffectiveDataCache({ keepInvoiceCache: Boolean(options.preserveInvoiceCache) });
+            }
+            if (typeof restoreAccidentallyEvictedReconciledTransactions === 'function') {
+                restoreAccidentallyEvictedReconciledTransactions();
+            }
+
+            const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
+            const monthLabelEl = document.getElementById('current-month-label');
+            if (monthLabelEl) monthLabelEl.textContent = currentMonth.label;
+            const instMonthTitle = document.getElementById('inst-month-title');
+            if (instMonthTitle) instMonthTitle.textContent = currentMonth.label;
+
+            const effectiveTxs = getEffectiveTransactions();
+            const emptyBanner = document.getElementById('empty-db-banner');
+            if (emptyBanner) emptyBanner.classList.toggle('hidden', effectiveTxs.length > 0);
+
+            const activeView = _activeViewName || 'dashboard';
+            if (options.renderAllViews) {
+                ['dashboard', 'banks', 'installments', 'advisor', 'reports', 'settings'].forEach(v => {
+                    renderSingleView(v);
+                    _dirtyViews[v] = false;
+                });
+                refreshLucideIcons();
+                return;
+            }
+
+            ['dashboard', 'banks', 'installments', 'reports', 'settings'].forEach(v => {
+                _dirtyViews[v] = v !== activeView;
+            });
+
+            renderSingleView(activeView);
+            _dirtyViews[activeView] = false;
+
+            const activeSection = document.getElementById(`view-${activeView}`);
+            refreshLucideIcons(activeSection);
+            const headerEl = document.querySelector('header');
+            if (headerEl) refreshLucideIcons(headerEl);
         }
 
 
@@ -9781,6 +10127,7 @@ function openBankModal() {
                             <span class="font-extrabold text-sky-300 flex items-center gap-1.5">
                                 <i data-lucide="shield-check" class="w-4 h-4 text-sky-400 flex-shrink-0"></i>
                                 <span>Termômetro da Reserva (Meta 3 meses)</span>
+                                <button type="button" class="help-tip-btn help-tip-btn--on-dark" data-help-key="rep_reserve_thermometer" aria-label="Como ler o Termômetro da Reserva">?</button>
                             </span>
                             <span class="font-black text-white text-xs whitespace-nowrap">
                                 ${formatBRL(savingsPlan.reserveBal)} / ${formatBRL(savingsPlan.idealEmergencyFund)}
@@ -13018,6 +13365,408 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
         }
         window.initImprovementSuggestionSlots = initImprovementSuggestionSlots;
 
+        // =========================================================================
+        // SISTEMA GLOBAL DE AJUDA CONTEXTUAL (?) E GUIA INTUITIVO DE RELATÓRIOS
+        // =========================================================================
+        const APP_HELP_TOPICS = {
+            header_month_picker: {
+                badge: 'Navegação • Mês Selecionado',
+                title: 'Seletor de Mês e Ano',
+                whatIs: 'Define qual mês você está analisando em todo o aplicativo: Visão Mensal, Bancos, Parcelas, Relatórios e Parecer com IA.',
+                howToRead: 'Clique nas setas (< >) para avançar ou voltar rapidamente, ou toque no nome do mês (ex: Nov 2026) para pular direto para qualquer ano ou mês.',
+                actionTip: 'Os pontinhos verdes no calendário mostram meses que já têm lançamentos ou extratos importados.'
+            },
+            dash_balance_card: {
+                badge: 'Visão Mensal • Saldo',
+                title: 'Saldo Atual (Hoje) vs. Previsto no Mês',
+                whatIs: 'Mostra dois retratos diferentes do seu dinheiro: o que já existe nas contas hoje e quanto deve sobrar quando o mês terminar.',
+                howToRead: 'Saldo Atual (Hoje) soma o saldo real das suas contas ativas até este momento. Previsto no Mês soma o Saldo Atual + receitas que ainda vão cair − contas pendentes do mês. Verde ("Mês no Azul") significa fechamento positivo; Vermelho indica risco de faltar caixa.',
+                actionTip: 'Se o Saldo Atual está positivo mas o Previsto está negativo, reduza gastos pendentes antes do fim do mês.'
+            },
+            dash_income: {
+                badge: 'Visão Mensal • Entradas',
+                title: 'Receitas do Mês',
+                whatIs: 'Soma de tudo que está previsto para entrar no mês (salário, vendas, pix recebidos, bonificações).',
+                howToRead: 'O valor grande é o total planejado para o mês. Logo abaixo em "Recebido", você vê quanto desse valor já foi marcado como pago/recebido.',
+                actionTip: 'Confira no início do mês se todas as suas entradas esperadas foram cadastradas.'
+            },
+            dash_expense: {
+                badge: 'Visão Mensal • Saídas',
+                title: 'Despesas do Mês',
+                whatIs: 'Soma todas as despesas do mês selecionado: contas fixas, gastos variáveis, parcelas e faturas de cartão de crédito.',
+                howToRead: 'O total mostra o peso completo do mês. Em "Pago • Pendente", você acompanha quanto já saiu do caixa e quanto ainda falta vencer.',
+                actionTip: 'Use o valor "Pendente" junto com o seu "Saldo Atual" para saber se o dinheiro em conta cobre o restante do mês.'
+            },
+            dash_paid_pct: {
+                badge: 'Visão Mensal • Progresso',
+                title: 'Quitação do Mês (%)',
+                whatIs: 'Percentual do valor total das despesas do mês que já foi pago.',
+                howToRead: 'Quanto mais perto de 100%, menos boletos e contas ainda faltam sair da sua conta neste mês.',
+                actionTip: 'Sempre dê baixa ou concilie com o extrato para manter esse indicador fiel à realidade.'
+            },
+            dash_bank_balances: {
+                badge: 'Visão Mensal • Contas',
+                title: 'Saldo nas Contas & Alinhar Saldos',
+                whatIs: 'Exibe quanto cada conta bancária ou reserva tem no mês selecionado.',
+                howToRead: 'Contas com Open Finance mostram o saldo sincronizado do banco. Contas marcadas como "Reserva" ficam guardadas e não entram no dinheiro livre do dia a dia.',
+                actionTip: 'Toque no card de qualquer banco para editar saldo, ativar "Conta Reserva" ou clique em "Alinhar Saldos" se notar diferença.'
+            },
+            dash_card_invoice: {
+                badge: 'Visão Mensal • Cartões',
+                title: 'Fatura Consolidada do Cartão',
+                whatIs: 'Reúne em uma única linha o valor total da fatura do cartão no mês, evitando que pequenas compras duplicadas poluam seu orçamento.',
+                howToRead: 'Compare "Total" com "Pendente". Quando a fatura vence e é quitada no extrato ou marcada como paga, o selo "Quitada" aparece.',
+                actionTip: 'Para ajustar o dia de fechamento/virada e vencimento de cada cartão, acesse Bancos ou Configurações.'
+            },
+            dash_categories_panel: {
+                badge: 'Visão Mensal • Categorias',
+                title: 'Despesas por Categoria',
+                whatIs: 'Ranking do quanto cada tipo de gasto (Alimentação, Casa, Compras, Transporte, etc.) consome do total de despesas do mês.',
+                howToRead: 'As barras no topo mostram os maiores vilões do seu orçamento neste mês.',
+                actionTip: 'Se alguma categoria passar do esperado, crie metas na aba Relatórios para segurar nos próximos dias.'
+            },
+            dash_tx_list: {
+                badge: 'Visão Mensal • Lançamentos',
+                title: 'Lista de Contas, Filtros e Ações em Lote',
+                whatIs: 'Relação completa das receitas, contas fixas, parcelas e faturas do mês selecionado.',
+                howToRead: 'Use "Todos / Despesas / Receitas" para filtrar, "Pagos no Final" para separar o que já foi quitado do que falta pagar, ou "Selecionar Vários" para dar baixa, mudar banco ou excluir várias contas de uma só vez.',
+                actionTip: 'A busca ao lado filtra instantaneamente por nome ou categoria dentro do mês atual.'
+            },
+            banks_pluggy_panel: {
+                badge: 'Bancos • Open Finance',
+                title: 'Conexões Automáticas Open Finance (Pluggy)',
+                whatIs: 'Conecta seu aplicativo diretamente aos bancos via Open Finance regulamentado pelo Banco Central (somente leitura: ninguém movimenta seu dinheiro).',
+                howToRead: '"7 Dias" busca novidades recentes mantendo tudo leve; "Geral" puxa o histórico mais amplo disponível. Na 1ª abertura do dia, o app sincroniza todas as contas automaticamente de forma silenciosa.',
+                actionTip: 'Se conectar pela primeira vez ou trocar a senha do banco, use "Conectar" ou "Atualizar Credenciais" no card da instituição.'
+            },
+            banks_ofx_statements: {
+                badge: 'Bancos • Extratos',
+                title: 'Extrato Bancário Importado (OFX / CSV)',
+                whatIs: 'Histórico bruto de entradas e saídas importadas de arquivos OFX/CSV ou do Open Finance.',
+                howToRead: 'Esses itens servem para compor o saldo bancário e conciliar suas contas planejadas, sem misturar dezenas de Pix pequenos na tela principal.',
+                actionTip: 'Se importar um extrato de mês errado por engano, escolha a conta no filtro e clique em "Limpar Mês".'
+            },
+            inst_kpis: {
+                badge: 'Parcelas • Comprometimento',
+                title: 'Resumo de Parcelas e Saldo Devedor',
+                whatIs: 'Mostra o quanto das suas compras parceladas pesa hoje e nos próximos meses.',
+                howToRead: '• Parcelas no Mês: valor que vence neste mês.\n• Saldo Devedor Futuro: soma de todas as parcelas restantes após este mês.\n• Custo Fixo Mensal: contas recorrentes que não acabam.\n• Próximo Alívio: valor mensal que vai se liberar porque termina neste mês.',
+                actionTip: 'Foque no "Próximo Alívio" e evite preencher esse espaço com novos parcelamentos.'
+            },
+            inst_contracts: {
+                badge: 'Parcelas • Contratos',
+                title: 'Contratos & Compras Parceladas Ativas',
+                whatIs: 'Lista cada compra parcelada do mês com barra de progresso mostrando em qual parcela você está (ex: 4/10).',
+                howToRead: 'A barra cheia indica quanto do contrato já foi pago e quanto falta quitar.',
+                actionTip: 'Clique no parcelamento para editar ou marque múltiplos contratos com "Mudar Carteira em Massa" se trocou de cartão ou conta.'
+            },
+            inst_future_map: {
+                badge: 'Parcelas • Linha do Tempo',
+                title: 'Mapa de Fluxo Futuro (Projeção Mês a Mês)',
+                whatIs: 'Simula seus próximos meses somando faturas de cartão, outras parcelas, contas fixas e receitas já cadastradas.',
+                howToRead: 'Verde (+) são receitas; Vermelho (-) são despesas totais previstas; o último número (= Saldo Previsto) mostra se o mês tende a fechar no azul ou no vermelho.',
+                actionTip: 'Toque em qualquer linha do mês para abrir direto os lançamentos daquele mês na Visão Mensal.'
+            },
+            advisor_chat: {
+                badge: 'Consultor IA • Chat',
+                title: 'Conversar com o Consultor Financeiro IA',
+                whatIs: 'Assistente com Inteligência Artificial que lê os números reais do mês selecionado para responder suas perguntas financeiras.',
+                howToRead: 'Use os atalhos de perguntas prontas ou digite/fale pelo microfone dúvidas como "Posso viajar?" ou "Qual dívida quitar primeiro?".',
+                actionTip: 'Troque o mês lá em cima caso queira que a IA analise um mês futuro ou anterior.'
+            },
+            advisor_simulator: {
+                badge: 'Consultor IA • Simulador',
+                title: 'Simulador Inteligente: Parcelar ou À Vista?',
+                whatIs: 'Testa o impacto real de uma compra nova no seu orçamento antes de você passar o cartão ou fazer o Pix.',
+                howToRead: 'Informe o valor à vista, valor parcelado, número de parcelas e fechamento/vencimento do cartão. A IA mostra exatamente em quais meses as parcelas vão cair e se compromete seu saldo.',
+                actionTip: 'Use sempre antes de compras acima de R$ 200 para evitar surpresas na virada da fatura.'
+            },
+            rep_header: {
+                badge: 'Relatórios • Painel Geral',
+                title: 'Como usar a aba Relatórios & Análise',
+                whatIs: 'Central para transformar seus números em economia real e construir sua reserva de emergência.',
+                howToRead: 'Todos os gráficos e textos desta tela seguem exatamente o mês selecionado no topo. No celular, use os botões rápidos ("Resumo", "Economizar", "12 Meses", "Gastos", "Ver Tudo") logo abaixo para ir direto ao ponto. Os botões acima geram PDF ou planilhas CSV.',
+                actionTip: 'Comece olhando o Diagnóstico Executivo e a Barra Azul (quanto guardar) para decidir sua meta do mês.'
+            },
+            rep_executive: {
+                badge: 'Relatórios • Diagnóstico',
+                title: 'Diagnóstico Executivo do Mês & Parecer com IA',
+                whatIs: 'Resume a saúde financeira do mês selecionado em um único parecer claro e objetivo.',
+                howToRead: '• Selo "Saúde Excelente / Atenção / Crítica": nível de folga do seu orçamento.\n• Botão "Parecer com IA": gera análise estratégica profunda respeitando exatamente o mês selecionado no topo.',
+                actionTip: 'Leia primeiro a recomendação em destaque logo abaixo do título para saber o próximo passo imediato.'
+            },
+            rep_daily_allowance: {
+                badge: 'Relatórios • Limite Diário',
+                title: 'Teto Seguro Diário',
+                whatIs: 'Valor máximo médio que você pode gastar por dia até o final do mês para fechar sem entrar no vermelho.',
+                howToRead: 'Ele divide sua margem livre disponível (descontando contas fixas/faturas) pelos dias restantes do mês.',
+                actionTip: 'Se o valor aparecer zerado ou muito baixo, evite gastos variáveis não essenciais até o próximo salário.'
+            },
+            rep_reserve_goal: {
+                badge: 'Relatórios • Meta Realista',
+                title: 'Quanto Guardar na Reserva (Barra Azul)',
+                whatIs: 'Meta realista calculada automaticamente para você guardar neste mês sem passar aperto no dia a dia.',
+                howToRead: 'A conta já considera: 1) todas as contas do mês pagas, 2) um valor de giro reservado para você passar o mês com tranquilidade, e 3) a média dos últimos 3 meses da sua fatura de cartão de crédito para o próximo ciclo não te pegar de surpresa.',
+                actionTip: 'Se estiver positiva, separe esse valor no início do mês ou assim que o salário cair, antes de gastar com extras.'
+            },
+            rep_reserve_thermometer: {
+                badge: 'Relatórios • Segurança',
+                title: 'Termômetro da Reserva de Emergência',
+                whatIs: 'Mede quanto você já juntou nas suas Contas Reserva em comparação à meta recomendada de 3 meses do seu custo mensal.',
+                howToRead: 'O valor à esquerda é quanto você já tem guardado nas contas marcadas como Reserva; o valor à direita é a meta ideal de 3 meses; a porcentagem mostra o quanto falta e em qual mês você completará mantendo o ritmo.',
+                actionTip: 'Clique em "Separar R$ ..." para registrar direto a transferência do mês para sua conta Reserva.'
+            },
+            rep_kpi_commit: {
+                badge: 'Relatórios • Indicador 1',
+                title: 'Comprometimento da Renda (%)',
+                whatIs: 'Mostra quantos por cento de tudo que você ganha no mês estão indo para pagar despesas.',
+                howToRead: '• Até 70%: Zona saudável (sobra fôlego para guardar).\n• 71% a 85%: Sinal amarelo (pouca folga para imprevistos).\n• Acima de 85%: Alerta vermelho (risco de atrasar contas ou depender do cartão).',
+                actionTip: 'Compare este número com os últimos meses: o objetivo é mantê-lo abaixo de 70%.'
+            },
+            rep_kpi_saving: {
+                badge: 'Relatórios • Indicador 2',
+                title: 'Margem / Sobra Prevista (%)',
+                whatIs: 'Percentual da sua renda que sobra depois de pagar todas as despesas cadastradas do mês.',
+                howToRead: 'Quanto maior a %, mais espaço real existe para formar reserva. Se ficar negativo, significa que as despesas cadastradas superaram a receita do mês.',
+                actionTip: 'Se a margem estiver alta aqui mas "Guardar (Reserva)" for menor, lembre que a meta da barra azul também reserva fôlego para a média do cartão e giro do mês.'
+            },
+            rep_kpi_split: {
+                badge: 'Relatórios • Indicador 3',
+                title: 'Fixas vs. Parceladas (%)',
+                whatIs: 'Divide o quanto do seu mês vai para contas recorrentes (aluguel, internet, energia) versus compras parceladas.',
+                howToRead: 'Primeiro número = peso das Fixas; segundo número = peso das Parcelas. Parcelas acima de 20–25% costumam engessar o orçamento pelos meses seguintes.',
+                actionTip: 'Se a segunda % estiver alta, dê um tempo de novas compras parceladas até o saldo futuro aliviar.'
+            },
+            rep_kpi_daily: {
+                badge: 'Relatórios • Indicador 4',
+                title: 'Custo Diário Médio',
+                whatIs: 'Quanto custa em média cada dia da sua vida neste mês (despesas totais divididas por 30 dias).',
+                howToRead: 'Ajuda a enxergar o tamanho do seu padrão de vida em valores do dia a dia.',
+                actionTip: 'Multiplique esse valor por 3 para saber rapidamente quanto precisa juntar para ter 90 dias (3 meses) de tranquilidade.'
+            },
+            rep_auto_insights: {
+                badge: 'Relatórios • Insights',
+                title: 'Diagnóstico Financeiro Automático',
+                whatIs: 'Leitura automática dos principais alertas e pontos fortes encontrados nas contas do mês selecionado.',
+                howToRead: 'Cartões vermelhos/amarelos indicam pontos críticos (gargalos de despesa ou parcelas); cartões verdes/azuis mostram conquistas e folgas para aproveitar.',
+                actionTip: 'Use os 3 cartões como checklist rápido antes de planejar gastos maiores no mês.'
+            },
+            rep_action_plan: {
+                badge: 'Relatórios • Ações Práticas',
+                title: 'Plano de Ação Financeiro do Mês',
+                whatIs: 'Passo a passo automático calculado em cima das suas próprias contas para melhorar o caixa já neste mês.',
+                howToRead: 'Cada item traz valores exatos em Reais (quanto falta quitar, quanto cortar de variáveis ou quanto transferir para a reserva).',
+                actionTip: 'Siga os passos de cima para baixo ao longo do mês como um roteiro prático.'
+            },
+            rep_503020: {
+                badge: 'Relatórios • Divisão Ideal',
+                title: 'Como ler o Método 50 / 30 / 20',
+                whatIs: 'Regra clássica de equilíbrio financeiro que divide sua renda em 3 baldes:\n50% Essenciais + 30% Estilo de Vida + 20% Guardar/Reserva.',
+                howToRead: '• Essenciais (50%): moradia, alimentação, transporte, saúde, educação.\n• Estilo de Vida (30%): lazer, compras, delivery, assinaturas.\n• Poupança / Reserva (20%): sobra livre para construir segurança.\nCompare sua barra colorida com a meta ideal marcada em cada linha.',
+                actionTip: 'Se Essenciais + Estilo de Vida passam de 80%, falta espaço para os 20% de reserva — comece ajustando Estilo de Vida.'
+            },
+            rep_leak_detector: {
+                badge: 'Relatórios • Economia Real',
+                title: 'Detector de Vazamentos (vs. Média 3m)',
+                whatIs: 'Compara cada categoria de despesa deste mês com o que VOCÊ mesmo gastou nos últimos 3 meses.',
+                howToRead: 'Categorias em vermelho/laranja subiram acima do seu padrão normal (a diferença aparece em % e em Reais). Os botões "-10%", "-15%", "-20%" simulam na hora quantos Reais extras você libera para a reserva se segurar essas categorias.',
+                actionTip: 'Escolha um percentual realista (-10% ou -15%), veja o impacto em azul no topo do card e ataque primeiro a categoria número 1 da lista.'
+            },
+            rep_installment_radar: {
+                badge: 'Relatórios • Previsão de Alívio',
+                title: 'Dinheiro que Vai Desbloquear',
+                whatIs: 'Mapeia automaticamente todas as compras parceladas que estão na reta final (encerrando nos próximos 3 meses).',
+                howToRead: 'Mostra o nome do item, quantas parcelas faltam e exatamente quanto por mês vai sobrar livre quando a última parcela terminar.',
+                actionTip: 'Regra de ouro: quando uma parcela acabar, transfira esse mesmo valor para a sua Conta Reserva para não "evaporar" em gastos pequenos.'
+            },
+            rep_cashflow_12m: {
+                badge: 'Relatórios • Gráfico 12 Meses',
+                title: 'Como ler o Gráfico Azul, Verde e Vermelho (12 Meses)',
+                whatIs: 'Mostra a evolução de 12 meses lado a lado com 3 barras por mês:\nVerde = Receitas | Vermelha = Despesas | Azul = Quanto Guardar.',
+                howToRead: '• Barra Verde maior que a Vermelha = mês fecha no positivo.\n• Barra Azul = quanto é realista guardar naquele mês já considerando faturas médias do cartão e giro mensal.\n• Toque ou passe o dedo sobre qualquer mês para atualizar o card resumo acima com Receitas, Despesas, Saldo e Meta para Guardar.',
+                actionTip: 'No celular, arraste o gráfico horizontalmente para ver os meses anteriores e futuros e toque em qualquer barra para inspecionar.'
+            },
+            rep_top5: {
+                badge: 'Relatórios • Maiores Gastos',
+                title: 'Top 5 Maiores Despesas do Mês',
+                whatIs: 'Ranking das 5 maiores contas ou faturas individuais que mais pesam no mês selecionado.',
+                howToRead: 'Mostra o valor de cada item e quantos por cento apenas aquelas 5 contas representam no total de saídas.',
+                actionTip: 'Revisar esses 5 itens costuma gerar muito mais economia do que cortar dezenas de centavos em gastos pequenos.'
+            },
+            rep_nature: {
+                badge: 'Relatórios • Estrutura',
+                title: 'Composição das Despesas por Natureza',
+                whatIs: 'Agrupa os gastos pelo comportamento financeiro: Contas Fixas, Compras Parceladas, Faturas de Cartão e Gastos Variáveis.',
+                howToRead: 'Permite entender se o aperto vem de custos fixos difíceis de cortar (moradia/contas) ou de parcelas/gastos variáveis que podem ser reduzidos já na próxima semana.',
+                actionTip: 'Se "Cartão" ou "Variáveis" dominarem a barra, é onde você consegue resultado mais rápido.'
+            },
+            settings_family: {
+                badge: 'Configurações • Família',
+                title: 'Contas Integradas & Família',
+                whatIs: 'Permite conectar sua conta à de cônjuge, filhos ou sócio(a) mediante convite e aceite expresso.',
+                howToRead: 'Quando ativo, você ganha um seletor no topo da Visão Mensal para alternar entre apenas sua conta, apenas a do familiar ou Visão Conjunta somada.',
+                actionTip: 'A outra pessoa também precisa ativar "Habilitar Contas Integradas" nas Configurações dela para receber o convite.'
+            },
+            settings_cards: {
+                badge: 'Configurações • Cartões',
+                title: 'Meus Cartões de Crédito (Virada & Vencimento)',
+                whatIs: 'Centraliza as datas de Fechamento (virada da fatura) e Vencimento de cada cartão cadastrado ou sincronizado.',
+                howToRead: 'Compras feitas após o dia de fechamento entram automaticamente na fatura do mês seguinte. Isso garante que suas projeções futuras batam com a fatura real.',
+                actionTip: 'Se a fatura de algum mês divergir por 1 ou 2 dias do banco, ajuste o dia de fechamento no cadastro do banco/cartão correspondente.'
+            },
+            settings_reconciled: {
+                badge: 'Configurações • Auditoria',
+                title: 'Conciliações Realizadas (Desfazer Vínculos)',
+                whatIs: 'Histórico das contas planejadas deste mês que foram casadas ("conciliadas") com transações reais do seu extrato.',
+                howToRead: 'Cada bloco mostra a conta do planejamento vinculada ao lançamento do extrato bancário.',
+                actionTip: 'Se conciliou algum item errado, basta desfazer o vínculo aqui que o lançamento volta ao status original.'
+            },
+            settings_backup: {
+                badge: 'Configurações • Segurança',
+                title: 'Backup .JSON e Dados de Teste',
+                whatIs: 'Permite baixar uma cópia completa dos seus lançamentos, contas e configurações em arquivo .JSON, ou restaurar um backup salvo.',
+                howToRead: '"Exportar JSON" salva tudo localmente no seu aparelho. "Importar .JSON" carrega um arquivo compatível. "Zerar Lançamentos" limpa apenas os lançamentos para recomeçar.',
+                actionTip: 'Exporte um backup antes de fazer grandes importações ou testes em massa.'
+            }
+        };
+
+        function applyHelpTipsPreference(enabled, options = {}) {
+            showHelpTips = Boolean(enabled);
+            if (typeof document !== 'undefined' && document.body) {
+                document.body.classList.toggle('hide-help-tips', !showHelpTips);
+            }
+            updateHelpTipsToggleUI();
+
+            if (options.persist !== false && currentUser && currentUser.id) {
+                safeLocalStorageSet(`finan_show_help_tips_${currentUser.id}`, showHelpTips ? 'true' : 'false');
+                if (!currentUser.settings_json || typeof currentUser.settings_json !== 'object') {
+                    currentUser.settings_json = {};
+                }
+                currentUser.settings_json.showHelpTips = showHelpTips;
+                CloudDB.saveUserData(currentUser.id, currentUser, transactions).catch(() => {});
+            }
+        }
+        window.applyHelpTipsPreference = applyHelpTipsPreference;
+
+        function updateHelpTipsToggleUI() {
+            const toggleEl = document.getElementById('toggle-help-tips-enabled');
+            if (toggleEl) {
+                toggleEl.checked = Boolean(showHelpTips);
+            }
+        }
+        window.updateHelpTipsToggleUI = updateHelpTipsToggleUI;
+
+        function closeHelpTipModal() {
+            const modal = document.getElementById('app-help-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+        window.closeHelpTipModal = closeHelpTipModal;
+
+        function openHelpTipModal(helpKey) {
+            const modal = document.getElementById('app-help-modal');
+            const topic = APP_HELP_TOPICS[helpKey];
+            if (!modal || !topic) return;
+
+            const badgeEl = document.getElementById('app-help-modal-badge');
+            const titleEl = document.getElementById('app-help-modal-title');
+            const whatEl = document.getElementById('app-help-modal-what');
+            const howEl = document.getElementById('app-help-modal-how');
+            const actionEl = document.getElementById('app-help-modal-action');
+
+            if (badgeEl) badgeEl.textContent = topic.badge || 'Guia do Aplicativo';
+            if (titleEl) titleEl.textContent = topic.title || 'Explicação';
+            if (whatEl) {
+                whatEl.style.whiteSpace = 'pre-line';
+                whatEl.textContent = topic.whatIs || '';
+            }
+            if (howEl) {
+                howEl.style.whiteSpace = 'pre-line';
+                howEl.textContent = topic.howToRead || '';
+            }
+            if (actionEl) {
+                actionEl.style.whiteSpace = 'pre-line';
+                actionEl.textContent = topic.actionTip || '';
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            refreshLucideIcons(modal);
+        }
+        window.openHelpTipModal = openHelpTipModal;
+
+        function initHelpTipsSystem() {
+            if (window._helpTipsSystemInitialized) return;
+            window._helpTipsSystemInitialized = true;
+
+            document.addEventListener('click', (ev) => {
+                const tipBtn = ev.target && ev.target.closest ? ev.target.closest('.help-tip-btn[data-help-key]') : null;
+                if (tipBtn) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const key = tipBtn.getAttribute('data-help-key');
+                    if (key) openHelpTipModal(key);
+                    return;
+                }
+
+                const helpModal = document.getElementById('app-help-modal');
+                if (helpModal && ev.target === helpModal) {
+                    closeHelpTipModal();
+                }
+            });
+
+            document.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Escape') {
+                    const helpModal = document.getElementById('app-help-modal');
+                    if (helpModal && !helpModal.classList.contains('hidden')) {
+                        closeHelpTipModal();
+                    }
+                }
+            });
+
+            const closeBtn = document.getElementById('btn-close-app-help-modal');
+            if (closeBtn) closeBtn.addEventListener('click', closeHelpTipModal);
+
+            const confirmBtn = document.getElementById('btn-confirm-app-help-modal');
+            if (confirmBtn) confirmBtn.addEventListener('click', closeHelpTipModal);
+
+            const disableFromModalBtn = document.getElementById('btn-disable-help-tips-from-modal');
+            if (disableFromModalBtn) {
+                disableFromModalBtn.addEventListener('click', () => {
+                    applyHelpTipsPreference(false, { persist: true });
+                    closeHelpTipModal();
+                });
+            }
+
+            const toggleEl = document.getElementById('toggle-help-tips-enabled');
+            if (toggleEl) {
+                toggleEl.addEventListener('change', (ev) => {
+                    applyHelpTipsPreference(Boolean(ev.target.checked), { persist: true });
+                });
+            }
+
+            applyHelpTipsPreference(showHelpTips, { persist: false });
+        }
+        window.initHelpTipsSystem = initHelpTipsSystem;
+
+        let _enteringSessionPromise = null;
+        async function enterSessionWithUserSafely(authUser) {
+            if (!authUser || !authUser.id || currentUser) return;
+            if (_enteringSessionPromise) return _enteringSessionPromise;
+            _enteringSessionPromise = (async () => {
+                try {
+                    const profile = await CloudDB.fetchOrCreateProfile(authUser);
+                    if (!currentUser) {
+                        await enterAppWithProfile(profile);
+                    }
+                } finally {
+                    _enteringSessionPromise = null;
+                }
+            })();
+            return _enteringSessionPromise;
+        }
+
         async function initApp() {
             initTheme();
             initPhotoCropEvents();
@@ -13028,13 +13777,13 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
             initImprovementSuggestionSlots();
             initReserveModalListeners();
             initReportMobileSubtabs();
+            initHelpTipsSystem();
             lucide.createIcons();
 
             const { data } = await supabaseClient.auth.getSession();
             if (data && data.session && data.session.user) {
                 try {
-                    const profile = await CloudDB.fetchOrCreateProfile(data.session.user);
-                    await enterAppWithProfile(profile);
+                    await enterSessionWithUserSafely(data.session.user);
                 } catch (e) {
                     console.warn('Erro ao recuperar sessão:', e);
                 }
@@ -13047,8 +13796,7 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
                         openChangePasswordModal();
                     } else if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user && !currentUser) {
                         try {
-                            const profile = await CloudDB.fetchOrCreateProfile(session.user);
-                            await enterAppWithProfile(profile);
+                            await enterSessionWithUserSafely(session.user);
                         } catch (e) {
                             console.warn('Erro ao processar login automático:', e);
                         }
