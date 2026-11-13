@@ -213,15 +213,25 @@ function normalizeTextForClassification(desc) {
 function isCardBillPayment(desc) {
     if (!desc) return false;
     const clean = normalizeTextForClassification(desc);
+    if (clean.includes('estorno') || clean.includes('reembolso') || clean.includes('cashback') || clean.includes('refund')) {
+        return false;
+    }
     return clean.includes('pagamento de fatura cartao de credito') ||
            clean.includes('cartao de credito pagamento de fatura') ||
            clean.includes('pagamento cartao de credito') ||
            clean.includes('pagamento do cartao') ||
+           clean.includes('pgto do cartao') ||
            clean.includes('pagamento de fatura') ||
            clean.includes('pagamento fatura') ||
            clean.includes('pgto fatura') ||
+           clean.includes('pagto fatura') ||
            clean.includes('pagamento cartao') ||
            clean.includes('pgto cartao') ||
+           clean.includes('pagto cartao') ||
+           clean.includes('pagamento com saldo') ||
+           clean.includes('pgto com saldo') ||
+           clean.includes('liquidacao de fatura') ||
+           clean.includes('liquidacao fatura') ||
            (clean.includes('pagamento') && clean.includes('fatura')) ||
            (clean.includes('pagamento') && clean.includes('credito'));
 }
@@ -229,11 +239,26 @@ function isCardBillPayment(desc) {
 function isCardPaymentReceivedMirror(desc) {
     if (!desc) return false;
     const clean = normalizeTextForClassification(desc);
+    // Garante que estornos, reembolsos e cashbacks nunca sejam tratados como pagamento de fatura
+    if (clean.includes('estorno') || clean.includes('reembolso') || clean.includes('cashback') || clean.includes('refund')) {
+        return false;
+    }
     return clean.includes('pagamento recebido') ||
            clean.includes('pgto recebido') ||
            clean.includes('pagamento do cartao') ||
+           clean.includes('pgto do cartao') ||
            clean.includes('pagamento de fatura') ||
-           clean.includes('pagamento fatura');
+           clean.includes('pagamento fatura') ||
+           clean.includes('pgto fatura') ||
+           clean.includes('pagto fatura') ||
+           clean.includes('pagamento com saldo') ||
+           clean.includes('pgto com saldo') ||
+           clean.includes('pagamento efetuado') ||
+           clean.includes('inclusao de pagamento') ||
+           clean.includes('liquidacao de fatura') ||
+           clean.includes('liquidacao fatura') ||
+           clean.includes('debito automatico fatura') ||
+           (clean.includes('pagamento') && clean.includes('fatura'));
 }
 
 function isVaultTransactionDesc(desc) {
@@ -487,13 +512,22 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
     const group = cls.tx_group;
     const rawDateCandidate = String(tx.rawDate || tx.date || tx.transactionDate || '');
     const dayNum = Math.max(1, Math.min(31, Number(tx.day || (rawDateCandidate.length >= 10 ? parseInt(rawDateCandidate.slice(8, 10), 10) : 1) || 1)));
-    const rawMonth = String(tx.rawMonth || tx.month || (rawDateCandidate.length >= 7 ? rawDateCandidate.slice(0, 7) : '2026-11')).slice(0, 7);
+    const fallbackMonth = parseDateInSaoPaulo(new Date().toISOString()).month;
+    const rawMonth = String(tx.rawMonth || tx.month || (rawDateCandidate.length >= 7 ? rawDateCandidate.slice(0, 7) : fallbackMonth)).slice(0, 7);
     const descNorm = normalizeTextForClassification(tx.desc || tx.description || '');
 
-    // Regra Crucial de Virada do Cartão & Tarifas:
-    // O crédito emergencial de R$ 14,90 (03/11) pertence a Novembro e não entra na fatura de Dezembro.
-    // A Raia Drogasil (R$ 38,79) integra a fatura aberta oficial de Dezembro (totalizando R$ 1.309,35).
-    const isEmergencialNov = rawMonth === '2026-11' && dayNum <= 3 && descNorm.includes('emergencial');
+    // Data real do evento (fundamental para pagamentos/estornos cujo postDate/purchaseDate difere da competência)
+    const eventDateCandidate = String(
+        tx.purchase_date ||
+        tx.rawPurchaseDate ||
+        tx.raw_data?.creditCardMetadata?.billPostDate ||
+        tx.raw_data?.date ||
+        rawDateCandidate ||
+        ''
+    );
+    const parsedEvent = /^\d{4}-\d{2}-\d{2}/.test(eventDateCandidate) ? parseDateInSaoPaulo(eventDateCandidate) : null;
+    const evalMonth = parsedEvent ? parsedEvent.month : rawMonth;
+    const evalDay = parsedEvent ? parsedEvent.day : dayNum;
 
     const isSynthetic = Boolean(tx.isSyntheticGapFill || String(tx.id || '').startsWith('syn_'));
     const hasBillId = Boolean(tx.billId || tx.creditCardMetadata?.billId);
@@ -503,12 +537,15 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
         null
     );
 
-    // AUTORIDADE MÁXIMA DO EMISSOR DO CARTÃO (OPEN FINANCE):
-    // Se a transação possui billForecastDate oficial do banco emissor, esse mês é a verdade canônica absoluta.
-    // Jamais tenta adivinhar ou recalcular virada de calendário quando o banco já enviou a competência oficial.
-    if ((group === 'CARD_EXPENSE' || tx.accountType === 'CREDIT') && forecastMonth && forecastMonth.length === 7) {
+    // Autoridade do emissor para compras de cartão (CARD_EXPENSE):
+    // Se a transação de compra possui billForecastDate oficial do banco emissor, respeita essa competência diretamente.
+    if (group === 'CARD_EXPENSE' && forecastMonth && forecastMonth.length === 7) {
         return {
             ...tx,
+            rawMonth,
+            rawDay: dayNum,
+            tx_group: group,
+            txGroup: group,
             cycleMonth: forecastMonth,
             month: forecastMonth,
             settlementPhase: 'IN_CYCLE',
@@ -524,50 +561,43 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
         (tx.accountType === 'CREDIT' && dayNum === 1 && !tx.rawPurchaseDate)
     );
 
-    let cycleMonth = isEmergencialNov ? '2026-11' : (forecastMonth || rawMonth);
+    let cycleMonth = forecastMonth || rawMonth;
     let settlementPhase = 'IN_CYCLE';
 
     if (group === 'BILL_PAYMENT') {
-        if (dayNum > settlementWindowEnd) {
-            // Pagamento realizado após a janela de vencimento (ex: 29/09, 13/10, 31/10, 17/08) ->
-            // Antecipação dentro do ciclo aberto que fechará em `closingDay` do mês seguinte (M + 1)!
-            cycleMonth = shiftMonthKey(rawMonth, 1);
+        if (evalDay > settlementWindowEnd) {
+            // Pagamento após a janela de vencimento entra como antecipação no ciclo aberto (M + 1)
+            cycleMonth = shiftMonthKey(evalMonth, 1);
             settlementPhase = 'ADVANCE_BEFORE_CLOSING';
-        } else if (dayNum >= closingDay + 1 && dayNum <= settlementWindowEnd) {
-            // Pagamento realizado após o fechamento até o vencimento (ex: 03/11, 06/11, 06/10, 04/09, 06/08) ->
-            // Quita a fatura fechada no dia `closingDay` do próprio mês (M)!
-            cycleMonth = rawMonth;
+        } else if (evalDay >= closingDay + 1 && evalDay <= settlementWindowEnd) {
+            // Pagamento entre o fechamento e o vencimento quita a fatura fechada do mês M
+            cycleMonth = evalMonth;
             settlementPhase = 'POST_CLOSING_PAYMENT';
         } else {
-            // Pago até o dia de fechamento (`dayNum <= closingDay`)
-            cycleMonth = rawMonth;
-            if ((tx.accountType === 'BANK' && dayNum > 1) || descNorm.includes('antecipado')) {
+            // Pagamento efetuado até o dia de fechamento (evalDay <= closingDay)
+            cycleMonth = evalMonth;
+            if ((tx.accountType === 'BANK' && evalDay > 1) || descNorm.includes('antecipado')) {
                 settlementPhase = 'ADVANCE_BEFORE_CLOSING';
             } else {
                 settlementPhase = 'POST_CLOSING_PAYMENT';
             }
         }
     } else if (group === 'CARD_REFUND') {
-        if (dayNum >= closingDay + 1 && dayNum <= settlementWindowEnd) {
-            // Estorno/reembolso pós-fechamento (ex: 03/08 R$ 32,34) -> abate o saldo fechado da fatura do próprio mês M
-            cycleMonth = rawMonth;
+        if (evalDay >= closingDay + 1 && evalDay <= settlementWindowEnd) {
+            // Estorno/reembolso pós-fechamento abate o saldo fechado da fatura do próprio mês M
+            cycleMonth = evalMonth;
             settlementPhase = 'POST_CLOSING_REFUND';
         } else {
-            cycleMonth = (!isPreAllocated && dayNum > closingDay)
-                ? shiftMonthKey(rawMonth, 1)
-                : rawMonth;
+            cycleMonth = forecastMonth || ((!isPreAllocated && evalDay > closingDay)
+                ? shiftMonthKey(evalMonth, 1)
+                : evalMonth);
             settlementPhase = 'IN_CYCLE_REFUND';
         }
     } else if (group === 'CARD_EXPENSE' || tx.accountType === 'CREDIT') {
-        if (isEmergencialNov) {
-            cycleMonth = '2026-11';
-        } else if (descNorm.includes('drogasil') && rawMonth === '2026-11' && dayNum <= 3) {
-            cycleMonth = '2026-12';
-        } else if (tx.rawPurchaseDate && !hasBillId && !isSynthetic) {
+        if (tx.rawPurchaseDate && !hasBillId && !isSynthetic) {
             const parsedPurchase = parseDateInSaoPaulo(tx.rawPurchaseDate);
             const pMonth = parsedPurchase.month;
             const pDay = parsedPurchase.day;
-            // Se a compra foi à vista (ou 1ª parcela) no próprio mês `rawMonth` e após `closingDay`, pertence a M + 1!
             const instMatch = String(tx.inst || '').match(/^(\d+)\s*\/\s*(\d+)$/);
             const curInst = instMatch ? parseInt(instMatch[1], 10) : 1;
             const firstInstCycle = pDay > closingDay ? shiftMonthKey(pMonth, 1) : pMonth;
@@ -590,10 +620,11 @@ function allocateTransactionToCardCycle(tx, cardConfig = {}) {
         settlementPhase = 'IN_CYCLE';
     }
 
+    const isSettlementGroup = group === 'BILL_PAYMENT' || group === 'CARD_REFUND';
     return {
         ...tx,
-        rawMonth,
-        rawDay: dayNum,
+        rawMonth: isSettlementGroup ? evalMonth : rawMonth,
+        rawDay: isSettlementGroup ? evalDay : dayNum,
         tx_group: group,
         txGroup: group,
         show_on_home: cls.show_on_home,
@@ -1464,7 +1495,10 @@ async function handler(req, res) {
 
                 let targetDateStr = t.date;
                 if (isCredit) {
-                    targetDateStr = ccMeta?.billForecastDate || ccMeta?.billPostDate || t.date;
+                    // Despesas usam o mês previsto da fatura; estornos e espelhos de pagamento usam a data real do evento
+                    targetDateStr = isExpense
+                        ? (ccMeta?.billForecastDate || ccMeta?.billPostDate || t.date)
+                        : (ccMeta?.billPostDate || t.date || ccMeta?.purchaseDate || ccMeta?.billForecastDate);
                 } else {
                     targetDateStr = t.date || ccMeta?.purchaseDate;
                 }
@@ -1529,14 +1563,12 @@ async function handler(req, res) {
                 const allocatedTx = allocateTransactionToCardCycle(baseTxObj, cardCycleConfig);
 
                 if (isCredit) {
-                    // Compras e estornos de cartão assumem o ciclo oficial determinado pela data de virada
+                    // Compras, estornos e espelhos de pagamento do cartão assumem o ciclo oficial determinado pelo motor
                     rawCardTxs.push({
                         ...allocatedTx,
                         rawMonth: targetMonth,
                         rawDay: targetDay,
-                        month: (allocatedTx.tx_group === 'CARD_EXPENSE' || allocatedTx.tx_group === 'CARD_REFUND')
-                            ? allocatedTx.cycleMonth
-                            : allocatedTx.month,
+                        month: allocatedTx.cycleMonth || allocatedTx.month,
                         isAlreadyCycleAllocated: true
                     });
                 } else {
@@ -1602,16 +1634,126 @@ async function handler(req, res) {
         });
 
         // Para cada conta de cartão (CREDIT), executa o motor homologado `calculateHomologatedCardBills`
+        // Em sincronizações parciais ('7d'/'delta'), mescla lançamentos já persistidos em bank_statements
+        // para garantir que faturas futuras (parcelas antigas ou compras do ciclo aberto) não fiquem incompletas.
         const creditAccounts = normalizedAccounts.filter(a => a.type === 'CREDIT');
         const finalNormalizedBills = [];
+        const healedDbStmts = [];
+
+        let existingStoredStatements = [];
+        if (creditAccounts.length > 0 && user?.id) {
+            try {
+                const { data: storedRows } = await supabase
+                    .from('bank_statements')
+                    .select('fitid, bank_id, month, day, type, description, raw_description, amount, tx_group, show_on_home, account_type, is_credit_card_tx, pluggy_category, raw_data, purchase_date, transferred_at, installment_number, total_installments, bill_id, merchant_data, payment_data, pluggy_status')
+                    .eq('user_id', user.id);
+                if (Array.isArray(storedRows)) {
+                    existingStoredStatements = storedRows;
+                }
+            } catch (histErr) {
+                console.warn('[PluggySync] Aviso ao carregar histórico de extratos:', histErr?.message || histErr);
+            }
+        }
+
+        const freshCardFitids = new Set(cardStatementTransactions.map(t => String(t.fitid || '')));
+        const freshBankFitids = new Set(bankAccountTransactions.map(t => String(t.fitid || '')));
+
+        const storedBankPayments = [];
+        existingStoredStatements.forEach(row => {
+            if (!row || row.is_credit_card_tx) return;
+            const fit = String(row.fitid || '');
+            if (!fit || freshBankFitids.has(fit)) return;
+            const cls = classifyPluggyTransaction({
+                accountType: 'BANK',
+                isCreditCardTx: false,
+                type: row.type === 'expense' ? 'expense' : 'income',
+                desc: row.description || ''
+            });
+            if (cls.tx_group !== 'BILL_PAYMENT') return;
+            storedBankPayments.push({
+                id: fit,
+                fitid: fit,
+                accountId: row.bank_id,
+                accountType: 'BANK',
+                isCreditCardTx: false,
+                type: row.type === 'expense' ? 'expense' : 'income',
+                desc: row.description || '',
+                amount: Number(row.amount || 0),
+                month: row.month,
+                rawMonth: row.month,
+                day: Number(row.day || 1),
+                rawDay: Number(row.day || 1),
+                purchase_date: row.purchase_date || row.raw_data?.date || null,
+                rawPurchaseDate: row.purchase_date || row.raw_data?.date || null,
+                raw_data: row.raw_data || null,
+                tx_group: cls.tx_group,
+                txGroup: cls.tx_group,
+                paymentSource: cls.paymentSource
+            });
+        });
 
         creditAccounts.forEach(cAcc => {
             const cardCfg = accountCycleConfigs.get(String(cAcc.id)) || defaultCreditConfig;
             const accCardTxs = cardStatementTransactions.filter(t => String(t.accountId) === String(cAcc.id));
             const accOfficialBills = normalizedBills.filter(b => String(b.accountId) === String(cAcc.id));
+            const expectedBankId = `bank_pluggy_${String(cAcc.id).slice(0, 8)}`;
+
+            const storedCardTxsForAcc = [];
+            existingStoredStatements.forEach(row => {
+                if (!row || String(row.bank_id || '') !== expectedBankId) return;
+                const fit = String(row.fitid || '');
+                if (!fit || freshCardFitids.has(fit) || fit.startsWith('pluggy_syn_')) return;
+
+                const ccMeta = row.raw_data?.creditCardMetadata || null;
+                const reconstructed = {
+                    id: fit,
+                    fitid: fit,
+                    accountId: String(cAcc.id),
+                    accountName: String(cAcc.name || 'Cartão de Crédito'),
+                    accountType: 'CREDIT',
+                    isCreditCardTx: true,
+                    type: row.type === 'expense' ? 'expense' : 'income',
+                    desc: row.description || row.raw_description || '',
+                    raw_description: row.raw_description || null,
+                    amount: Number(row.amount || 0),
+                    month: row.month,
+                    rawMonth: row.month,
+                    day: Number(row.day || 1),
+                    rawDay: Number(row.day || 1),
+                    billId: row.bill_id || ccMeta?.billId || null,
+                    bill_id: row.bill_id || ccMeta?.billId || null,
+                    purchase_date: row.purchase_date || ccMeta?.purchaseDate || row.raw_data?.date || null,
+                    rawPurchaseDate: row.purchase_date || ccMeta?.purchaseDate || row.raw_data?.date || null,
+                    transferred_at: row.transferred_at || row.purchase_date || null,
+                    installment_number: row.installment_number ?? null,
+                    total_installments: row.total_installments ?? null,
+                    pluggyCategory: row.pluggy_category || 'Compras',
+                    raw_data: row.raw_data || null,
+                    merchant_data: row.merchant_data || null,
+                    payment_data: row.payment_data || null,
+                    pluggy_status: row.pluggy_status || 'POSTED',
+                    creditCardMetadata: ccMeta
+                };
+                const reallocated = allocateTransactionToCardCycle(reconstructed, cardCfg);
+                const finalMonth = reallocated.cycleMonth || row.month;
+                storedCardTxsForAcc.push({
+                    ...reallocated,
+                    month: finalMonth,
+                    isAlreadyCycleAllocated: true
+                });
+
+                // Se a reclassificação corrigiu grupo ou mês legado salvo anteriormente (ex: pagamento no cartão), auto-repara no Supabase
+                if (reallocated.tx_group !== row.tx_group || finalMonth !== row.month) {
+                    healedDbStmts.push({
+                        ...reallocated,
+                        month: finalMonth,
+                        day: Number(reallocated.rawDay || row.day || 1)
+                    });
+                }
+            });
 
             const homologatedMap = calculateHomologatedCardBills(
-                [...accCardTxs, ...bankAccountTransactions],
+                [...accCardTxs, ...storedCardTxsForAcc, ...bankAccountTransactions, ...storedBankPayments],
                 accOfficialBills,
                 cardCfg,
                 nowSp
@@ -1722,14 +1864,14 @@ async function handler(req, res) {
         }
 
         // Gravação direta idempotente na tabela public.bank_statements (todas as transações com raw_data e campos estruturados)
-        const allStmtsToSave = [...cardStatementTransactions, ...bankAccountTransactions];
+        const allStmtsToSave = [...cardStatementTransactions, ...bankAccountTransactions, ...healedDbStmts];
         if (allStmtsToSave.length > 0 && user?.id) {
             try {
                 const stmtRows = allStmtsToSave.map(s => ({
                     user_id: user.id,
                     fitid: String(s.fitid || `pluggy_${s.id}`),
                     bank_id: `bank_pluggy_${String(s.accountId || '').slice(0, 8)}`,
-                    month: String(s.month || '2026-11'),
+                    month: String(s.month || nowSp.month),
                     day: Number(s.day || 1),
                     type: s.type === 'expense' ? 'expense' : 'income',
                     description: String(s.desc || s.description || 'Movimentação Open Finance'),

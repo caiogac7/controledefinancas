@@ -855,11 +855,12 @@
         }
 
         function syncMonthsFromTransactions() {
-            const activeKey = MONTHS[currentMonthIndex]?.key || '2026-11';
+            const currentSpMonth = getSaoPauloDateYYYYMMDD().slice(0, 7);
+            const activeKey = MONTHS[currentMonthIndex]?.key || currentSpMonth;
             // REGRA DE NEGÓCIO: Iniciar com no máximo 4 meses para trás a partir do mês ativo
             const minAllowedMonth = (typeof addMonthsToKey === 'function')
                 ? addMonthsToKey(activeKey, -4)
-                : '2026-07';
+                : currentSpMonth;
             MONTHS = DEFAULT_MONTHS.filter(m => m.key >= minAllowedMonth).map(m => ({ ...m }));
             transactions.forEach(t => {
                 if (t && isValidAppMonthKey(t.month) && t.month >= minAllowedMonth) ensureMonthExists(t.month);
@@ -867,8 +868,11 @@
             bankStatements.forEach(s => {
                 if (s && isValidAppMonthKey(s.month) && s.month >= minAllowedMonth) ensureMonthExists(s.month);
             });
+            (Array.isArray(creditBills) ? creditBills : []).forEach(cb => {
+                if (cb && isValidAppMonthKey(cb.month) && cb.month >= minAllowedMonth) ensureMonthExists(cb.month);
+            });
             const restoredIdx = MONTHS.findIndex(m => m.key === activeKey);
-            currentMonthIndex = restoredIdx !== -1 ? restoredIdx : MONTHS.findIndex(m => m.key === '2026-11');
+            currentMonthIndex = restoredIdx !== -1 ? restoredIdx : MONTHS.findIndex(m => m.key === currentSpMonth);
             if (currentMonthIndex === -1) currentMonthIndex = 0;
             populateMonthSelect();
         }
@@ -1047,9 +1051,7 @@
                         const accNameNorm = (acc.name || '').toLowerCase();
                         const matchesName = cardNameNorm && accNameNorm && (
                             cardNameNorm.includes(accNameNorm) ||
-                            accNameNorm.includes(cardNameNorm) ||
-                            (cardNameNorm.includes('mercado') && accNameNorm.includes('mercado')) ||
-                            (cardNameNorm.includes('itau') && accNameNorm.includes('itau'))
+                            accNameNorm.includes(cardNameNorm)
                         );
 
                         if (matchesAcc || matchesBank || matchesCard || matchesName) {
@@ -1064,7 +1066,7 @@
 
             // 4. Cálculo inteligente do Limite Utilizado Atual caso o banco não envie:
             // Soma todas as faturas abertas e futuras do cartão para refletir o comprometimento real
-            const curMonthKey = MONTHS[currentMonthIndex]?.key || '2026-11';
+            const curMonthKey = MONTHS[currentMonthIndex]?.key || getSaoPauloDateYYYYMMDD().slice(0, 7);
             const curInv = getCardInvoiceForBank(cardOrBankObj, curMonthKey);
             if (used <= 0) {
                 if (Array.isArray(creditBills) && creditBills.length > 0) {
@@ -1093,19 +1095,6 @@
                 total = Number((available + used).toFixed(2));
             }
 
-            // Se for o cartão Mercado Pago ou se total ainda for 0 mas houver indicação de cartão Pluggy/Mercado Pago
-            if (total <= 0 && (cardNameNorm.includes('mercado') || cardNameNorm.includes('mp') || bId.includes('mercado') || (Array.isArray(pluggyItems) && pluggyItems.length > 0))) {
-                total = 5600; // Limite contratado oficial do cartão Mercado Pago do usuário
-                if (used <= 0 && curInv && curInv.total > 0) {
-                    used = curInv.total;
-                }
-                if (available <= 0 && used > 0) {
-                    available = Math.max(0, Number((total - used).toFixed(2)));
-                } else if (available > 0 && used <= 0) {
-                    used = Math.max(0, Number((total - available).toFixed(2)));
-                }
-            }
-
             const hasTotalLimit = total > 0;
             const hasLimits = hasTotalLimit || available > 0 || used > 0;
             const pctUsed = hasTotalLimit ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0;
@@ -1130,9 +1119,39 @@
          * 5. Nunca utiliza apenas o campo month bruto sem validar a data real e a virada do cartão.
          * 6. Não aplica deslocamento automático se a transação já estiver associada ao ciclo correto.
          */
+        /**
+         * Extrai mês (YYYY-MM) e dia (1..31) de uma data ISO/timestamp no fuso America/Sao_Paulo.
+         */
+        function parseSaoPauloYMDParts(dateInput) {
+            if (!dateInput) return null;
+            const s = String(dateInput).trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+                return { month: s.slice(0, 7), day: parseInt(s.slice(8, 10), 10) || 1 };
+            }
+            if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+                try {
+                    const dt = new Date(s);
+                    if (!isNaN(dt.getTime())) {
+                        const ymd = new Intl.DateTimeFormat('sv-SE', {
+                            timeZone: 'America/Sao_Paulo',
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit'
+                        }).format(dt);
+                        if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+                            return { month: ymd.slice(0, 7), day: parseInt(ymd.slice(8, 10), 10) || 1 };
+                        }
+                    }
+                } catch {}
+                return { month: s.slice(0, 7), day: parseInt(s.slice(8, 10), 10) || 1 };
+            }
+            return null;
+        }
+
         function allocateTransactionToCardCycle(tx, cardConfigOverride = null) {
+            const fallbackSpMonth = getSaoPauloDateYYYYMMDD().slice(0, 7);
             if (!tx) {
-                return { cycleMonth: '2026-11', rawMonth: '2026-11', day: 1, settlementPhase: 'REGULAR', closingDayUsed: 2, dueDayUsed: 7 };
+                return { cycleMonth: fallbackSpMonth, rawMonth: fallbackSpMonth, day: 1, settlementPhase: 'REGULAR', closingDayUsed: 2, dueDayUsed: 7 };
             }
             const cfg = cardConfigOverride || getCardCycleConfig(tx);
             const closingDay = Math.max(1, Math.min(31, Number(cfg.closingDay) || 2));
@@ -1148,19 +1167,12 @@
                 rawMonth = rawDateStr.slice(0, 7);
                 day = parseInt(rawDateStr.slice(8, 10), 10) || day;
             } else {
-                rawMonth = normalizeMonthKey(tx.rawMonth || tx.month || '2026-11', '2026-11');
+                rawMonth = normalizeMonthKey(tx.rawMonth || tx.month || fallbackSpMonth, fallbackSpMonth);
             }
 
-            // Regra Crucial de Virada do Cartão & Feriados Nacionais (Finados):
-            // Em 2026-11, o dia 02/11 foi segunda-feira (Feriado de Finados). O fechamento prorrogou para 03/11.
-            // Transações até 03/11 (como a Raia Drogasil R$ 38,79 e Crédito Emergencial R$ 14,90) pertencem a Novembro (2026-11).
-            let effectiveClosingDay = closingDay;
-            if (rawMonth === '2026-11' && closingDay === 2) {
-                effectiveClosingDay = 3;
-            }
+            const effectiveClosingDay = closingDay;
 
-            // Se a transação já foi alocada ao ciclo exatamente com o MESMO closingDay e não tem data bruta diferente,
-            // reconstrói o rawMonth original caso tenhamos que reavaliar com novo closingDay
+            // Reconstrói o rawMonth original caso tenhamos que reavaliar com o closingDay do cartão
             if (tx.rawMonth && /^\d{4}-\d{2}$/.test(String(tx.rawMonth))) {
                 rawMonth = String(tx.rawMonth);
             }
@@ -1169,6 +1181,17 @@
             const isExpense = tx.type === 'expense';
             const desc = String(tx.desc || tx.description || '');
             const txGroup = tx.tx_group || tx.txGroup || '';
+
+            // Data real da ocorrência financeira para pagamentos e estornos (independe do billForecastDate futuro)
+            const eventYmd = parseSaoPauloYMDParts(
+                tx.purchase_date ||
+                tx.rawPurchaseDate ||
+                tx.raw_data?.creditCardMetadata?.billPostDate ||
+                tx.raw_data?.date ||
+                rawDateStr
+            );
+            const evalMonth = eventYmd ? eventYmd.month : rawMonth;
+            const evalDay = eventYmd ? eventYmd.day : day;
 
             // 1. Parcela Sintética gerada pelo fillInstallmentGaps (Regra 4 e Regra 6)
             const isSynthetic = Boolean(
@@ -1192,22 +1215,22 @@
             // 2. Pagamentos de Fatura na Conta Bancária (BANK) -> Pós-Fechamento vs Antecipação (Regra 3)
             const isBankBillPay = !isCredit && isExpense && (txGroup === 'BILL_PAYMENT' || (typeof isCardBillPayment === 'function' && isCardBillPayment(desc)));
             if (isBankBillPay) {
-                if (day > closingDay && day <= settlementWindowEnd) {
+                if (evalDay > closingDay && evalDay <= settlementWindowEnd) {
                     return {
-                        cycleMonth: rawMonth,
-                        rawMonth,
-                        day,
+                        cycleMonth: evalMonth,
+                        rawMonth: evalMonth,
+                        day: evalDay,
                         settlementPhase: 'POST_CLOSING_PAYMENT',
                         isAlreadyCycleAllocated: true,
                         closingDayUsed: closingDay,
                         dueDayUsed: dueDay
                     };
                 }
-                const targetCycle = day <= closingDay ? rawMonth : addMonthsToKey(rawMonth, 1);
+                const targetCycle = evalDay <= closingDay ? evalMonth : addMonthsToKey(evalMonth, 1);
                 return {
                     cycleMonth: targetCycle,
-                    rawMonth,
-                    day,
+                    rawMonth: evalMonth,
+                    day: evalDay,
                     settlementPhase: 'ADVANCE_BEFORE_CLOSING',
                     isAlreadyCycleAllocated: true,
                     closingDayUsed: closingDay,
@@ -1230,14 +1253,14 @@
 
             // 4. Espelho de Pagamento Recebido no Cartão (CREDIT income mirror)
             if (!isExpense && (txGroup === 'BILL_PAYMENT' || tx.paymentSource === 'CREDIT_MIRROR' || (typeof isCardPaymentReceivedMirror === 'function' && isCardPaymentReceivedMirror(desc)))) {
-                const mirrorCycle = (day > closingDay && day <= settlementWindowEnd)
-                    ? rawMonth
-                    : (day <= closingDay ? rawMonth : addMonthsToKey(rawMonth, 1));
+                const mirrorCycle = (evalDay > closingDay && evalDay <= settlementWindowEnd)
+                    ? evalMonth
+                    : (evalDay <= closingDay ? evalMonth : addMonthsToKey(evalMonth, 1));
                 return {
                     cycleMonth: mirrorCycle,
-                    rawMonth,
-                    day,
-                    settlementPhase: 'CREDIT_PAYMENT_MIRROR',
+                    rawMonth: evalMonth,
+                    day: evalDay,
+                    settlementPhase: (evalDay > closingDay && evalDay <= settlementWindowEnd) ? 'POST_CLOSING_PAYMENT' : 'CREDIT_PAYMENT_MIRROR',
                     isAlreadyCycleAllocated: true,
                     closingDayUsed: closingDay,
                     dueDayUsed: dueDay
@@ -1246,22 +1269,27 @@
 
             // 5. Estornos / Reembolsos / Créditos no Cartão (CREDIT income, CARD_REFUND) — Regra 3
             if (!isExpense) {
-                if (day === closingDay + 1) {
+                if (evalDay >= closingDay + 1 && evalDay <= settlementWindowEnd) {
                     return {
-                        cycleMonth: rawMonth,
-                        rawMonth,
-                        day,
+                        cycleMonth: evalMonth,
+                        rawMonth: evalMonth,
+                        day: evalDay,
                         settlementPhase: 'POST_CLOSING_REFUND',
                         isAlreadyCycleAllocated: true,
                         closingDayUsed: closingDay,
                         dueDayUsed: dueDay
                     };
                 }
-                const refundCycle = day <= closingDay ? rawMonth : addMonthsToKey(rawMonth, 1);
+                const forecastRefundMonth = (
+                    (tx.creditCardMetadata?.billForecastDate && String(tx.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+                    (tx.raw_data?.creditCardMetadata?.billForecastDate && String(tx.raw_data.creditCardMetadata.billForecastDate).slice(0, 7)) ||
+                    null
+                );
+                const refundCycle = forecastRefundMonth || (evalDay <= closingDay ? evalMonth : addMonthsToKey(evalMonth, 1));
                 return {
                     cycleMonth: refundCycle,
-                    rawMonth,
-                    day,
+                    rawMonth: evalMonth,
+                    day: evalDay,
                     settlementPhase: 'IN_CYCLE_REFUND',
                     isAlreadyCycleAllocated: true,
                     closingDayUsed: closingDay,
@@ -1283,9 +1311,7 @@
                 totInst = Number(tx.creditCardMetadata.totalInstallments || 1);
             }
 
-            // AUTORIDADE MÁXIMA DO EMISSOR DO CARTÃO (OPEN FINANCE):
-            // O campo billForecastDate do creditCardMetadata tem 100% de precisão e cobertura oficial do banco.
-            // Se o emissor do cartão já determinou o mês da fatura, respeita sem adivinhação de calendário!
+            // Se o emissor do cartão já determinou o mês da fatura (billForecastDate), respeita a competência oficial
             const forecastMonth = (
                 (tx.creditCardMetadata?.billForecastDate && String(tx.creditCardMetadata.billForecastDate).slice(0, 7)) ||
                 (tx.raw_data?.creditCardMetadata?.billForecastDate && String(tx.raw_data.creditCardMetadata.billForecastDate).slice(0, 7)) ||
@@ -1306,9 +1332,6 @@
             // Regra 6: Verifica se já está associada ao ciclo correto antes de deslocar
             const hasExplicitBillId = Boolean(tx.billId || (tx.creditCardMetadata && tx.creditCardMetadata.billId));
             const isProjectedInstallmentAnchor = (totInst > 1 && curInst > 1 && day === 1);
-            // Se o registro veio do banco (`bankStatements` / `bank_statements`) onde `month` já é o ciclo da fatura
-            // e não há data bruta separada, ou se `isAlreadyCycleAllocated` já está marcado com o mesmo closingDay,
-            // não deslocamos novamente (`day > closingDay -> M + 1`) para nunca empurrar +1 mês a cada sincronização/reload.
             const hasDistinctRawDate = Boolean(rawDateStr || tx.rawPurchaseDate || (tx.rawMonth && tx.rawMonth !== tx.month));
             const alreadyAllocatedSameClosing = Boolean(
                 tx.isAlreadyCycleAllocated &&
@@ -1317,12 +1340,7 @@
             );
 
             let cycleMonth = rawMonth;
-            const descLower = String(tx.desc || tx.description || '').toLowerCase();
-            const isHolidayRolloverNov = rawMonth === '2026-11' && day <= 3 && (descLower.includes('drogasil') || descLower.includes('emergencial'));
-
-            if (isHolidayRolloverNov) {
-                cycleMonth = '2026-11';
-            } else if (alreadyAllocatedSameClosing) {
+            if (alreadyAllocatedSameClosing) {
                 cycleMonth = normalizeMonthKey(tx.cycleMonth || tx.month || rawMonth, rawMonth);
             } else if (hasExplicitBillId || isProjectedInstallmentAnchor || !hasDistinctRawDate) {
                 cycleMonth = normalizeMonthKey(tx.cycleMonth || tx.month || rawMonth, rawMonth);
@@ -4628,14 +4646,25 @@ function openBankModal() {
         function isCardBillPayment(desc) {
             if (!desc) return false;
             const clean = normalizeTextForMatch(desc);
+            if (clean.includes('estorno') || clean.includes('reembolso') || clean.includes('cashback') || clean.includes('refund')) {
+                return false;
+            }
             return clean.includes('pagamento de fatura cartao de credito') ||
                    clean.includes('cartao de credito pagamento de fatura') ||
                    clean.includes('pagamento cartao de credito') ||
+                   clean.includes('pagamento do cartao') ||
+                   clean.includes('pgto do cartao') ||
                    clean.includes('pagamento de fatura') ||
                    clean.includes('pagamento fatura') ||
                    clean.includes('pgto fatura') ||
+                   clean.includes('pagto fatura') ||
                    clean.includes('pagamento cartao') ||
                    clean.includes('pgto cartao') ||
+                   clean.includes('pagto cartao') ||
+                   clean.includes('pagamento com saldo') ||
+                   clean.includes('pgto com saldo') ||
+                   clean.includes('liquidacao de fatura') ||
+                   clean.includes('liquidacao fatura') ||
                    (clean.includes('pagamento') && clean.includes('fatura')) ||
                    (clean.includes('pagamento') && clean.includes('credito'));
         }
@@ -4643,10 +4672,25 @@ function openBankModal() {
         function isCardPaymentReceivedMirror(desc) {
             if (!desc) return false;
             const clean = normalizeTextForMatch(desc);
+            if (clean.includes('estorno') || clean.includes('reembolso') || clean.includes('cashback') || clean.includes('refund')) {
+                return false;
+            }
             return clean.includes('pagamento recebido') ||
                    clean.includes('pgto recebido') ||
+                   clean.includes('pagamento do cartao') ||
+                   clean.includes('pgto do cartao') ||
                    clean.includes('pagamento de fatura') ||
-                   clean.includes('pagamento fatura');
+                   clean.includes('pagamento fatura') ||
+                   clean.includes('pgto fatura') ||
+                   clean.includes('pagto fatura') ||
+                   clean.includes('pagamento com saldo') ||
+                   clean.includes('pgto com saldo') ||
+                   clean.includes('pagamento efetuado') ||
+                   clean.includes('inclusao de pagamento') ||
+                   clean.includes('liquidacao de fatura') ||
+                   clean.includes('liquidacao fatura') ||
+                   clean.includes('debito automatico fatura') ||
+                   (clean.includes('pagamento') && clean.includes('fatura'));
         }
 
         function isVaultTx(desc) {
@@ -4730,74 +4774,100 @@ function openBankModal() {
         function doesPaymentBelongToCard(paymentItem, cardOrBankFilter) {
             if (!paymentItem || !cardOrBankFilter) return true;
 
-            const pDesc = String(paymentItem.desc || paymentItem.description || '').toLowerCase();
+            const pDesc = normalizeTextForMatch(paymentItem.desc || paymentItem.description || '');
             const pBankId = String(paymentItem.bankId || '');
             const pCardId = String(paymentItem.cardId || '');
+            const pAccId = String(paymentItem.accountId || '');
 
             let cardId = '';
             let cardBankId = '';
             let cardName = '';
             let cardItemId = '';
             let cardAccId = '';
+            let cardNumber = '';
 
             if (typeof cardOrBankFilter === 'string') {
                 cardId = cardOrBankFilter;
                 cardBankId = cardOrBankFilter;
-                cardName = cardOrBankFilter.toLowerCase();
+                cardName = normalizeTextForMatch(cardOrBankFilter);
             } else {
                 cardId = String(cardOrBankFilter.cardId || cardOrBankFilter.id || '');
                 cardBankId = String(cardOrBankFilter.bankId || cardOrBankFilter.id || '');
-                cardName = String(cardOrBankFilter.name || cardOrBankFilter.alias || cardOrBankFilter.desc || '').toLowerCase();
+                cardName = normalizeTextForMatch(cardOrBankFilter.name || cardOrBankFilter.alias || cardOrBankFilter.desc || '');
                 cardItemId = String(cardOrBankFilter.pluggyItemId || '');
                 cardAccId = String(cardOrBankFilter.pluggyAccountId || cardOrBankFilter.accountId || '');
+                cardNumber = String(cardOrBankFilter.cardNumber || cardOrBankFilter.number || '');
             }
 
-            const isCardMP = cardName.includes('mercado') || cardName.includes('mp') || cardAccId.includes('d7900258') || cardBankId.includes('d7900258');
-            const isCardItau = cardName.includes('itau') || cardName.includes('itaú') || cardBankId.includes('itau');
-            const isCardNubank = cardName.includes('nubank') || cardName.includes('nu') || cardBankId.includes('nubank');
+            const shortCardAcc = cardAccId ? cardAccId.slice(0, 8) : cardBankId.replace('bank_pluggy_', '').replace('card_', '');
 
-            // 1. Vínculo direto por cardId
-            if (pCardId && (pCardId === cardId || pCardId === cardBankId)) return true;
-            if (pCardId && pCardId !== cardId && pCardId !== cardBankId && (cardId || cardBankId)) return false;
+            // 1. Vínculo direto por IDs (cardId / bankId / accountId)
+            if (pCardId) {
+                if (pCardId === cardId || pCardId === cardBankId || (shortCardAcc && pCardId.includes(shortCardAcc))) return true;
+                if (cardId || cardBankId) return false;
+            }
+            if (pAccId && cardAccId && pAccId === cardAccId) return true;
+            if (pBankId && (pBankId === cardBankId || pBankId === cardId || (shortCardAcc && pBankId.includes(shortCardAcc)))) return true;
 
-            // 2. Análise da descrição do pagamento
-            const isDescMP = pDesc.includes('mercado') || pDesc.includes('mp') || pDesc.includes('mercadopago') || pDesc.includes('6240');
-            const isDescItau = pDesc.includes('itau') || pDesc.includes('itaú');
-            const isDescNubank = pDesc.includes('nubank');
+            // 2. Correspondência pelo final do cartão ou tokens do nome da instituição
+            if (cardNumber && cardNumber.length >= 4 && pDesc.includes(cardNumber.slice(-4))) return true;
 
-            if (isDescMP) return isCardMP;
-            if (isDescItau) return isCardItau;
-            if (isDescNubank) return isCardNubank;
-
-            // 3. Análise da conta de onde saiu o débito
             const allBanksList = Array.isArray(banks) ? banks : [];
+            const allCreditCards = allBanksList.filter(b => isCreditCardBank(b));
+            const stopWords = new Set([
+                'conta', 'corrente', 'digital', 'cartao', 'credito', 'meupluggy', 'pluggy',
+                'banco', 'bank', 'card', 'visa', 'mastercard', 'elo', 'black', 'platinum',
+                'gold', 'nacional', 'internacional', 'infinite', 'fatura', 'pagamento'
+            ]);
+            const extractTokens = (text) => normalizeTextForMatch(text)
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(tok => tok.length >= 3 && !stopWords.has(tok));
+
+            const targetTokens = extractTokens(cardName);
+            const matchesThisName = targetTokens.some(tok => pDesc.includes(tok));
+            const matchesOtherCardName = allCreditCards.some(other => {
+                if (!other) return false;
+                const otherId = String(other.id || '');
+                if (otherId === cardBankId || otherId === cardId) return false;
+                const otherTokens = extractTokens(other.name || other.cardName || '');
+                return otherTokens.some(tok => !targetTokens.includes(tok) && pDesc.includes(tok));
+            });
+
+            if (matchesOtherCardName && !matchesThisName) return false;
+            if (matchesThisName) return true;
+
+            // 3. Análise da conta debitada (instituição / mesma conexão Pluggy)
             const debitedBank = allBanksList.find(b =>
                 String(b.id) === pBankId ||
-                (b.pluggyAccountId && paymentItem.accountId && String(b.pluggyAccountId) === String(paymentItem.accountId))
+                (b.pluggyAccountId && pAccId && String(b.pluggyAccountId) === pAccId)
             );
-
             if (debitedBank) {
-                const dName = String(debitedBank.name || '').toLowerCase();
+                const dName = normalizeTextForMatch(debitedBank.name || '');
                 const dItemId = String(debitedBank.pluggyItemId || '');
-                const isDebitedMP = dName.includes('mercado') || dName.includes('mp') || (cardItemId && dItemId === cardItemId && isCardMP);
-                const isDebitedItau = dName.includes('itau') || dName.includes('itaú');
-                const isDebitedNubank = dName.includes('nubank');
+                const cardsInSameItem = cardItemId ? allCreditCards.filter(c => String(c.pluggyItemId || '') === cardItemId) : [];
 
-                if (isDebitedMP) return isCardMP;
-                if (isDebitedItau) return isCardItau;
-                if (isDebitedNubank) return isCardNubank;
+                if (cardItemId && dItemId && dItemId === cardItemId && cardsInSameItem.length === 1) {
+                    return true;
+                }
+
+                const debitedTokens = extractTokens(dName);
+                if (debitedTokens.some(tok => targetTokens.includes(tok))) {
+                    return true;
+                }
+
+                const belongsToAnotherCardInst = allCreditCards.some(other => {
+                    if (!other) return false;
+                    const otherId = String(other.id || '');
+                    if (otherId === cardBankId || otherId === cardId) return false;
+                    const oTokens = extractTokens(other.name || '');
+                    return debitedTokens.some(tok => oTokens.includes(tok));
+                });
+                if (belongsToAnotherCardInst) return false;
             }
 
-            // 4. Casamento direto de ID
-            if (pBankId && (pBankId === cardBankId || pBankId === cardId)) return true;
-
-            // 5. REGRA DE RESILIÊNCIA PARA PAGAMENTOS GENÉRICOS (ex: "Pagamento de fatura"):
-            // O Itaú NÃO pode receber pagamento se não houver citação explícita ou débito na conta Itaú
-            if (isCardItau && !pDesc.includes('itau') && !pBankId.includes('itau')) return false;
-            if (isCardNubank && !pDesc.includes('nubank') && !pBankId.includes('nubank')) return false;
-
-            // O cartão principal com movimentação/fatura (Mercado Pago) recebe o pagamento
-            if (isCardMP) return true;
+            // 4. Fallback universal: se o usuário possui apenas 1 cartão de crédito cadastrado, vincula pagamentos genéricos a ele
+            if (allCreditCards.length === 1) return true;
 
             return false;
         }
@@ -4895,54 +4965,45 @@ function openBankModal() {
         }
 
         /**
-         * Tabela Canônica Auditada dos Totais de Fatura de Cartão por Competência.
-         * Espelha 100% centavo por centavo a consulta SQL direta em public.bank_statements:
-         * SELECT bs.month::text AS mes, bs.type, COUNT(*) AS quantidade_transacoes, SUM(bs.amount::numeric) AS soma_valores
-         * FROM public.bank_statements AS bs JOIN public.profiles AS p ON p.id = bs.user_id
-         * WHERE regexp_replace(lower(p.name), '[^a-z0-9]', '', 'g') = 'caiogarcia' AND bs.is_credit_card_tx IS TRUE
-         * GROUP BY bs.month::text, bs.type ORDER BY bs.month::text, bs.type;
+         * Verifica de forma agnóstica se um lançamento de bankStatements pertence a um banco/cartão.
          */
-        const CANONICAL_SQL_INVOICE_TOTALS = {
-            '2026-05': 89.77,
-            '2026-06': 270.73,
-            '2026-07': 2229.57,
-            '2026-08': 1897.59,
-            '2026-09': 2651.20,
-            '2026-10': 2491.69,
-            '2026-11': 2936.43,
-            '2026-12': 1390.61,
-            '2027-01': 484.40,
-            '2027-02': 464.23,
-            '2027-03': 442.06,
-            '2027-04': 417.91,
-            '2027-05': 360.16,
-            '2027-06': 341.12,
-            '2027-07': 124.74,
-            '2027-08': 124.74,
-            '2027-09': 31.73
-        };
-        window.CANONICAL_SQL_INVOICE_TOTALS = CANONICAL_SQL_INVOICE_TOTALS;
+        function statementBelongsToCardBank(s, b, singleCreditCardMode = false) {
+            if (!s || !b) return false;
+            const bId = String(b.id || '');
+            const rawBId = String(b._rawBankId || b.id || '');
+            const accId = String(b.pluggyAccountId || b.accountId || '');
+            const shortAcc = accId ? accId.slice(0, 8) : rawBId.replace('bank_pluggy_', '').replace('card_', '');
+            const expectedCardId = shortAcc ? `card_${shortAcc}` : '';
+            const stmtBankId = String(s.bankId || s.bank_id || '');
+            const stmtCardId = String(s.cardId || s.card_id || '');
+            const stmtAccId = String(s.accountId || s.account_id || '');
+
+            if (stmtBankId && (stmtBankId === bId || stmtBankId === rawBId)) return true;
+            if (accId && stmtAccId && stmtAccId === accId) return true;
+            if (expectedCardId && (stmtCardId === expectedCardId || stmtCardId === bId)) return true;
+            if (shortAcc && ((stmtAccId && stmtAccId.includes(shortAcc)) || (stmtBankId && stmtBankId.includes(shortAcc)) || (stmtCardId && stmtCardId.includes(shortAcc)))) {
+                return true;
+            }
+            if (singleCreditCardMode && (s.isCreditCardTx || s.accountType === 'CREDIT') && !stmtBankId.startsWith('bank_')) {
+                return true;
+            }
+            return false;
+        }
 
         /**
          * Retorna a soma de adiantamentos de fatura feitos para este cartão e mês.
          */
         function getAdvancePaymentsForCardMonth(b, monthKey) {
             if (!b) return 0;
-            const mKey = normalizeMonthKey(monthKey, '2026-11');
-            const bId = String(b.id || '');
-            const rawBId = String(b._rawBankId || b.id || '');
-            const cleanBName = String(b.name || '').toLowerCase();
-            const isMercadoPago = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
+            const mKey = normalizeMonthKey(monthKey, getSaoPauloDateYYYYMMDD().slice(0, 7));
+            const sourceBanks = (typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : banks) || [];
+            const singleCreditCardMode = sourceBanks.filter(x => isCreditCardBank(x)).length === 1;
 
             const advances = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
                 if (!s) return false;
                 const sMonth = s.billForecastDate || s.bill_forecast_date || s.month || s.cycleMonth;
                 if (sMonth !== mKey) return false;
-                const stmtBankId = String(s.bankId || '');
-                const stmtCardId = String(s.cardId || '');
-                const isDirect = stmtBankId === bId || stmtBankId === rawBId || stmtCardId.includes('d7900258') || stmtBankId.includes('d7900258');
-                const isFallback = Boolean(s.isCreditCardTx) && isMercadoPago;
-                if (!isDirect && !isFallback) return false;
+                if (!statementBelongsToCardBank(s, b, singleCreditCardMode)) return false;
                 return Boolean(s.isAdvancePayment || s.is_advance_payment);
             });
 
@@ -4953,20 +5014,14 @@ function openBankModal() {
         /**
          * Valor bruto (total_amount) da fatura de UM cartão no mês.
          * Prioridade 1 (Soberana): Tabela public.credit_bills (faturas oficiais consolidadas do Supabase, recompondo adiantamentos).
-         * Prioridade 2: Soma direta dos lançamentos de cartão em bankStatements (para faturas em aberto).
+         * Prioridade 2: Soma direta dos lançamentos de cartão em bankStatements (para faturas em aberto ou futuras).
          */
         function getInvoiceTotalForCardBank(b, monthKey) {
             if (!b) return 0;
-            const mKey = normalizeMonthKey(monthKey, '2026-11');
-            const bId = String(b.id || '');
-            const rawBId = String(b._rawBankId || b.id || '');
-            const cleanBName = String(b.name || '').toLowerCase();
-            const isMercadoPago = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
-
-            // Cartão Itaú não possui movimentação no extrato Open Finance de cartão (retorna 0)
-            if (!isMercadoPago && (bId.includes('627d91a8') || cleanBName.includes('itau'))) {
-                return 0;
-            }
+            const mKey = normalizeMonthKey(monthKey, getSaoPauloDateYYYYMMDD().slice(0, 7));
+            const cfg = getCardCycleConfig(b);
+            const sourceBanks = (typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : banks) || [];
+            const singleCreditCardMode = sourceBanks.filter(x => isCreditCardBank(x)).length === 1;
 
             // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (recompondo adiantamentos)
             const { cbRecord } = findPersistedCardBillRecord(b, mKey);
@@ -4976,36 +5031,43 @@ function openBankModal() {
                 return Number((billTotal + advanceTotal).toFixed(2));
             }
 
-            // 2. Faturas em aberto (sem registro em credit_bills): compras reais menos estornos
+            // 2. Faturas em aberto ou futuras: calcula a partir dos lançamentos de cartão em bankStatements
             const cardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s => {
-                if (!s) return false;
-                const sMonth = s.billForecastDate || s.bill_forecast_date || s.month || s.cycleMonth;
-                if (sMonth !== mKey) return false;
-                const stmtBankId = String(s.bankId || '');
-                const stmtCardId = String(s.cardId || '');
-                const isDirect = stmtBankId === bId || stmtBankId === rawBId || stmtCardId.includes('d7900258') || stmtBankId.includes('d7900258');
-                const isFallback = Boolean(s.isCreditCardTx) && isMercadoPago;
-                return isDirect || isFallback;
+                if (!s || (!s.isCreditCardTx && s.accountType !== 'CREDIT')) return false;
+                if (!statementBelongsToCardBank(s, b, singleCreditCardMode)) return false;
+
+                const isExp = s.type === 'expense';
+                const cls = !isExp
+                    ? classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' })
+                    : (s.tx_group ? { tx_group: s.tx_group } : classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' }));
+                if (cls.tx_group === 'BILL_PAYMENT') return false;
+
+                if (cls.tx_group === 'CARD_EXPENSE' && (s.billForecastDate || s.bill_forecast_date)) {
+                    return String(s.billForecastDate || s.bill_forecast_date).slice(0, 7) === mKey;
+                }
+                const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group }, cfg);
+                return alloc.cycleMonth === mKey;
             });
 
             if (cardStmts.length > 0) {
                 let expenses = 0;
                 let refunds = 0;
                 cardStmts.forEach(s => {
-                    const amt = Number(s.amount || 0);
+                    const amt = Math.abs(Number(s.amount || 0));
                     if (s.type === 'expense' || s.tx_group === 'CARD_EXPENSE') {
                         expenses += amt;
-                    } else if (s.tx_group === 'CARD_REFUND' || s.raw_data?.operationType === 'ESTORNO') {
-                        refunds += amt;
+                    } else {
+                        const cls = classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
+                        if (cls.tx_group === 'CARD_REFUND') {
+                            const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group }, cfg);
+                            if (alloc.settlementPhase !== 'POST_CLOSING_REFUND') {
+                                refunds += amt;
+                            }
+                        }
                     }
                 });
                 const total = Math.max(0, expenses - refunds);
                 return Number(total.toFixed(2));
-            }
-
-            // 3. Alinhamento Canônico de contingência
-            if (isMercadoPago && CANONICAL_SQL_INVOICE_TOTALS[mKey] !== undefined) {
-                return CANONICAL_SQL_INVOICE_TOTALS[mKey];
             }
 
             return 0;
@@ -5019,48 +5081,30 @@ function openBankModal() {
         /**
          * Fonte única de verdade das faturas do mês (Leitura 100% Passiva + Consolidação Determinística).
          * Mapeia cada cartão com seu total oficial do SQL, status de quitação e pendência para o mês solicitado.
-         * Prioridade Soberana: public.credit_bills -> bank_statements (em aberto).
+         * Prioridade Soberana: public.credit_bills -> bank_statements (em aberto/futuro).
          * @returns {Map<string, {bank:Object,total:number,paid:number,pending:number,status:string,closingDay:number,dueDay:number}>}
          */
         function computeCardInvoicesForMonth(monthKey) {
-            const mKeyRef = normalizeMonthKey(monthKey, '2026-11');
+            const currentSpMonth = getSaoPauloDateYYYYMMDD().slice(0, 7);
+            const mKeyRef = normalizeMonthKey(monthKey, currentSpMonth);
             if (_cardInvoiceCache.has(mKeyRef)) {
                 return _cardInvoiceCache.get(mKeyRef);
             }
             const sourceBanks = (typeof getEffectiveBanks === 'function' ? getEffectiveBanks() : banks) || [];
             const creditBanks = sourceBanks.filter(b => isCreditCardBank(b));
+            const singleCreditCardMode = creditBanks.length === 1;
             const result = new Map();
 
             creditBanks.forEach(b => {
                 const cfg = getCardCycleConfig(b);
-                const bId = String(b.id || '');
-                const rawBId = String(b._rawBankId || b.id || '');
-                const cleanBName = String(b.name || '').toLowerCase();
-                const isMercadoPago = bId.includes('d7900258') || rawBId.includes('d7900258') || cleanBName.includes('mercado');
 
-                // Cartão Itaú não possui faturas integradas (retorna 0)
-                if (!isMercadoPago && (bId.includes('627d91a8') || cleanBName.includes('itau'))) {
-                    result.set(String(b.id), {
-                        bank: b,
-                        total: 0,
-                        paid: 0,
-                        pending: 0,
-                        status: 'PAID',
-                        closingDay: cfg.closingDay,
-                        dueDay: cfg.dueDay
-                    });
-                    return;
-                }
-
-                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (query SQL do Supabase, recompondo adiantamentos)
+                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (recompondo adiantamentos)
                 const { cbRecord } = findPersistedCardBillRecord(b, mKeyRef);
                 if (cbRecord && Number(cbRecord.total_amount ?? 0) > 0) {
                     const billTotal = Number(cbRecord.total_amount);
                     const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
-                    // O valor real da fatura inclui os adiantamentos que o cliente já pagou
                     const total = Number((billTotal + advanceTotal).toFixed(2));
                     const isPaidStatus = cbRecord.status === 'PAID';
-                    // Total pago inclui o valor quitado no boleto + adiantamentos
                     const billPaid = Number(cbRecord.paid_amount ?? 0);
                     const paid = isPaidStatus ? total : Number((billPaid + advanceTotal).toFixed(2));
                     const pending = isPaidStatus ? 0 : Math.max(0, Number((total - paid).toFixed(2)));
@@ -5080,10 +5124,21 @@ function openBankModal() {
                     return;
                 }
 
-                // 2. Faturas em aberto / futuras (ex: 2026-12 em diante): soma dinâmica dos lançamentos de cartão em bankStatements
+                // 2. Faturas em aberto ou futuras: soma dinâmica dos lançamentos de cartão em bankStatements
                 const total = getInvoiceTotalForCardBank(b, mKeyRef);
                 const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
-                const isClosedPast = mKeyRef <= '2026-11';
+                const bankBillPaid = getCardBillPaymentsForMonth(mKeyRef, b);
+                const creditMirrorPaid = (Array.isArray(bankStatements) ? bankStatements : []).reduce((acc, s) => {
+                    if (!s || s.type === 'expense' || (!s.isCreditCardTx && s.accountType !== 'CREDIT')) return acc;
+                    if (!statementBelongsToCardBank(s, b, singleCreditCardMode)) return acc;
+                    const cls = classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
+                    if (cls.tx_group !== 'BILL_PAYMENT') return acc;
+                    const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group, paymentSource: cls.paymentSource }, cfg);
+                    if (alloc.cycleMonth !== mKeyRef) return acc;
+                    return acc + Math.abs(Number(s.amount || 0));
+                }, 0);
+                const settledPay = bankBillPaid > 0 ? bankBillPaid : creditMirrorPaid;
+                const isClosedPast = mKeyRef < currentSpMonth;
                 const isZero = total <= 0.009;
 
                 let paid = 0;
@@ -5099,7 +5154,7 @@ function openBankModal() {
                     pending = 0;
                     status = 'PAID';
                 } else {
-                    paid = Math.min(total, advanceTotal);
+                    paid = Math.min(total, Number((advanceTotal + settledPay).toFixed(2)));
                     pending = Math.max(0, Number((total - paid).toFixed(2)));
                     status = pending <= 0.009 ? 'PAID' : 'OPEN';
                 }
@@ -5126,10 +5181,13 @@ function openBankModal() {
         function recalculateAllCardCyclesAndBills() {
             invalidateCardInvoiceCache();
             const creditBanks = (Array.isArray(banks) ? banks : []).filter(b => isCreditCardBank(b));
-            if (creditBanks.length === 0) return;
+            if (creditBanks.length === 0) return 0;
 
+            const singleCreditCardMode = creditBanks.length === 1;
             const todaySp = getSaoPauloDateYYYYMMDD();
             const curSpMonth = todaySp.slice(0, 7);
+            let changedCount = 0;
+            let billTxSeed = Date.now() + 30000;
 
             creditBanks.forEach(cardBank => {
                 const cfg = getCardCycleConfig(cardBank);
@@ -5150,16 +5208,17 @@ function openBankModal() {
                     });
                 }
 
-                // Coleta as transações reais (não sintéticas) deste cartão em bankStatements
+                // Coleta as transações reais de cartão deste cartão em bankStatements
                 const realCardStmts = (Array.isArray(bankStatements) ? bankStatements : []).filter(s =>
-                    s && String(s.bankId) === bId && !s.isSyntheticGapFill && !String(s.fitid || '').startsWith('pluggy_syn_')
+                    s &&
+                    (s.isCreditCardTx || s.accountType === 'CREDIT') &&
+                    statementBelongsToCardBank(s, cardBank, singleCreditCardMode) &&
+                    !s.isSyntheticGapFill &&
+                    !String(s.fitid || '').startsWith('pluggy_syn_')
                 );
                 if (realCardStmts.length === 0) return;
 
-                // bankStatements é a cópia fiel da tabela public.bank_statements e NUNCA deve ser mutada no front-end
-                const regeneratedCardStmts = realCardStmts;
-
-                // Agrupa por ciclo para recalcular total_amount, paid_amount, pending_amount
+                // Agrupa por ciclo para recalcular total_amount, paid_amount e pending_amount
                 const cycleMap = new Map();
                 const ensureCycle = (mKey) => {
                     if (!cycleMap.has(mKey)) {
@@ -5168,19 +5227,30 @@ function openBankModal() {
                             inCycleRefunds: 0,
                             advancePayments: 0,
                             postClosingPayments: 0,
+                            postClosingCreditMirrors: 0,
                             postClosingRefunds: 0
                         });
                     }
                     return cycleMap.get(mKey);
                 };
 
-                regeneratedCardStmts.forEach(s => {
-                    const cls = s.tx_group ? s : classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
-                    const alloc = allocateTransactionToCardCycle(s, cfg);
+                realCardStmts.forEach(s => {
+                    const isExp = s.type === 'expense';
+                    const cls = !isExp
+                        ? classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' })
+                        : (s.tx_group ? { tx_group: s.tx_group, paymentSource: s.paymentSource || null } : classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' }));
+                    const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group, paymentSource: cls.paymentSource }, cfg);
                     const bucket = ensureCycle(alloc.cycleMonth);
                     const amt = Math.abs(Number(s.amount || 0));
+
                     if (cls.tx_group === 'CARD_EXPENSE') {
                         bucket.grossExpenses += amt;
+                    } else if (cls.tx_group === 'BILL_PAYMENT') {
+                        if (alloc.settlementPhase === 'ADVANCE_BEFORE_CLOSING') {
+                            bucket.advancePayments += amt;
+                        } else {
+                            bucket.postClosingCreditMirrors += amt;
+                        }
                     } else if (cls.tx_group === 'CARD_REFUND') {
                         if (alloc.settlementPhase === 'POST_CLOSING_REFUND') {
                             bucket.postClosingRefunds += amt;
@@ -5190,7 +5260,7 @@ function openBankModal() {
                     }
                 });
 
-                // Processa pagamentos na conta corrente que pertencem a este cartão
+                // Processa pagamentos na conta corrente (BANK) pertencentes a este cartão
                 const seenPayFits = new Set();
                 (Array.isArray(bankStatements) ? bankStatements : []).forEach(s => {
                     if (!s || !isPrimaryBankBillPayment(s)) return;
@@ -5209,27 +5279,39 @@ function openBankModal() {
                     }
                 });
 
+                if (!Array.isArray(creditBills)) creditBills = [];
+                if (!Array.isArray(transactions)) transactions = [];
+
                 cycleMap.forEach((bData, mKey) => {
-                    const isMercadoPagoCard = bId.includes('d7900258') || accId.includes('d7900258') || String(cardBank.name || '').toLowerCase().includes('mercado');
-                    const existingCb = (Array.isArray(creditBills) ? creditBills : []).find(cb =>
-                        cb && cb.month === mKey && (String(cb.bankId || cb.bank_id) === bId || String(cb.accountId || cb.account_id) === accId)
+                    if (!/^\d{4}-\d{2}$/.test(String(mKey || ''))) return;
+                    const existingCb = creditBills.find(cb =>
+                        cb && cb.month === mKey && (
+                            String(cb.bankId || cb.bank_id || '') === bId ||
+                            (accId && String(cb.accountId || cb.account_id || '') === accId) ||
+                            String(cb.cardId || cb.card_id || '') === cardId
+                        )
                     );
-                    let totalAmt = existingCb && Number(existingCb.total_amount || 0) > 0 && existingCb.status === 'PAID'
-                        ? Number(existingCb.total_amount)
-                        : Number(Math.max(0, bData.grossExpenses - bData.inCycleRefunds - bData.advancePayments).toFixed(2));
-                    if (existingCb && mKey <= '2026-08' && Number(existingCb.total_amount || 0) > totalAmt) {
-                        totalAmt = Number(existingCb.total_amount);
-                    }
+                    const isPastMonth = curSpMonth > mKey;
+                    const preserveClosedBill = Boolean(
+                        existingCb &&
+                        Number(existingCb.total_amount || 0) > 0 &&
+                        (existingCb.status === 'PAID' || isPastMonth)
+                    );
+                    const calculatedTotal = Number(Math.max(0, bData.grossExpenses - bData.inCycleRefunds - bData.advancePayments).toFixed(2));
+                    const totalAmt = preserveClosedBill ? Number(existingCb.total_amount) : calculatedTotal;
                     if (totalAmt <= 0.009) return;
 
-                    let paidAmt = existingCb && existingCb.status === 'PAID'
+                    const settledPays = bData.postClosingPayments > 0 ? bData.postClosingPayments : bData.postClosingCreditMirrors;
+                    const paidAmt = existingCb && existingCb.status === 'PAID'
                         ? totalAmt
-                        : Number(Math.min(totalAmt, bData.postClosingPayments + bData.postClosingRefunds).toFixed(2));
-                    let pendAmt = Number(Math.max(0, totalAmt - paidAmt).toFixed(2));
-                    const isPastMonth = curSpMonth > mKey;
+                        : Number(Math.min(totalAmt, settledPays + bData.postClosingRefunds).toFixed(2));
+                    const pendAmt = Number(Math.max(0, totalAmt - paidAmt).toFixed(2));
                     const st = (pendAmt <= 0.009 || isPastMonth || existingCb?.status === 'PAID') ? 'PAID' : 'OPEN';
                     const dueStr = `${mKey}-${String(cfg.dueDay).padStart(2, '0')}`;
                     const closeStr = `${mKey}-${String(cfg.closingDay).padStart(2, '0')}`;
+                    const cardDisplayName = String(cardBank.cardName || cardBank.name || 'Cartão de Crédito');
+
+                    ensureMonthExists(mKey, true);
 
                     if (existingCb) {
                         existingCb.total_amount = totalAmt;
@@ -5247,16 +5329,41 @@ function openBankModal() {
                         existingCb.post_closing_refunds = Number(bData.postClosingRefunds.toFixed(2));
                         existingCb.status = st;
                         existingCb.billStatus = st;
+                    } else {
+                        creditBills.push({
+                            id: `bill_${accId}_${mKey}`,
+                            accountId: accId,
+                            bankId: bId,
+                            cardId: cardId,
+                            cardName: cardDisplayName,
+                            month: mKey,
+                            closing_day: cfg.closingDay,
+                            due_day: cfg.dueDay,
+                            dueDate: dueStr,
+                            closeDate: closeStr,
+                            total_amount: totalAmt,
+                            invoiceTotal: totalAmt,
+                            paid_amount: paidAmt,
+                            paidAmount: paidAmt,
+                            pending_amount: pendAmt,
+                            pendingAmount: pendAmt,
+                            advance_paid_amount: Number(bData.advancePayments.toFixed(2)),
+                            in_cycle_refunds: Number(bData.inCycleRefunds.toFixed(2)),
+                            post_closing_refunds: Number(bData.postClosingRefunds.toFixed(2)),
+                            status: st,
+                            billStatus: st
+                        });
+                        changedCount++;
                     }
 
-                    // Atualiza a linha de Fatura Consolidada em transactions (amount sempre representa total_amount)
-                    const txIdx = (Array.isArray(transactions) ? transactions : []).findIndex(t =>
+                    // Garante ou atualiza a linha de Fatura Consolidada na Visão Mensal (transactions)
+                    const txIdx = transactions.findIndex(t =>
                         t && t.month === mKey &&
                         (t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_')) &&
                         (String(t.bankId) === bId || String(t.cardId) === cardId)
                     );
+                    const isPaidFlag = st === 'PAID' || pendAmt <= 0.009;
                     if (txIdx !== -1) {
-                        const isPaidFlag = st === 'PAID' || pendAmt <= 0.009;
                         transactions[txIdx] = {
                             ...transactions[txIdx],
                             day: cfg.dueDay,
@@ -5274,9 +5381,45 @@ function openBankModal() {
                             status: st,
                             paid: isPaidFlag
                         };
+                    } else {
+                        billTxSeed += 1;
+                        transactions.push({
+                            id: billTxSeed,
+                            fitid: `pluggy_bill_${accId}_${mKey}`,
+                            month: mKey,
+                            day: cfg.dueDay,
+                            closing_day: cfg.closingDay,
+                            due_day: cfg.dueDay,
+                            type: 'expense',
+                            desc: `Fatura ${cardDisplayName} (Previsão)`,
+                            amount: Number(totalAmt.toFixed(2)),
+                            total_amount: totalAmt,
+                            invoiceTotal: totalAmt,
+                            paid_amount: paidAmt,
+                            paidAmount: paidAmt,
+                            pending_amount: pendAmt,
+                            pendingAmount: pendAmt,
+                            bill_status: st,
+                            billStatus: st,
+                            tx_group: 'CONSOLIDATED_BILL',
+                            show_on_home: true,
+                            cat: 'Cartão de Crédito',
+                            bankId: bId,
+                            cardId: cardId,
+                            inst: 'Fatura',
+                            lockedSeries: true,
+                            isConsolidatedBill: true,
+                            reconciledWithStatement: true,
+                            paid: isPaidFlag,
+                            transactionDate: buildTransactionDateISO(mKey, cfg.dueDay)
+                        });
+                        changedCount++;
                     }
                 });
             });
+
+            invalidateCardInvoiceCache();
+            return changedCount;
         }
         window.recalculateAllCardCyclesAndBills = recalculateAllCardCyclesAndBills;
 
@@ -6027,18 +6170,12 @@ function openBankModal() {
                 const syncedBankIds = new Set(Object.values(accountToBankIdMap).map(String));
                 const syncedAccountShortIds = new Set(Object.keys(accountToBankIdMap).map(k => String(k).slice(0, 8)));
 
-                // Limpeza preventiva de duplicatas sintéticas legadas e de faturas/faturas deslocadas das contas sincronizadas
+                // Limpeza preventiva apenas de duplicatas sintéticas legadas sem apagar faturas de meses futuros em sync incremental
                 transactions = transactions.filter(t => {
                     if (!t) return false;
                     const idStr = String(t.id || '');
                     const fitStr = String(t.fitid || '');
                     if (idStr.includes('_parcela_') || fitStr.includes('_parcela_')) return false;
-                    const isBill = Boolean(t.isConsolidatedBill || fitStr.startsWith('pluggy_bill_'));
-                    if (isBill && expandedImportedTxs.length > 0) {
-                        const belongsToSynced = syncedBankIds.has(String(t.bankId || '')) ||
-                            Array.from(syncedAccountShortIds).some(sh => String(t.cardId || '').includes(sh) || fitStr.includes(sh));
-                        if (belongsToSynced) return false;
-                    }
                     return true;
                 });
 
@@ -6077,6 +6214,7 @@ function openBankModal() {
 
                     const dim = classifyTransaction5Dimensions({ ...st, bankId: targetBankId });
                     const existingStmtIdx = bankStatements.findIndex(s => String(s.fitid || '') === String(st.fitid));
+                    const targetCardCfg = getCardCycleConfig({ bankId: targetBankId, accountId: st.accountId });
                     const stmtPayload = {
                         fitid: st.fitid,
                         rawDate: st.rawDate || st.date || undefined,
@@ -6103,8 +6241,8 @@ function openBankModal() {
                         raw_description: st.raw_description || null,
                         paymentSource: dim.paymentSource || st.paymentSource || null,
                         settlementPhase: st.settlementPhase || 'REGULAR',
-                        closingDayUsed: Number(st.closingDayUsed || st.closing_day_used || 2),
-                        dueDayUsed: Number(st.dueDayUsed || st.due_day_used || 7),
+                        closingDayUsed: Number(st.closingDayUsed || st.closing_day_used || targetCardCfg.closingDay || 2),
+                        dueDayUsed: Number(st.dueDayUsed || st.due_day_used || targetCardCfg.dueDay || 7),
                         isSyntheticGapFill: Boolean(st.isSyntheticGapFill),
                         isAlreadyCycleAllocated: true
                     };
@@ -6122,16 +6260,8 @@ function openBankModal() {
                     }
                 });
 
-                // A.2 Persiste faturas mensais fixas em creditBills respeitando closingDay e dueDay
+                // A.2 Mescla faturas mensais em creditBills por (cartão, mês), preservando meses futuros em sync parcial
                 if (!Array.isArray(creditBills)) creditBills = [];
-                if (incomingCreditBills.length > 0) {
-                    creditBills = creditBills.filter(cb => {
-                        if (!cb) return false;
-                        const belongs = syncedBankIds.has(String(cb.bankId || cb.bank_id || '')) ||
-                            Array.from(syncedAccountShortIds).some(sh => String(cb.accountId || cb.account_id || '').includes(sh));
-                        return !belongs;
-                    });
-                }
                 incomingCreditBills.forEach(cb => {
                     const cbMonth = cb.month;
                     if (!cbMonth) return;
@@ -6144,6 +6274,7 @@ function openBankModal() {
                     const paidAmt = Number(Number(cb.paid_amount ?? cb.paidAmount ?? 0).toFixed(2));
                     const pendAmt = Number(Math.max(0, Number((cb.pending_amount ?? cb.pendingAmount ?? (totAmt - paidAmt)).toFixed(2))));
                     const stStatus = cb.status || (pendAmt <= 0.009 ? 'PAID' : 'OPEN');
+                    const shortAcc = String(cb.accountId || '').slice(0, 8);
 
                     const billPayload = {
                         id: cb.id || `bill_${String(cb.accountId || targetBankId).slice(0, 8)}_${cbMonth}`,
@@ -6167,7 +6298,24 @@ function openBankModal() {
                         status: stStatus,
                         billStatus: stStatus
                     };
-                    creditBills.push(billPayload);
+
+                    const existingCbIdx = creditBills.findIndex(existing =>
+                        existing &&
+                        existing.month === cbMonth && (
+                            (cb.accountId && String(existing.accountId || existing.account_id || '') === String(cb.accountId)) ||
+                            String(existing.bankId || existing.bank_id || '') === String(targetBankId) ||
+                            String(existing.cardId || existing.card_id || '') === targetCardId ||
+                            (shortAcc && String(existing.accountId || existing.account_id || '').includes(shortAcc))
+                        )
+                    );
+                    if (existingCbIdx !== -1) {
+                        creditBills[existingCbIdx] = {
+                            ...creditBills[existingCbIdx],
+                            ...billPayload
+                        };
+                    } else {
+                        creditBills.push(billPayload);
+                    }
                 });
 
                 // B. Insere/Atualiza na VISÃO MENSAL (transactions) EXCLUSIVAMENTE a Fatura Consolidada do Cartão com colunas fixas!
@@ -6291,7 +6439,9 @@ function openBankModal() {
                     syncCategoriesFromTransactions();
                 }
 
-                // Consolida todas as faturas dos meses importados com Persistência Fixa antes de salvar no banco
+                // Consolida todas as faturas abertas e futuras a partir do extrato completo antes de salvar no banco
+                recalculateAllCardCyclesAndBills();
+                syncMonthsFromTransactions();
                 importedMonths.forEach(m => {
                     computeCardInvoicesForMonth(m);
                 });
@@ -7583,14 +7733,11 @@ function openBankModal() {
                 const linkedBank = banks.find(b => String(b.id) === bId);
                 let cDay = Number(c.closing_day ?? c.closingDay ?? linkedBank?.cardClosingDay ?? 2);
                 let dDay = Number(c.due_day ?? c.dueDay ?? linkedBank?.cardDueDay ?? 7);
-                // Repara cartões Open Finance que tinham ficado com o fallback antigo (25/5) se o banco configurado indicar outro dia ou for cartão MP
+                // Repara cartões Open Finance herdados do padrão antigo (25/5) apenas se o banco vinculado possuir outra configuração explícita
                 const isLegacyDefault = cDay === 25 && dDay === 5;
                 if (isLegacyDefault && linkedBank?.cardClosingDay && linkedBank.cardClosingDay !== 25) {
                     cDay = Number(linkedBank.cardClosingDay);
-                    dDay = Number(linkedBank.cardDueDay || 7);
-                } else if (isLegacyDefault && (String(c.name || '').toLowerCase().includes('mercado') || bId.startsWith('bank_pluggy_'))) {
-                    cDay = Number(linkedBank?.cardClosingDay || 2);
-                    dDay = Number(linkedBank?.cardDueDay || 7);
+                    dDay = Number(linkedBank.cardDueDay || dDay);
                 }
                 return {
                     id: String(c.id),
@@ -7762,6 +7909,7 @@ function openBankModal() {
             );
             transactions = repairedList;
             restoreAccidentallyEvictedReconciledTransactions();
+            const autoRepairedBills = recalculateAllCardCyclesAndBills();
 
             // Limpa initialBalance oculto legado para garantir que 100% do saldo venha dos lançamentos datados
             banks.forEach(b => {
@@ -7772,11 +7920,11 @@ function openBankModal() {
             syncCategoriesFromTransactions();
             populateBankSelectors();
 
-            // Seleciona por padrão Nov 2026 se existir na lista, ou o mês atual real em America/Sao_Paulo
+            // Seleciona por padrão o mês atual real em America/Sao_Paulo, se presente nas transações
             const currentSpMonthKey = getSaoPauloDateYYYYMMDD().slice(0, 7);
-            const preferredMonth = transactions.some(t => t.month === '2026-11')
-                ? '2026-11'
-                : (transactions.some(t => t.month === currentSpMonthKey) ? currentSpMonthKey : (transactions[0]?.month || '2026-11'));
+            const preferredMonth = transactions.some(t => t.month === currentSpMonthKey)
+                ? currentSpMonthKey
+                : (transactions[0]?.month || currentSpMonthKey);
             const mIdx = MONTHS.findIndex(m => m.key === preferredMonth);
             currentMonthIndex = mIdx !== -1 ? mIdx : 1;
 
@@ -7787,8 +7935,8 @@ function openBankModal() {
             updateTermsAcceptanceUI();
             renderAll();
 
-            // Se a rotina de auto-reparo corrigiu meses colapsados, projetou séries ou moveu extratos órfãos, salva imediatamente no banco
-            if (repairedCount > 0 || movedStmts > 0 || expandedOnLoad > 0) {
+            // Se a rotina de auto-reparo corrigiu meses, projetou séries, moveu extratos órfãos ou consolidou faturas futuras, persiste no banco
+            if (repairedCount > 0 || movedStmts > 0 || expandedOnLoad > 0 || autoRepairedBills > 0) {
                 CloudDB.saveUserData(profile.id, currentUser, transactions).catch(() => {});
             }
 
@@ -11634,6 +11782,70 @@ Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIR�
         // ==========================================
         // INICIALIZAÇÃO (COMPATÍVEL COM BOOTSTRAP DINÂMICO)
         // ==========================================
+        const FEEDBACK_DESTINATION_EMAIL = 'controledefinan@gmail.com';
+
+        /**
+         * Constrói links seguros para envio de sugestão de melhoria ao Gmail (app nativo no celular ou Gmail no navegador).
+         */
+        function buildFeedbackEmailUrls(tabLabel) {
+            const safeTab = String(tabLabel || 'Geral').replace(/[\r\n<>]/g, '').trim() || 'Geral';
+            const subject = `#melhoria — Sugestão de Melhoria (${safeTab})`;
+            const body = `Olá equipe Controle de Finanças!\n\nAba: ${safeTab}\n\nMinha sugestão de melhoria:\n- `;
+            const mailtoUrl = `mailto:${FEEDBACK_DESTINATION_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            const gmailWebUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(FEEDBACK_DESTINATION_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            return { safeTab, mailtoUrl, gmailWebUrl };
+        }
+        window.buildFeedbackEmailUrls = buildFeedbackEmailUrls;
+
+        /**
+         * Renderiza o card de "Sugestão de Melhoria" em todas as abas do site sem uso de handlers inline (CSP estrito).
+         */
+        function initImprovementSuggestionSlots() {
+            const slots = document.querySelectorAll('.tab-feedback-slot[data-feedback-tab]');
+            if (!slots || slots.length === 0) return;
+
+            const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+            slots.forEach(slot => {
+                const tabName = slot.getAttribute('data-feedback-tab') || 'Geral';
+                const { safeTab, mailtoUrl, gmailWebUrl } = buildFeedbackEmailUrls(tabName);
+                const primaryHref = isMobileDevice ? mailtoUrl : gmailWebUrl;
+                const primaryTarget = isMobileDevice ? '' : ' target="_blank" rel="noopener noreferrer"';
+                const primaryLabel = isMobileDevice ? 'Abrir no Gmail / App' : 'Enviar no Gmail';
+                const secondaryHref = isMobileDevice ? gmailWebUrl : mailtoUrl;
+                const secondaryTarget = isMobileDevice ? ' target="_blank" rel="noopener noreferrer"' : '';
+                const secondaryLabel = isMobileDevice ? 'ou abrir no navegador' : 'ou app de e-mail';
+
+                slot.innerHTML = `
+                    <div class="bg-white dark:bg-[#0f121a] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-white/[0.08] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div class="flex items-start sm:items-center gap-3 min-w-0">
+                            <div class="w-9 h-9 rounded-xl bg-rose-500/10 text-[#FF2E4D] border border-rose-500/20 flex items-center justify-center flex-shrink-0">
+                                <i data-lucide="message-square-plus" class="w-4 h-4"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-white">Sugestão de Melhoria</span>
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/15 text-[#FF2E4D] border border-rose-500/30">#melhoria</span>
+                                </div>
+                                <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate sm:whitespace-normal">
+                                    Tem alguma ideia para a aba <strong class="text-slate-700 dark:text-slate-200">${escapeHtml(safeTab)}</strong>? Fale direto com nossa equipe.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2.5 flex-wrap sm:flex-nowrap flex-shrink-0">
+                            <a href="${escapeHtml(primaryHref)}"${primaryTarget} class="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF2E4D] to-[#E61937] hover:opacity-95 text-white text-xs font-extrabold shadow-md shadow-rose-950/30 transition inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                                <i data-lucide="mail" class="w-3.5 h-3.5"></i> ${escapeHtml(primaryLabel)}
+                            </a>
+                            <a href="${escapeHtml(secondaryHref)}"${secondaryTarget} class="w-full sm:w-auto text-center text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-[#FF2E4D] dark:hover:text-rose-400 underline underline-offset-2 transition whitespace-nowrap">
+                                ${escapeHtml(secondaryLabel)}
+                            </a>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        window.initImprovementSuggestionSlots = initImprovementSuggestionSlots;
+
         async function initApp() {
             initTheme();
             initPhotoCropEvents();
@@ -11641,6 +11853,7 @@ Analise a saúde financeira do mês do usuário e gere um PARECER EXECUTIVO CIR�
             populateInstallmentDropdowns();
             populateBankSelectors();
             renderCategorySelects();
+            initImprovementSuggestionSlots();
             lucide.createIcons();
 
             const { data } = await supabaseClient.auth.getSession();

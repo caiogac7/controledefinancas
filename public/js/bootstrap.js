@@ -66,7 +66,7 @@
     // 2. Limpeza proativa de caches legados de faturas no localStorage que causavam persistência de valores antigos
     try {
         const lastAppVer = localStorage.getItem('finan_app_version');
-        const APP_CACHE_VERSION = '20261110_v12_credit_bills_authoritative';
+        const APP_CACHE_VERSION = '20261112_v13_universal_cards_feedback';
         if (lastAppVer !== APP_CACHE_VERSION) {
             for (let i = localStorage.length - 1; i >= 0; i--) {
                 const k = localStorage.key(i);
@@ -80,7 +80,7 @@
 
     // 3. Carrega o app principal estritamente após a criação de window.__supabaseClient com bust de cache para mobile
     const script = document.createElement('script');
-    const APP_CACHE_VERSION = '20261110_v12_credit_bills_authoritative';
+    const APP_CACHE_VERSION = '20261112_v13_universal_cards_feedback';
     script.src = `js/app.js?v=${APP_CACHE_VERSION}`;
     script.defer = true;
     document.body.appendChild(script);
