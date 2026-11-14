@@ -1904,7 +1904,7 @@
                     }
 
                     async function fetchLightProfile(uId) {
-                        const lightCols = 'id, name, email, phone, photo, terms_accepted, terms_accepted_at, settings_json, updated_at';
+                        const lightCols = 'id, name, email, phone, photo, terms_accepted, terms_accepted_at, tour_completed, settings_json, updated_at';
                         const res = await supabaseClient.from('profiles').select(lightCols).eq('id', uId).maybeSingle();
                         if (!res.error) return res;
                         return await supabaseClient.from('profiles').select('*').eq('id', uId).maybeSingle();
@@ -14699,7 +14699,10 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
 
         // Abre o modal de boas-vindas (chamado após o login se tour_completed === false e termos aceitos)
         function checkAndShowTour() {
-            if (currentUser && !currentUser.tour_completed && currentUser._termsAcceptance?.accepted) {
+            if (!currentUser?.id) return;
+            const localTourDone = safeLocalStorageGet(`finan_tour_completed_${currentUser.id}`) === '1';
+            if (currentUser.tour_completed || localTourDone) return;
+            if (currentUser._termsAcceptance?.accepted) {
                 setTimeout(() => {
                     const m = document.getElementById('tour-welcome-modal');
                     if (m) { m.classList.remove('hidden'); lucide.createIcons(); }
@@ -14899,12 +14902,17 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
 
         async function updateTourStatus(completed) {
             if (!currentUser?.id) return;
+            currentUser.tour_completed = completed;
+            if (completed) {
+                safeLocalStorageSet(`finan_tour_completed_${currentUser.id}`, '1');
+            } else {
+                try { localStorage.removeItem(`finan_tour_completed_${currentUser.id}`); } catch (_) {}
+            }
             try {
                 await supabaseClient.from('profiles').update({
                     tour_completed: completed,
                     updated_at: getSaoPauloTimestamp()
                 }).eq('id', currentUser.id);
-                currentUser.tour_completed = completed;
             } catch (err) {
                 console.warn('Tour status update failed:', err);
             }
