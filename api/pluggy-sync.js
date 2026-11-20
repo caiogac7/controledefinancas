@@ -1369,7 +1369,14 @@ async function handler(req, res) {
                 acc.creditData?.availableCreditLimitCash ??
                 0
             );
-            let rawCreditUsed = isCredit ? Math.abs(Number(rawBalance.toFixed(2))) : 0;
+            const rawCreditDataBalance = Number(
+                acc.creditData?.currentBalance ??
+                acc.creditData?.balance ??
+                0
+            );
+            let rawCreditUsed = isCredit
+                ? Math.max(Math.abs(Number(rawBalance.toFixed(2))), Math.abs(Number(rawCreditDataBalance.toFixed(2))))
+                : 0;
             if (Number(acc.creditData?.creditLimitUsed) > 0 && rawCreditUsed <= 0) {
                 rawCreditUsed = Number(acc.creditData.creditLimitUsed);
             }
@@ -1758,6 +1765,77 @@ async function handler(req, res) {
                 cardCfg,
                 nowSp
             );
+
+            // Reconciliação do saldo utilizado no cartão (Itaú / Open Finance quando há compras pendentes ou ausência de faturas detalhadas):
+            // Garante que o saldo descontado do limite (creditLimitUsed) nunca seja desconsiderado na fatura em aberto.
+            const usedLimitVal = round2(Number(cAcc.creditLimitUsed || 0));
+            if (usedLimitVal > 0.01) {
+                let mappedOpenPending = 0;
+                homologatedMap.forEach((bCalc, mKey) => {
+                    if (mKey >= nowSp.month && bCalc.status !== 'PAID') {
+                        mappedOpenPending += Number(bCalc.pending_amount ?? bCalc.total_amount ?? 0);
+                    }
+                });
+                mappedOpenPending = round2(mappedOpenPending);
+                if (usedLimitVal > mappedOpenPending + 0.01) {
+                    const unbilledDelta = round2(usedLimitVal - mappedOpenPending);
+                    const dueMonthFromAcc = cAcc.balanceDueDate ? parseDateInSaoPaulo(cAcc.balanceDueDate).month : '';
+                    const openMapMonths = Array.from(homologatedMap.entries())
+                        .filter(([mKey, bCalc]) => mKey >= nowSp.month && bCalc.status !== 'PAID')
+                        .map(([mKey]) => mKey)
+                        .sort();
+                    let targetOpenMonth = '';
+                    if (dueMonthFromAcc && dueMonthFromAcc >= nowSp.month) {
+                        targetOpenMonth = dueMonthFromAcc;
+                    } else if (openMapMonths.length > 0) {
+                        targetOpenMonth = openMapMonths[0];
+                    } else {
+                        const existingCur = homologatedMap.get(nowSp.month);
+                        const curPaid = Boolean(existingCur && existingCur.status === 'PAID');
+                        if (!curPaid && (nowSp.day <= cardCfg.dueDay || (cardCfg.dueDay >= cardCfg.closingDay && nowSp.day <= cardCfg.closingDay) || (!existingCur && mappedOpenPending <= 0.01))) {
+                            targetOpenMonth = nowSp.month;
+                        } else {
+                            targetOpenMonth = shiftMonthKey(nowSp.month, 1);
+                        }
+                    }
+
+                    const curTarget = homologatedMap.get(targetOpenMonth);
+                    if (curTarget) {
+                        const newTot = round2(Number(curTarget.total_amount || 0) + unbilledDelta);
+                        const newPend = round2(Number(curTarget.pending_amount || 0) + unbilledDelta);
+                        homologatedMap.set(targetOpenMonth, {
+                            ...curTarget,
+                            total_amount: newTot,
+                            totalAmount: newTot,
+                            pending_amount: newPend,
+                            pendingAmount: newPend,
+                            status: newPend <= 0.009 ? 'PAID' : 'OPEN'
+                        });
+                    } else {
+                        homologatedMap.set(targetOpenMonth, {
+                            month: targetOpenMonth,
+                            closingDay: cardCfg.closingDay,
+                            dueDay: cardCfg.dueDay,
+                            dueDate: cAcc.balanceDueDate ? String(cAcc.balanceDueDate).slice(0, 10) : `${targetOpenMonth}-${String(cardCfg.dueDay).padStart(2, '0')}`,
+                            billClosingDate: cAcc.balanceCloseDate ? String(cAcc.balanceCloseDate).slice(0, 10) : `${targetOpenMonth}-${String(cardCfg.closingDay).padStart(2, '0')}`,
+                            grossCardExpenses: unbilledDelta,
+                            inCycleRefunds: 0,
+                            advancePaymentsBeforeClosing: 0,
+                            calculatedClosingBalance: unbilledDelta,
+                            postClosingPayments: 0,
+                            postClosingRefunds: 0,
+                            totalSettledAfterClosing: 0,
+                            total_amount: unbilledDelta,
+                            totalAmount: unbilledDelta,
+                            paid_amount: 0,
+                            paidAmount: 0,
+                            pending_amount: unbilledDelta,
+                            pendingAmount: unbilledDelta,
+                            status: 'OPEN'
+                        });
+                    }
+                }
+            }
 
             homologatedMap.forEach((bCalc, mKey) => {
                 if (bCalc.total_amount <= 0.009) return;

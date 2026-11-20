@@ -548,20 +548,10 @@
                     }
                 }
 
-                // Corrige Décimo Terceiro que tenha colapsado para Novembro como Fixa
-                if (/d[eé]cimo\s+terceiro|13[º°]\s*sal/i.test(baseDesc)) {
-                    if (finalMonth.endsWith('-11')) {
-                        finalMonth = `${finalMonth.slice(0, 4)}-12`;
-                        repairedCount++;
-                    }
-                    if (finalInst.toLowerCase() === 'fixa') {
-                        finalInst = 'Única';
-                        repairedCount++;
-                    }
-                    if (finalMonth > '2027-12' || !finalMonth.endsWith('-12')) {
-                        repairedCount++;
-                        return;
-                    }
+                // Preserva o lançamento do 13º Salário no mês escolhido pelo usuário (removido ajuste forçado para Dezembro).
+                if (/d[eé]cimo\s+terceiro|13[º°]\s*sal/i.test(baseDesc) && finalInst.toLowerCase() === 'fixa') {
+                    finalInst = 'Única';
+                    repairedCount++;
                 }
 
                 // REGRA 7 & LIMPEZA DE SUJEIRA:
@@ -1047,31 +1037,31 @@
         window.getCardCycleConfig = getCardCycleConfig;
 
         /**
-         * Retorna os limites oficiais do Cartão de Crédito (Open Finance / Pluggy ou manual):
-         * - Limite Total (creditLimit)
-         * - Limite Disponível (availableCreditLimit)
-         * - Limite Utilizado (creditLimitUsed / saldo devedor)
-         * - Percentual comprometido (% utilizado)
+         * Extrai diretamente dos metadados Pluggy/manuais os limites e datas de vencimento do cartão sem recorrer a faturas.
          */
-        function getCardLimits(cardOrBankObj) {
-            if (!cardOrBankObj) return { total: 0, available: 0, used: 0, pctUsed: 0, hasLimits: false, hasTotalLimit: false };
+        function getRawPluggyCardUsedLimit(cardOrBankObj) {
+            if (!cardOrBankObj) {
+                return { total: 0, available: 0, used: 0, balanceDueDate: null, balanceCloseDate: null };
+            }
             const bId = String(cardOrBankObj.bankId || cardOrBankObj.id || '');
             const accId = String(cardOrBankObj.pluggyAccountId || cardOrBankObj.pluggy_account_id || '');
             const cId = String(cardOrBankObj.id || '');
             const cardNameNorm = (cardOrBankObj.name || cardOrBankObj.alias || '').toLowerCase();
 
-            // 1. Procura primeiro no próprio objeto
             let total = Number(cardOrBankObj.creditLimit ?? cardOrBankObj.credit_limit ?? 0);
             let available = Number(cardOrBankObj.availableCreditLimit ?? cardOrBankObj.available_credit_limit ?? 0);
             let used = Number(cardOrBankObj.creditLimitUsed ?? cardOrBankObj.credit_limit_used ?? 0);
+            let balanceDueDate = cardOrBankObj.cardBalanceDueDate || cardOrBankObj.balanceDueDate || null;
+            let balanceCloseDate = cardOrBankObj.cardBalanceCloseDate || cardOrBankObj.balanceCloseDate || null;
 
-            // 2. Se for cartão, tenta achar no banco vinculado ou vice-versa
             if (cardOrBankObj.bankId) {
                 const linkedBank = banks.find(b => String(b.id) === String(cardOrBankObj.bankId));
                 if (linkedBank) {
                     if (!total && linkedBank.creditLimit) total = Number(linkedBank.creditLimit);
                     if (!available && linkedBank.availableCreditLimit) available = Number(linkedBank.availableCreditLimit);
                     if (!used && linkedBank.creditLimitUsed) used = Number(linkedBank.creditLimitUsed);
+                    if (!balanceDueDate && linkedBank.cardBalanceDueDate) balanceDueDate = linkedBank.cardBalanceDueDate;
+                    if (!balanceCloseDate && linkedBank.cardBalanceCloseDate) balanceCloseDate = linkedBank.cardBalanceCloseDate;
                 }
             } else {
                 const linkedCard = savedCards.find(c => String(c.bankId) === String(cardOrBankObj.id) || String(c.id) === `card_${cardOrBankObj.id}`);
@@ -1079,10 +1069,11 @@
                     if (!total && linkedCard.creditLimit) total = Number(linkedCard.creditLimit);
                     if (!available && linkedCard.availableCreditLimit) available = Number(linkedCard.availableCreditLimit);
                     if (!used && linkedCard.creditLimitUsed) used = Number(linkedCard.creditLimitUsed);
+                    if (!balanceDueDate && linkedCard.balanceDueDate) balanceDueDate = linkedCard.balanceDueDate;
+                    if (!balanceCloseDate && linkedCard.balanceCloseDate) balanceCloseDate = linkedCard.balanceCloseDate;
                 }
             }
 
-            // 3. Se não estiver completo, busca no pluggyItems
             if (Array.isArray(pluggyItems) && pluggyItems.length > 0) {
                 for (const item of pluggyItems) {
                     if (!item || !Array.isArray(item.accountsSummary)) continue;
@@ -1093,26 +1084,59 @@
                         const matchesBank = bId.includes(aId.slice(0, 8));
                         const matchesCard = cId.includes(aId.slice(0, 8));
                         const accNameNorm = (acc.name || '').toLowerCase();
+                        const itemConnNorm = (item.connectorName || '').toLowerCase();
+                        const fullAccLabel = `${itemConnNorm} ${accNameNorm}`.trim();
                         const matchesName = cardNameNorm && accNameNorm && (
                             cardNameNorm.includes(accNameNorm) ||
-                            accNameNorm.includes(cardNameNorm)
+                            accNameNorm.includes(cardNameNorm) ||
+                            (fullAccLabel && cardNameNorm.includes(itemConnNorm) && cardNameNorm.includes(accNameNorm))
                         );
 
                         if (matchesAcc || matchesBank || matchesCard || matchesName) {
                             if (Number(acc.creditLimit) > 0 && !total) total = Number(acc.creditLimit);
                             if (Number(acc.availableCreditLimit) > 0 && !available) available = Number(acc.availableCreditLimit);
                             if (Number(acc.creditLimitUsed) > 0 && !used) used = Number(acc.creditLimitUsed);
+                            if (!used && Math.abs(Number(acc.balance || 0)) > 0) used = Math.abs(Number(acc.balance || 0));
+                            if (!balanceDueDate && acc.balanceDueDate) balanceDueDate = acc.balanceDueDate;
+                            if (!balanceCloseDate && acc.balanceCloseDate) balanceCloseDate = acc.balanceCloseDate;
                             break;
                         }
                     }
                 }
             }
 
+            if (total > 0 && available > 0 && used <= 0) {
+                used = Math.max(0, Number((total - available).toFixed(2)));
+            }
+
+            return {
+                total: Math.max(0, Number(total.toFixed(2))),
+                available: Math.max(0, Number(available.toFixed(2))),
+                used: Math.max(0, Number(used.toFixed(2))),
+                balanceDueDate,
+                balanceCloseDate
+            };
+        }
+
+        /**
+         * Retorna os limites oficiais do Cartão de Crédito (Open Finance / Pluggy ou manual):
+         * - Limite Total (creditLimit)
+         * - Limite Disponível (availableCreditLimit)
+         * - Limite Utilizado (creditLimitUsed / saldo devedor)
+         * - Percentual comprometido (% utilizado)
+         */
+        function getCardLimits(cardOrBankObj) {
+            if (!cardOrBankObj) return { total: 0, available: 0, used: 0, pctUsed: 0, hasLimits: false, hasTotalLimit: false };
+            const raw = getRawPluggyCardUsedLimit(cardOrBankObj);
+            let { total, available, used } = raw;
+
             // 4. Cálculo inteligente do Limite Utilizado Atual caso o banco não envie:
             // Soma todas as faturas abertas e futuras do cartão para refletir o comprometimento real
             const curMonthKey = MONTHS[currentMonthIndex]?.key || getSaoPauloDateYYYYMMDD().slice(0, 7);
             const curInv = getCardInvoiceForBank(cardOrBankObj, curMonthKey);
             if (used <= 0) {
+                const bId = String(cardOrBankObj.bankId || cardOrBankObj.id || '');
+                const accId = String(cardOrBankObj.pluggyAccountId || cardOrBankObj.pluggy_account_id || '');
                 if (Array.isArray(creditBills) && creditBills.length > 0) {
                     const cardBills = creditBills.filter(cb =>
                         (cb.bankId && (String(cb.bankId) === bId || String(cb.bankId) === String(cardOrBankObj.bankId))) ||
@@ -2209,9 +2233,8 @@
                     }
                 } catch (e) { console.warn('Aviso ao gravar tabela credit_bills:', e); }
 
-                // 4. Grava na tabela relacional public.transactions (com suporte às colunas fixas total_amount, paid_amount, pending_amount, tx_group + fallback)
+                // 4. Grava na tabela relacional public.transactions via UPSERT não-destrutivo e limpa órfãos ao final
                 try {
-                    await supabaseClient.from('transactions').delete().eq('user_id', userId);
                     if (Array.isArray(transactionsArray) && transactionsArray.length > 0) {
                         const usedIds = new Set();
                         const nowTs = getSaoPauloTimestamp();
@@ -2284,9 +2307,27 @@
                         });
 
                         const { error: richErr } = await supabaseClient.from('transactions').upsert(sanitizePayloadForDb(richTxRows), { onConflict: 'id' });
+                        let txSavedOk = !richErr;
                         if (richErr) {
-                            await supabaseClient.from('transactions').upsert(sanitizePayloadForDb(baseTxRows), { onConflict: 'id' });
+                            const { error: baseErr } = await supabaseClient.from('transactions').upsert(sanitizePayloadForDb(baseTxRows), { onConflict: 'id' });
+                            txSavedOk = !baseErr;
+                            if (baseErr) {
+                                console.warn('[CloudDB] Erro ao gravar fallback base em transactions:', baseErr?.message || baseErr);
+                            }
                         }
+
+                        // Remove apenas IDs órfãos caso o upsert tenha tido sucesso (nunca limpa antes para proteger contra F5 rápido)
+                        if (txSavedOk) {
+                            const { data: existingTxIds } = await supabaseClient.from('transactions').select('id').eq('user_id', userId);
+                            if (Array.isArray(existingTxIds)) {
+                                const orphanTxIds = existingTxIds.map(r => Number(r.id)).filter(idNum => !usedIds.has(idNum));
+                                if (orphanTxIds.length > 0) {
+                                    await supabaseClient.from('transactions').delete().eq('user_id', userId).in('id', orphanTxIds);
+                                }
+                            }
+                        }
+                    } else {
+                        await supabaseClient.from('transactions').delete().eq('user_id', userId);
                     }
                 } catch (e) { console.warn('Erro ao gravar tabela transactions:', e); }
 
@@ -5024,15 +5065,50 @@ function openBankModal() {
         }
 
         /**
+         * Resolve o identificador real da conta Pluggy vinculada a um banco/cartão, consultando também savedCards e pluggyItems.
+         */
+        function resolveCardAccountIdentifiers(b) {
+            const bId = String(b?.id || '');
+            const rawBId = String(b?._rawBankId || b?.id || '');
+            let accId = String(b?.pluggyAccountId || b?.accountId || '');
+            const linkedCard = (Array.isArray(savedCards) ? savedCards : []).find(c =>
+                c && (String(c.bankId) === bId || String(c.bankId) === rawBId || String(c.id) === bId)
+            ) || null;
+            if (!accId && linkedCard?.pluggyAccountId) {
+                accId = String(linkedCard.pluggyAccountId);
+            }
+            if (!accId && Array.isArray(pluggyItems)) {
+                const cleanName = String(b?.name || '').toLowerCase().replace('cartão •', '').trim();
+                for (const item of pluggyItems) {
+                    if (!item || !Array.isArray(item.accountsSummary)) continue;
+                    for (const acc of item.accountsSummary) {
+                        if (acc.type !== 'CREDIT') continue;
+                        const aId = String(acc.id || '');
+                        if (bId.includes(aId.slice(0, 8)) || rawBId.includes(aId.slice(0, 8))) {
+                            accId = aId;
+                            break;
+                        }
+                        const accNorm = String(acc.name || '').toLowerCase();
+                        if (cleanName && accNorm && (cleanName.includes(accNorm) || accNorm.includes(cleanName))) {
+                            accId = aId;
+                            break;
+                        }
+                    }
+                    if (accId) break;
+                }
+            }
+            const shortAcc = accId ? accId.slice(0, 8) : rawBId.replace('bank_pluggy_', '').replace('card_', '');
+            const cardId = String(linkedCard?.id || (shortAcc ? `card_${shortAcc}` : ''));
+            return { bId, rawBId, accId, shortAcc, cardId };
+        }
+
+        /**
          * Localiza o registro fixo persistido (em creditBills ou em transactions) para um cartão em um determinado mês.
          */
         function findPersistedCardBillRecord(b, monthKey) {
             if (!b) return { cbRecord: null, txRecord: null };
             const mKey = normalizeMonthKey(monthKey, '2026-11');
-            const bId = String(b.id || '');
-            const rawBId = String(b._rawBankId || b.id || '');
-            const accId = String(b.pluggyAccountId || '');
-            const cardShortId = rawBId.replace('bank_pluggy_', '');
+            const { bId, rawBId, accId, shortAcc, cardId } = resolveCardAccountIdentifiers(b);
             const cleanBName = String(b.name || '').toLowerCase().replace('cartão •', '').trim();
             const sameMonth = (m) => normalizeMonthKey(m, mKey) === mKey;
 
@@ -5043,7 +5119,8 @@ function openBankModal() {
                 const cbCard = String(cb.cardId || cb.card_id || '');
                 if (accId && cbAcc === accId) return true;
                 if (cbBank && (cbBank === bId || cbBank === rawBId)) return true;
-                if (cardShortId && (cbAcc.includes(cardShortId) || cbBank.includes(cardShortId) || cbCard.includes(cardShortId))) return true;
+                if (cardId && cbCard === cardId) return true;
+                if (shortAcc && (cbAcc.includes(shortAcc) || cbBank.includes(shortAcc) || cbCard.includes(shortAcc))) return true;
                 if (bId && (cbCard === bId || cbBank === bId)) return true;
                 return false;
             }) || null;
@@ -5051,7 +5128,8 @@ function openBankModal() {
             const belongs = (t) =>
                 String(t.bankId) === bId ||
                 String(t.bankId) === rawBId ||
-                String(t.cardId) === 'card_' + cardShortId ||
+                (cardId && String(t.cardId) === cardId) ||
+                String(t.cardId) === 'card_' + shortAcc ||
                 String(t.cardId) === bId ||
                 (cleanBName && String(t.desc || '').toLowerCase().includes(cleanBName));
 
@@ -5070,18 +5148,15 @@ function openBankModal() {
          */
         function statementBelongsToCardBank(s, b, singleCreditCardMode = false) {
             if (!s || !b) return false;
-            const bId = String(b.id || '');
-            const rawBId = String(b._rawBankId || b.id || '');
-            const accId = String(b.pluggyAccountId || b.accountId || '');
-            const shortAcc = accId ? accId.slice(0, 8) : rawBId.replace('bank_pluggy_', '').replace('card_', '');
-            const expectedCardId = shortAcc ? `card_${shortAcc}` : '';
+            const { bId, rawBId, accId, shortAcc, cardId } = resolveCardAccountIdentifiers(b);
+            const expectedCardId = shortAcc ? `card_${shortAcc}` : cardId;
             const stmtBankId = String(s.bankId || s.bank_id || '');
             const stmtCardId = String(s.cardId || s.card_id || '');
             const stmtAccId = String(s.accountId || s.account_id || '');
 
             if (stmtBankId && (stmtBankId === bId || stmtBankId === rawBId)) return true;
             if (accId && stmtAccId && stmtAccId === accId) return true;
-            if (expectedCardId && (stmtCardId === expectedCardId || stmtCardId === bId)) return true;
+            if (expectedCardId && (stmtCardId === expectedCardId || stmtCardId === bId || (cardId && stmtCardId === cardId))) return true;
             if (shortAcc && ((stmtAccId && stmtAccId.includes(shortAcc)) || (stmtBankId && stmtBankId.includes(shortAcc)) || (stmtCardId && stmtCardId.includes(shortAcc)))) {
                 return true;
             }
@@ -5180,9 +5255,135 @@ function openBankModal() {
         }
 
         /**
+         * Calcula a fatura base de UM cartão para o mês especificado sem o complemento de saldo usado não faturado.
+         */
+        function computeBaseCardInvoiceEntry(b, mKeyRef, currentSpMonth, singleCreditCardMode) {
+            const cfg = getCardCycleConfig(b);
+
+            // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (recompondo adiantamentos)
+            const { cbRecord } = findPersistedCardBillRecord(b, mKeyRef);
+            if (cbRecord && Number(cbRecord.total_amount ?? 0) > 0) {
+                const billTotal = Number(cbRecord.total_amount);
+                const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
+                const total = Number((billTotal + advanceTotal).toFixed(2));
+                const isPaidStatus = cbRecord.status === 'PAID';
+                const billPaid = Number(cbRecord.paid_amount ?? 0);
+                const paid = isPaidStatus ? total : Number((billPaid + advanceTotal).toFixed(2));
+                const pending = isPaidStatus ? 0 : Math.max(0, Number((total - paid).toFixed(2)));
+                const status = isPaidStatus || pending <= 0.009 ? 'PAID' : (cbRecord.status || 'OPEN');
+                const dueDay = Number(cbRecord.due_day || (cbRecord.dueDate ? Number(cbRecord.dueDate.split('-')[2]) : cfg.dueDay));
+                const closingDay = Number(cbRecord.closing_day || (cbRecord.closeDate ? Number(cbRecord.closeDate.split('-')[2]) : cfg.closingDay));
+
+                return {
+                    bank: b,
+                    total,
+                    paid,
+                    pending,
+                    status,
+                    closingDay,
+                    dueDay
+                };
+            }
+
+            // 2. Faturas em aberto ou futuras: soma dinâmica dos lançamentos de cartão em bankStatements
+            const total = getInvoiceTotalForCardBank(b, mKeyRef);
+            const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
+            const bankBillPaid = getCardBillPaymentsForMonth(mKeyRef, b);
+            const creditMirrorPaid = (Array.isArray(bankStatements) ? bankStatements : []).reduce((acc, s) => {
+                if (!s || s.type === 'expense' || (!s.isCreditCardTx && s.accountType !== 'CREDIT')) return acc;
+                if (!statementBelongsToCardBank(s, b, singleCreditCardMode)) return acc;
+                const cls = classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
+                if (cls.tx_group !== 'BILL_PAYMENT') return acc;
+                const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group, paymentSource: cls.paymentSource }, cfg);
+                if (alloc.cycleMonth !== mKeyRef) return acc;
+                return acc + Math.abs(Number(s.amount || 0));
+            }, 0);
+            const settledPay = bankBillPaid > 0 ? bankBillPaid : creditMirrorPaid;
+            const isClosedPast = mKeyRef < currentSpMonth;
+            const isZero = total <= 0.009;
+
+            let paid = 0;
+            let pending = total;
+            let status = 'OPEN';
+
+            if (isZero) {
+                paid = 0;
+                pending = 0;
+                status = 'PAID';
+            } else if (isClosedPast) {
+                paid = total;
+                pending = 0;
+                status = 'PAID';
+            } else {
+                paid = Math.min(total, Number((advanceTotal + settledPay).toFixed(2)));
+                pending = Math.max(0, Number((total - paid).toFixed(2)));
+                status = pending <= 0.009 ? 'PAID' : 'OPEN';
+            }
+
+            return {
+                bank: b,
+                total: Number(total.toFixed(2)),
+                paid: Number(paid.toFixed(2)),
+                pending: Number(pending.toFixed(2)),
+                status,
+                closingDay: cfg.closingDay,
+                dueDay: cfg.dueDay
+            };
+        }
+
+        /**
+         * Determina quanto do saldo usado do cartão (creditLimitUsed) ainda não está coberto pelas faturas mapeadas
+         * e em qual mês em aberto deve aparecer para pagamento (protege especialmente cartões Itaú Open Finance).
+         */
+        function resolveCardUnbilledBalanceForMonth(b, targetMonthKey, currentSpMonth, singleCreditCardMode) {
+            if (!b || targetMonthKey < currentSpMonth) return 0;
+            const rawLimits = getRawPluggyCardUsedLimit(b);
+            const rawUsed = Number(rawLimits?.used || 0);
+            if (rawUsed <= 0.01) return 0;
+
+            const cfg = getCardCycleConfig(b);
+            const spToday = getSaoPauloDateYYYYMMDD();
+            const spDay = parseInt(spToday.slice(8, 10), 10) || 1;
+
+            let mappedOpenPending = 0;
+            const openMonths = [];
+            let curPaidFlag = false;
+
+            for (let offset = 0; offset <= 18; offset++) {
+                const mCheck = offset === 0 ? currentSpMonth : addMonthsToKey(currentSpMonth, offset);
+                const baseEntry = computeBaseCardInvoiceEntry(b, mCheck, currentSpMonth, singleCreditCardMode);
+                if (mCheck === currentSpMonth && baseEntry.status === 'PAID' && baseEntry.total > 0.01) {
+                    curPaidFlag = true;
+                }
+                if (baseEntry.status !== 'PAID' && baseEntry.pending > 0.009) {
+                    mappedOpenPending += Number(baseEntry.pending || 0);
+                    openMonths.push(mCheck);
+                }
+            }
+            mappedOpenPending = Number(mappedOpenPending.toFixed(2));
+            if (rawUsed <= mappedOpenPending + 0.01) return 0;
+
+            const unbilledDelta = Number((rawUsed - mappedOpenPending).toFixed(2));
+            const dueMonthFromAcc = rawLimits.balanceDueDate ? String(rawLimits.balanceDueDate).slice(0, 7) : '';
+
+            let targetOpenMonth = '';
+            if (/^\d{4}-\d{2}$/.test(dueMonthFromAcc) && dueMonthFromAcc >= currentSpMonth) {
+                targetOpenMonth = dueMonthFromAcc;
+            } else if (openMonths.length > 0) {
+                targetOpenMonth = openMonths[0];
+            } else if (!curPaidFlag && (spDay <= cfg.dueDay || (cfg.dueDay >= cfg.closingDay && spDay <= cfg.closingDay) || mappedOpenPending <= 0.01)) {
+                targetOpenMonth = currentSpMonth;
+            } else {
+                targetOpenMonth = addMonthsToKey(currentSpMonth, 1);
+            }
+
+            return targetMonthKey === targetOpenMonth ? unbilledDelta : 0;
+        }
+
+        /**
          * Fonte única de verdade das faturas do mês (Leitura 100% Passiva + Consolidação Determinística).
          * Mapeia cada cartão com seu total oficial do SQL, status de quitação e pendência para o mês solicitado.
-         * Prioridade Soberana: public.credit_bills -> bank_statements (em aberto/futuro).
+         * Prioridade Soberana: public.credit_bills -> bank_statements (em aberto/futuro) -> saldo utilizado não faturado (Open Finance).
          * @returns {Map<string, {bank:Object,total:number,paid:number,pending:number,status:string,closingDay:number,dueDay:number}>}
          */
         function computeCardInvoicesForMonth(monthKey) {
@@ -5197,78 +5398,16 @@ function openBankModal() {
             const result = new Map();
 
             creditBanks.forEach(b => {
-                const cfg = getCardCycleConfig(b);
-
-                // 1. PRIORIDADE SOBERANA: Registro oficial da tabela public.credit_bills (recompondo adiantamentos)
-                const { cbRecord } = findPersistedCardBillRecord(b, mKeyRef);
-                if (cbRecord && Number(cbRecord.total_amount ?? 0) > 0) {
-                    const billTotal = Number(cbRecord.total_amount);
-                    const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
-                    const total = Number((billTotal + advanceTotal).toFixed(2));
-                    const isPaidStatus = cbRecord.status === 'PAID';
-                    const billPaid = Number(cbRecord.paid_amount ?? 0);
-                    const paid = isPaidStatus ? total : Number((billPaid + advanceTotal).toFixed(2));
-                    const pending = isPaidStatus ? 0 : Math.max(0, Number((total - paid).toFixed(2)));
-                    const status = isPaidStatus || pending <= 0.009 ? 'PAID' : (cbRecord.status || 'OPEN');
-                    const dueDay = Number(cbRecord.due_day || (cbRecord.dueDate ? Number(cbRecord.dueDate.split('-')[2]) : cfg.dueDay));
-                    const closingDay = Number(cbRecord.closing_day || (cbRecord.closeDate ? Number(cbRecord.closeDate.split('-')[2]) : cfg.closingDay));
-
-                    result.set(String(b.id), {
-                        bank: b,
-                        total,
-                        paid,
-                        pending,
-                        status,
-                        closingDay,
-                        dueDay
-                    });
-                    return;
+                const entry = computeBaseCardInvoiceEntry(b, mKeyRef, currentSpMonth, singleCreditCardMode);
+                const unbilledDelta = resolveCardUnbilledBalanceForMonth(b, mKeyRef, currentSpMonth, singleCreditCardMode);
+                if (unbilledDelta > 0.009) {
+                    const newTotal = Number((entry.total + unbilledDelta).toFixed(2));
+                    const newPending = Number((entry.pending + unbilledDelta).toFixed(2));
+                    entry.total = newTotal;
+                    entry.pending = newPending;
+                    entry.status = newPending <= 0.009 ? 'PAID' : 'OPEN';
                 }
-
-                // 2. Faturas em aberto ou futuras: soma dinâmica dos lançamentos de cartão em bankStatements
-                const total = getInvoiceTotalForCardBank(b, mKeyRef);
-                const advanceTotal = getAdvancePaymentsForCardMonth(b, mKeyRef);
-                const bankBillPaid = getCardBillPaymentsForMonth(mKeyRef, b);
-                const creditMirrorPaid = (Array.isArray(bankStatements) ? bankStatements : []).reduce((acc, s) => {
-                    if (!s || s.type === 'expense' || (!s.isCreditCardTx && s.accountType !== 'CREDIT')) return acc;
-                    if (!statementBelongsToCardBank(s, b, singleCreditCardMode)) return acc;
-                    const cls = classifyTransaction5Dimensions({ ...s, isCreditCardTx: true, accountType: 'CREDIT' });
-                    if (cls.tx_group !== 'BILL_PAYMENT') return acc;
-                    const alloc = allocateTransactionToCardCycle({ ...s, tx_group: cls.tx_group, paymentSource: cls.paymentSource }, cfg);
-                    if (alloc.cycleMonth !== mKeyRef) return acc;
-                    return acc + Math.abs(Number(s.amount || 0));
-                }, 0);
-                const settledPay = bankBillPaid > 0 ? bankBillPaid : creditMirrorPaid;
-                const isClosedPast = mKeyRef < currentSpMonth;
-                const isZero = total <= 0.009;
-
-                let paid = 0;
-                let pending = total;
-                let status = 'OPEN';
-
-                if (isZero) {
-                    paid = 0;
-                    pending = 0;
-                    status = 'PAID';
-                } else if (isClosedPast) {
-                    paid = total;
-                    pending = 0;
-                    status = 'PAID';
-                } else {
-                    paid = Math.min(total, Number((advanceTotal + settledPay).toFixed(2)));
-                    pending = Math.max(0, Number((total - paid).toFixed(2)));
-                    status = pending <= 0.009 ? 'PAID' : 'OPEN';
-                }
-
-                result.set(String(b.id), {
-                    bank: b,
-                    total: Number(total.toFixed(2)),
-                    paid: Number(paid.toFixed(2)),
-                    pending: Number(pending.toFixed(2)),
-                    status,
-                    closingDay: cfg.closingDay,
-                    dueDay: cfg.dueDay
-                });
+                result.set(String(b.id), entry);
             });
 
             _cardInvoiceCache.set(mKeyRef, result);
@@ -6149,7 +6288,11 @@ function openBankModal() {
                         balance: Number(a.balance || 0),
                         creditLimit: Number(a.creditLimit || 0),
                         availableCreditLimit: Number(a.availableCreditLimit || 0),
-                        creditLimitUsed: Number(a.creditLimitUsed || 0)
+                        creditLimitUsed: Number(a.creditLimitUsed || 0),
+                        balanceDueDate: a.balanceDueDate || null,
+                        balanceCloseDate: a.balanceCloseDate || null,
+                        closingDay: Number(a.closingDay || 0) || undefined,
+                        dueDay: Number(a.dueDay || 0) || undefined
                     }))
                 };
                 if (idx !== -1) pluggyItems[idx] = updatedEntry;
@@ -6247,6 +6390,8 @@ function openBankModal() {
                             bankEntry.cardName = cardName;
                             bankEntry.cardClosingDay = resolvedClosing;
                             bankEntry.cardDueDay = resolvedDue;
+                            if (acc.balanceDueDate) bankEntry.cardBalanceDueDate = acc.balanceDueDate;
+                            if (acc.balanceCloseDate) bankEntry.cardBalanceCloseDate = acc.balanceCloseDate;
 
                             const cardEntry = {
                                 ...(prevCard || {}),
@@ -6257,6 +6402,8 @@ function openBankModal() {
                                 alias: cardName,
                                 closingDay: resolvedClosing,
                                 dueDay: resolvedDue,
+                                balanceDueDate: acc.balanceDueDate || prevCard?.balanceDueDate || null,
+                                balanceCloseDate: acc.balanceCloseDate || prevCard?.balanceCloseDate || null,
                                 creditLimit: Number(acc.creditLimit || prevCard?.creditLimit || 0),
                                 availableCreditLimit: Number(acc.availableCreditLimit || prevCard?.availableCreditLimit || 0),
                                 creditLimitUsed: Number(acc.creditLimitUsed || prevCard?.creditLimitUsed || 0),
@@ -7244,7 +7391,11 @@ function openBankModal() {
                     showActionToast('✅ Alterações salvas com sucesso!');
 
                     if (currentUser) {
-                        CloudDB.saveUserData(currentUser.id, currentUser, transactions).catch(e => console.warn('Erro ao salvar no Supabase:', e));
+                        try {
+                            await CloudDB.saveUserData(currentUser.id, currentUser, transactions);
+                        } catch (e) {
+                            console.warn('Erro ao salvar no Supabase:', e);
+                        }
                     }
                     return;
                 } else if (action === 'delete') {
@@ -7719,6 +7870,8 @@ function openBankModal() {
                         cardName: sb.cardName || rel?.card_name || undefined,
                         cardClosingDay: Number(sb.cardClosingDay ?? rel?.card_closing_day ?? 0) || undefined,
                         cardDueDay: Number(sb.cardDueDay ?? rel?.card_due_day ?? 0) || undefined,
+                        cardBalanceDueDate: sb.cardBalanceDueDate || undefined,
+                        cardBalanceCloseDate: sb.cardBalanceCloseDate || undefined,
                         creditLimit: Number(sb.creditLimit ?? rel?.credit_limit ?? 0) || undefined,
                         availableCreditLimit: Number(sb.availableCreditLimit ?? rel?.available_credit_limit ?? 0) || undefined,
                         creditLimitUsed: Number(sb.creditLimitUsed ?? rel?.credit_limit_used ?? 0) || undefined,
@@ -12855,6 +13008,8 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
                         : (origTx.fitid || '');
                     payload.isInitialBalance = Boolean(origTx.isInitialBalance);
                     payload.isBalanceAdjustment = Boolean(origTx.isBalanceAdjustment);
+                    payload.seriesId = origTx.seriesId || buildSeriesId(payload.type, payload.desc);
+                    payload.transactionDate = buildTransactionDateISO(payload.month, payload.day);
                     transactions[idx] = payload;
                 }
 
