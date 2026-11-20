@@ -5371,7 +5371,7 @@ function openBankModal() {
                 targetOpenMonth = dueMonthFromAcc;
             } else if (openMonths.length > 0) {
                 targetOpenMonth = openMonths[0];
-            } else if (!curPaidFlag && (spDay <= cfg.dueDay || (cfg.dueDay >= cfg.closingDay && spDay <= cfg.closingDay) || mappedOpenPending <= 0.01)) {
+            } else if (!curPaidFlag && spDay <= cfg.dueDay) {
                 targetOpenMonth = currentSpMonth;
             } else {
                 targetOpenMonth = addMonthsToKey(currentSpMonth, 1);
