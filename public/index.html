@@ -42,7 +42,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
 
-    <link rel="stylesheet" href="css/style.css?v=20261120_v20">
+    <link rel="stylesheet" href="css/style.css?v=20261125_v21">
 
 </head>
 <body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 min-h-[100dvh] w-full max-w-full overflow-x-hidden antialiased selection:bg-[#FF2E4D] selection:text-white transition-colors duration-200 notranslate" translate="no">
@@ -196,8 +196,8 @@
                         <span class="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-slate-950" title="Online"></span>
                     </div>
                     <div class="min-w-0 flex-1 text-left">
-                        <p id="sidebar-user-name" class="text-[13px] font-bold text-slate-900 dark:text-white truncate group-hover:text-[#FF2E4D] dark:group-hover:text-[#FF2E4D] transition leading-tight">Usuário</p>
-                        <p id="sidebar-user-email" class="text-[11px] text-slate-400 truncate mt-0.5"></p>
+                        <p id="sidebar-user-name" class="text-[13px] font-bold text-slate-900 dark:text-white leading-snug break-words group-hover:text-[#FF2E4D] dark:group-hover:text-[#FF2E4D] transition">Usuário</p>
+                        <p id="sidebar-user-email" class="text-[11px] text-slate-400 break-all leading-snug mt-0.5"></p>
                         <span class="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 mt-1">
                             <i data-lucide="user-pen" class="w-3 h-3"></i> Editar perfil
                         </span>
@@ -238,6 +238,10 @@
 
             <!-- Rodapé da Sidebar -->
             <div class="pt-4 border-t border-slate-800/80 space-y-2">
+                <button type="button" id="btn-sidebar-privacy" onclick="togglePrivacy()" class="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-900/90 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center justify-center gap-2 transition border border-slate-200/70 dark:border-white/5" title="Ocultar ou mostrar valores sensíveis na tela">
+                    <i id="sidebar-privacy-icon" data-lucide="eye" class="w-3.5 h-3.5"></i>
+                    <span id="sidebar-privacy-label">Ocultar valores</span>
+                </button>
                 <button onclick="openTransactionModal()" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-[13px] shadow-md flex items-center justify-center gap-2 transition">
                     <i data-lucide="plus" class="w-4 h-4"></i> Novo Lançamento
                 </button>
@@ -250,16 +254,16 @@
         <!-- CONTEÚDO PRINCIPAL -->
         <main class="flex-1 md:ml-64 safe-bottom w-full max-w-full overflow-x-hidden min-h-[100dvh]">
             <header class="bg-white/90 dark:bg-[#07080c]/90 text-slate-800 dark:text-white backdrop-blur-md sticky top-0 z-30 shadow-xs border-b border-slate-200/80 dark:border-white/[0.08] transition-colors pt-[env(safe-area-inset-top,0px)]">
-                <div class="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 min-w-0">
+                <div class="max-w-5xl mx-auto px-2.5 sm:px-6 lg:px-8 py-2.5 sm:py-3 flex items-center justify-between gap-1.5 sm:gap-2">
+                    <div class="flex items-center gap-2 sm:gap-3 min-w-0">
                         <button onclick="switchView('settings')" class="md:hidden relative flex-shrink-0">
-                            <div class="w-11 h-11 rounded-full p-0.5 bg-gradient-to-tr from-rose-500 to-emerald-400 shadow">
+                            <div class="w-10 h-10 sm:w-11 sm:h-11 rounded-full p-0.5 bg-gradient-to-tr from-rose-500 to-emerald-400 shadow">
                                 <img id="header-user-photo" src="" class="avatar-hd w-full h-full rounded-full object-cover bg-slate-900 hidden" alt="Foto">
                                 <div id="header-user-initials" class="w-full h-full rounded-full bg-rose-600 flex items-center justify-center text-sm font-extrabold text-white">U</div>
                             </div>
                         </button>
-                        <div class="truncate">
-                            <p id="header-user-name" class="md:hidden text-sm font-extrabold truncate leading-tight notranslate" translate="no">Controle de Finanças</p>
+                        <div class="min-w-0">
+                            <p id="header-user-name" class="md:hidden text-xs sm:text-sm font-extrabold truncate max-w-[100px] xs:max-w-[130px] leading-tight notranslate" translate="no">Controle</p>
                             <p class="hidden md:flex items-center gap-2 text-sm font-bold text-slate-200">
                                 <span class="w-2 h-2 rounded-full bg-[#FF2E4D] shadow-[0_0_8px_#FF2E4D]"></span> Visão Geral do Planejamento
                             </p>
@@ -267,16 +271,16 @@
                     </div>
 
                     <!-- SELETOR DE MÊS (CLICAR NO NOME DO MÊS ABRE O SELETOR DE MESES/ANOS) -->
-                    <div id="month-picker-wrapper" class="relative flex items-center gap-1.5">
-                        <div class="flex items-center bg-slate-100/90 dark:bg-white/5 backdrop-blur-md rounded-full px-2 py-1 border border-slate-200/80 dark:border-white/10 text-slate-800 dark:text-white">
-                            <button type="button" onclick="changeMonth(-1)" class="p-1 hover:bg-white/20 rounded-full transition" title="Mês Anterior">
+                    <div id="month-picker-wrapper" class="relative flex items-center gap-1 flex-shrink-0">
+                        <div class="flex items-center bg-slate-100/90 dark:bg-white/5 backdrop-blur-md rounded-full px-1.5 sm:px-2 py-1 border border-slate-200/80 dark:border-white/10 text-slate-800 dark:text-white">
+                            <button type="button" onclick="changeMonth(-1)" class="p-1.5 min-w-[30px] min-h-[30px] flex items-center justify-center hover:bg-white/20 rounded-full transition" title="Mês Anterior">
                                 <i data-lucide="chevron-left" class="w-4 h-4"></i>
                             </button>
-                            <button type="button" onclick="toggleMonthPickerModal(event)" class="px-3 text-xs md:text-sm font-extrabold tracking-wide whitespace-nowrap hover:text-rose-400 transition flex items-center gap-1" title="Clique para escolher mês/ano">
+                            <button type="button" onclick="toggleMonthPickerModal(event)" class="px-2 sm:px-3 text-xs md:text-sm font-extrabold tracking-wide whitespace-nowrap hover:text-rose-400 transition flex items-center gap-1 min-h-[30px]" title="Clique para escolher mês/ano">
                                 <span id="current-month-label">Nov 2026</span>
                                 <i data-lucide="chevron-down" class="w-3.5 h-3.5 opacity-75"></i>
                             </button>
-                            <button type="button" onclick="changeMonth(1)" class="p-1 hover:bg-white/20 rounded-full transition" title="Próximo Mês">
+                            <button type="button" onclick="changeMonth(1)" class="p-1.5 min-w-[30px] min-h-[30px] flex items-center justify-center hover:bg-white/20 rounded-full transition" title="Próximo Mês">
                                 <i data-lucide="chevron-right" class="w-4 h-4"></i>
                             </button>
                         </div>
@@ -307,10 +311,10 @@
                     </div>
 
                     <!-- Botões de Ação Rápida -->
-                    <div class="flex items-center gap-1.5">
-                        <button onclick="startTour()" class="p-2 bg-white/10 hover:bg-white/20 rounded-full transition" title="Tour Guiado"><i data-lucide="help-circle" class="w-4 h-4"></i></button>
-                        <button onclick="togglePrivacy()" class="p-2 bg-white/10 hover:bg-white/20 rounded-full transition" title="Ocultar/Mostrar Valores"><i id="privacy-icon" data-lucide="eye" class="w-4 h-4"></i></button>
-                        <button onclick="toggleDarkMode()" class="p-2 bg-white/10 hover:bg-white/20 rounded-full transition" title="Alternar Modo Noturno"><i id="theme-icon" data-lucide="moon" class="w-4 h-4"></i></button>
+                    <div class="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+                        <button onclick="startTour()" class="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center bg-slate-200/70 dark:bg-white/10 hover:bg-white/20 rounded-full transition" title="Tour Guiado" aria-label="Tour Guiado"><i data-lucide="help-circle" class="w-4 h-4"></i></button>
+                        <button id="btn-header-privacy" onclick="togglePrivacy()" aria-pressed="false" class="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center bg-slate-200/70 dark:bg-white/10 hover:bg-white/20 rounded-full transition" title="Ocultar/Mostrar Valores" aria-label="Ocultar ou mostrar valores"><i id="privacy-icon" data-lucide="eye" class="w-4 h-4"></i></button>
+                        <button onclick="toggleDarkMode()" class="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center bg-slate-200/70 dark:bg-white/10 hover:bg-white/20 rounded-full transition" title="Alternar Modo Noturno" aria-label="Alternar tema"><i id="theme-icon" data-lucide="moon" class="w-4 h-4"></i></button>
                         <button id="btn-add-tx" onclick="openTransactionModal()" class="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 pluggy-btn-action rounded-full text-xs font-bold transition"><i data-lucide="plus" class="w-3.5 h-3.5"></i> Lançar</button>
                     </div>
                 </div>
@@ -341,57 +345,57 @@
                     </div>
 
                     <!-- CARDS PRINCIPAIS DO CONTROLE FINANCEIRO -->
-                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 perspective-container">
-                        <div class="pluggy-card p-3.5 sm:p-4 rounded-2xl border border-white/5 shadow-sm flex flex-col justify-between">
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3 perspective-container">
+                        <div class="pluggy-card p-3 sm:p-4 rounded-2xl border border-white/5 shadow-sm flex flex-col justify-between min-w-0">
                             <!-- Bloco 1: Saldo Atual (Data de Hoje) -->
                             <div>
-                                <div class="flex items-center justify-between gap-1">
+                                <div class="flex items-center justify-between gap-1 flex-wrap">
                                     <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                                        <i data-lucide="wallet" class="w-3 h-3 text-[#FF2E4D]"></i> Saldo Atual (Hoje)
+                                        <i data-lucide="wallet" class="w-3 h-3 text-[#FF2E4D] flex-shrink-0"></i> Saldo Atual
                                         <button type="button" class="help-tip-btn help-tip-btn--on-dark" data-help-key="dash_balance_card" aria-label="Explicação sobre Saldo Atual vs Previsto">?</button>
                                     </span>
                                     <span id="card-balance-current-sub" class="text-[9px] text-slate-400 font-semibold truncate"></span>
                                 </div>
-                                <p id="card-balance-current" class="text-base sm:text-lg font-black mt-0.5 text-white leading-tight">R$ 0,00</p>
+                                <p id="card-balance-current" class="text-[15px] sm:text-lg font-black mt-0.5 text-white leading-tight tabular-nums whitespace-nowrap">R$ 0,00</p>
                             </div>
 
                             <!-- Divisória Separadora -->
-                            <div class="border-t border-white/5 mt-2.5 pt-2">
+                            <div class="border-t border-white/5 mt-2 pt-2">
                                 <!-- Bloco 2: Saldo Previsto no Mês -->
-                                <div class="flex items-center justify-between gap-1">
+                                <div class="flex items-center justify-between gap-1 flex-wrap">
                                     <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                                        <i data-lucide="calendar" class="w-3 h-3"></i> Previsto no Mês
+                                        <i data-lucide="calendar" class="w-3 h-3 flex-shrink-0"></i> Previsto no Mês
                                     </span>
-                                    <span id="card-balance-badge" class="inline-block text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300">Equilibrado</span>
+                                    <span id="card-balance-badge" class="inline-block text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300 whitespace-nowrap">Equilibrado</span>
                                 </div>
                                 <div class="flex items-baseline justify-between gap-1 mt-0.5">
-                                    <p id="card-balance" class="text-sm sm:text-base font-extrabold text-slate-200 leading-tight">R$ 0,00</p>
+                                    <p id="card-balance" class="text-sm sm:text-base font-extrabold text-slate-200 leading-tight tabular-nums whitespace-nowrap">R$ 0,00</p>
                                     <span id="card-balance-banks-note" class="hidden text-[9px] font-semibold text-slate-400"></span>
                                 </div>
                             </div>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-500 flex items-center gap-1.5">
+                        <div class="pluggy-card p-3 sm:p-4 rounded-2xl border border-white/5 shadow-sm min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-emerald-500 flex items-center gap-1">
                                 <span>Receitas do Mês</span>
                                 <button type="button" class="help-tip-btn help-tip-btn--on-dark" data-help-key="dash_income" aria-label="Explicação de Receitas do Mês">?</button>
                             </span>
-                            <p id="card-income" class="text-lg md:text-xl font-extrabold mt-1 text-emerald-400">R$ 0,00</p>
-                            <p id="card-income-sub" class="text-[11px] text-slate-400 mt-1">Recebido: R$ 0,00</p>
+                            <p id="card-income" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-emerald-400 tabular-nums whitespace-nowrap">R$ 0,00</p>
+                            <p id="card-income-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-1 leading-snug break-words">Recebido: R$ 0,00</p>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-[#FF2E4D] flex items-center gap-1.5">
+                        <div class="pluggy-card p-3 sm:p-4 rounded-2xl border border-white/5 shadow-sm min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#FF2E4D] flex items-center gap-1">
                                 <span>Despesas do Mês</span>
                                 <button type="button" class="help-tip-btn help-tip-btn--on-dark" data-help-key="dash_expense" aria-label="Explicação de Despesas do Mês">?</button>
                             </span>
-                            <p id="card-expense" class="text-lg md:text-xl font-extrabold mt-1 text-[#FF2E4D]">R$ 0,00</p>
-                            <p id="card-expense-sub" class="text-[11px] text-slate-400 mt-1">Pendente: R$ 0,00</p>
+                            <p id="card-expense" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-[#FF2E4D] tabular-nums whitespace-nowrap">R$ 0,00</p>
+                            <p id="card-expense-sub" class="text-[10px] sm:text-[11px] text-slate-400 mt-1 leading-snug break-words">Pendente: R$ 0,00</p>
                         </div>
-                        <div class="pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
-                            <span class="text-[11px] font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                        <div class="pluggy-card p-3 sm:p-4 rounded-2xl border border-white/5 shadow-sm min-w-0">
+                            <span class="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-rose-400 flex items-center gap-1">
                                 <span>Quitação do Mês</span>
                                 <button type="button" class="help-tip-btn help-tip-btn--on-dark" data-help-key="dash_paid_pct" aria-label="Explicação da Quitação do Mês">?</button>
                             </span>
-                            <p id="card-paid-pct" class="text-lg md:text-xl font-extrabold mt-1 text-rose-400">0%</p>
+                            <p id="card-paid-pct" class="text-base sm:text-lg md:text-xl font-extrabold mt-1 text-rose-400 tabular-nums">0%</p>
                             <div class="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
                                 <div id="card-paid-bar" class="bg-gradient-to-r from-[#FF2E4D] to-[#FF6B81] h-full transition-all duration-300" style="width: 0%"></div>
                             </div>
@@ -457,24 +461,44 @@
 
                         <div class="lg:col-span-2 pluggy-card p-4 rounded-2xl border border-white/5 shadow-sm">
                             <!-- BARRA DE FILTROS + ORDENAÇÃO DE PAGOS + CAMPO DE BUSCA -->
-                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4">
-                                <div class="flex flex-wrap items-center gap-1.5">
-                                    <div class="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
-                                        <button onclick="setFilterType('all')" id="flt-all" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#FF2E4D] text-white shadow-sm shadow-rose-950/40">Todos</button>
-                                        <button onclick="setFilterType('expense')" id="flt-expense" class="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400">Despesas</button>
-                                        <button onclick="setFilterType('income')" id="flt-income" class="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400">Receitas</button>
+                            <div class="space-y-2.5 mb-4">
+                                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                    <div class="flex flex-wrap items-center gap-1.5">
+                                        <div class="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                                            <button onclick="setFilterType('all')" id="flt-all" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#FF2E4D] text-white shadow-sm shadow-rose-950/40">Todos</button>
+                                            <button onclick="setFilterType('expense')" id="flt-expense" class="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400">Despesas</button>
+                                            <button onclick="setFilterType('income')" id="flt-income" class="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400">Receitas</button>
+                                        </div>
+                                        <button type="button" onclick="togglePaidBottomMode()" id="btn-sort-paid-mode" class="px-2.5 py-1.5 min-h-[34px] rounded-xl border border-white/10 bg-slate-800/80 text-slate-300 hover:text-white text-[11px] font-bold flex items-center gap-1 transition" title="Alternar entre manter pagos no final da lista ou misturados por dia">
+                                            <i data-lucide="arrow-down-narrow-wide" class="w-3.5 h-3.5"></i> <span id="lbl-sort-paid-mode">Pagos no Final</span>
+                                        </button>
+                                        <button type="button" onclick="toggleSelectAllVisibleTxs()" id="btn-batch-select-all" class="px-2.5 py-1.5 min-h-[34px] rounded-xl border border-white/10 bg-slate-800/80 text-slate-300 hover:text-white text-[11px] font-bold flex items-center gap-1 transition" title="Selecionar ou desmarcar títulos para ações em lote">
+                                            <i data-lucide="check-square" class="w-3.5 h-3.5 text-rose-400"></i> <span id="lbl-batch-select-all">Selecionar Vários</span>
+                                        </button>
+                                        <button type="button" class="help-tip-btn" data-help-key="dash_tx_list" aria-label="Explicação da Lista de Lançamentos e Filtros">?</button>
                                     </div>
-                                    <button type="button" onclick="togglePaidBottomMode()" id="btn-sort-paid-mode" class="px-2.5 py-1.5 rounded-xl border border-white/10 bg-slate-800/80 text-slate-300 hover:text-white text-[11px] font-bold flex items-center gap-1 transition" title="Alternar entre manter pagos no final da lista ou misturados por dia">
-                                        <i data-lucide="arrow-down-narrow-wide" class="w-3.5 h-3.5"></i> <span id="lbl-sort-paid-mode">Pagos no Final</span>
-                                    </button>
-                                    <button type="button" onclick="toggleSelectAllVisibleTxs()" id="btn-batch-select-all" class="px-2.5 py-1.5 rounded-xl border border-white/10 bg-slate-800/80 text-slate-300 hover:text-white text-[11px] font-bold flex items-center gap-1 transition" title="Selecionar ou desmarcar títulos para ações em lote">
-                                        <i data-lucide="check-square" class="w-3.5 h-3.5 text-rose-400"></i> <span id="lbl-batch-select-all">Selecionar Vários</span>
-                                    </button>
-                                    <button type="button" class="help-tip-btn" data-help-key="dash_tx_list" aria-label="Explicação da Lista de Lançamentos e Filtros">?</button>
+                                    <div class="relative w-full sm:w-64">
+                                        <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
+                                        <input type="text" id="search-input" oninput="renderAll({ isMonthSwitch: true })" placeholder="Buscar descrição, conta, parcela..." class="w-full pl-8 pr-3 py-2 sm:py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-[#FF2E4D]">
+                                    </div>
                                 </div>
-                                <div class="relative w-full sm:w-60 md:w-64">
-                                    <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"></i>
-                                    <input type="text" id="search-input" oninput="renderAll()" placeholder="Buscar no mês atual..." class="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-[#FF2E4D]">
+
+                                <!-- FILTROS RÁPIDOS DE STATUS, MODALIDADE E CONTA -->
+                                <div class="tx-filter-bar flex flex-wrap items-center gap-1.5 pt-1">
+                                    <div class="flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/70 p-1 rounded-xl">
+                                        <button type="button" onclick="setFilterStatus('all')" id="flt-st-all" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-xs">Todos</button>
+                                        <button type="button" onclick="setFilterStatus('pending')" id="flt-st-pending" class="px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-amber-400">⏳ Pendentes</button>
+                                        <button type="button" onclick="setFilterStatus('paid')" id="flt-st-paid" class="px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-emerald-400">✅ Quitados</button>
+                                    </div>
+                                    <div class="flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/70 p-1 rounded-xl">
+                                        <button type="button" onclick="setFilterKind('all')" id="flt-k-all" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-700 text-slate-800 dark:text-white shadow-xs">Tudo</button>
+                                        <button type="button" onclick="setFilterKind('installment')" id="flt-k-installment" class="px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-amber-400">📦 Parcelas</button>
+                                        <button type="button" onclick="setFilterKind('bill')" id="flt-k-bill" class="px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-rose-400">💳 Faturas</button>
+                                        <button type="button" onclick="setFilterKind('fixed_single')" id="flt-k-fixed_single" class="px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-sky-400">🔁 Fixas/Únicas</button>
+                                    </div>
+                                    <select id="flt-bank-select" onchange="setFilterBank(this.value)" class="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-[#FF2E4D] max-w-full sm:max-w-[190px]" aria-label="Filtrar por conta ou cartão">
+                                        <option value="all">🏦 Todas as contas</option>
+                                    </select>
                                 </div>
                             </div>
                             <div id="transactions-list" class="space-y-4"></div>
@@ -3151,7 +3175,8 @@
         </div>
     </div>
 
-    <script src="js/bootstrap.js?v=20261120_v20"></script>
+    <script src="js/finance-core.js?v=20261125_v21"></script>
+    <script src="js/bootstrap.js?v=20261125_v21"></script>
 
 </body>
 </html>

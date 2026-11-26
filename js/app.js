@@ -287,7 +287,7 @@
 
         const DEFAULT_CATEGORIES = [
             'Compras', 'Alimentação', 'Casa', 'Educação',
-            'Assinatura', 'Clothing', 'Transporte', 'Saúde', 'Salário', 'Bonificação',
+            'Assinatura', 'Vestuário', 'Transporte', 'Saúde', 'Salário', 'Bonificação',
             'Saldo Inicial', 'Ajuste de Saldo'
         ];
 
@@ -308,8 +308,13 @@
         let currentMonthIndex = DEFAULT_MONTHS.findIndex(m => m.key === '2026-11') !== -1 ? DEFAULT_MONTHS.findIndex(m => m.key === '2026-11') : 6; // Inicia em Nov 2026 por padrão
         let pickerCurrentYear = 2026; // Ano selecionado no Calendário Rápido
         let currentFilterType = 'all';
+        let currentFilterStatus = 'all'; // 'all' | 'pending' | 'paid'
+        let currentFilterKind = 'all';   // 'all' | 'installment' | 'bill' | 'fixed_single'
+        let currentFilterBank = 'all';   // 'all' | '<bankId>'
         let paidToBottomMode = false; // Padrão cronológico por dia (01 -> 31) para que itens quitados permaneçam visíveis em seu respectivo dia
-        let privacyMode = false;
+        let privacyMode = (() => {
+            try { return localStorage.getItem('finan_privacy_mode') === 'true'; } catch (_) { return false; }
+        })();
         let tempRegPhoto = '';
         let tempProfPhoto = '';
         let modalTxType = 'expense';
@@ -1154,27 +1159,34 @@
                 }
             }
 
-            // 5. Ajustes e consistência matemática
-            if (total > 0 && used > 0 && available <= 0) {
-                available = Math.max(0, Number((total - used).toFixed(2)));
-            } else if (total > 0 && available > 0 && used <= 0) {
-                used = Math.max(0, Number((total - available).toFixed(2)));
-            } else if (total <= 0 && available > 0 && used > 0) {
-                total = Number((available + used).toFixed(2));
-            }
+            const limitRes = (typeof window.FinanCore?.computeCardLimitMetrics === 'function')
+                ? window.FinanCore.computeCardLimitMetrics({
+                    creditLimit: total,
+                    availableCreditLimit: available,
+                    creditLimitUsed: used,
+                    openBillsSum: 0,
+                    currentInvoiceTotal: curInv?.total || 0
+                })
+                : (() => {
+                    if (total > 0 && used > 0 && available <= 0) {
+                        available = Math.max(0, Number((total - used).toFixed(2)));
+                    } else if (total > 0 && available > 0 && used <= 0) {
+                        used = Math.max(0, Number((total - available).toFixed(2)));
+                    } else if (total <= 0 && available > 0 && used > 0) {
+                        total = Number((available + used).toFixed(2));
+                    }
+                    const hasTot = total > 0;
+                    return {
+                        total: Math.max(0, total),
+                        available: Math.max(0, available),
+                        used: Math.max(0, used),
+                        pctUsed: hasTot ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0,
+                        hasLimits: hasTot || available > 0 || used > 0,
+                        hasTotalLimit: hasTot
+                    };
+                })();
 
-            const hasTotalLimit = total > 0;
-            const hasLimits = hasTotalLimit || available > 0 || used > 0;
-            const pctUsed = hasTotalLimit ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0;
-
-            return {
-                total: Math.max(0, total),
-                available: Math.max(0, available),
-                used: Math.max(0, used),
-                pctUsed,
-                hasLimits,
-                hasTotalLimit
-            };
+            return limitRes;
         }
         window.getCardLimits = getCardLimits;
 
@@ -1754,18 +1766,31 @@
 
         function getCategoryEmoji(catName) {
             if (!catName) return '🏷️';
-            const clean = String(catName).trim();
-            const firstCode = clean.codePointAt(0);
+            const rawClean = String(catName).trim();
+            const normalized = (typeof window.FinanCore?.normalizeCategoryLabel === 'function')
+                ? window.FinanCore.normalizeCategoryLabel(rawClean)
+                : rawClean;
+            const firstCode = normalized.codePointAt(0);
             if (firstCode && firstCode > 0x1F000) return '';
-            return customEmojis[clean] || CATEGORY_EMOJIS[clean] || '🏷️';
+            return customEmojis[normalized] || customEmojis[rawClean] || CATEGORY_EMOJIS[normalized] || CATEGORY_EMOJIS[rawClean] || '🏷️';
         }
 
         function formatCategoryWithEmoji(catName) {
-            const clean = String(catName || 'Compras').trim();
-            const emoji = getCategoryEmoji(clean);
-            const safeClean = escapeHtml(clean);
+            const rawClean = String(catName || 'Compras').trim();
+            const normalized = (typeof window.FinanCore?.normalizeCategoryLabel === 'function')
+                ? window.FinanCore.normalizeCategoryLabel(rawClean)
+                : rawClean;
+            const emoji = getCategoryEmoji(normalized);
+            const safeClean = escapeHtml(normalized);
             const safeEmoji = escapeHtml(emoji);
             return safeEmoji ? `${safeEmoji} ${safeClean}` : safeClean;
+        }
+
+        function formatSensitiveLabel(text) {
+            if (typeof window.FinanCore?.maskSensitiveLabel === 'function') {
+                return window.FinanCore.maskSensitiveLabel(text, privacyMode);
+            }
+            return privacyMode ? '•••• ••••' : String(text || '');
         }
 
         function initTheme() {
@@ -2705,6 +2730,7 @@
             const txBankSel = document.getElementById('tx-bank');
             const ofxBankSel = document.getElementById('ofx-target-bank');
             const stmtFilterSel = document.getElementById('bank-stmt-filter');
+            const txFilterBankSel = document.getElementById('flt-bank-select');
 
             const html = banks.map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.emoji || '🏦')} ${escapeHtml(b.name)}</option>`).join('');
             if (txBankSel) txBankSel.innerHTML = html;
@@ -2713,6 +2739,11 @@
                 const prev = stmtFilterSel.value;
                 stmtFilterSel.innerHTML = `<option value="all">🏦 Todos os Bancos</option>` + html;
                 if (prev) stmtFilterSel.value = prev;
+            }
+            if (txFilterBankSel) {
+                const prevFlt = currentFilterBank || txFilterBankSel.value || 'all';
+                txFilterBankSel.innerHTML = `<option value="all">🏦 Todas as contas</option>` + html;
+                txFilterBankSel.value = Array.from(txFilterBankSel.options).some(o => o.value === prevFlt) ? prevFlt : 'all';
             }
         }
 
@@ -2815,11 +2846,11 @@
                     const limits = getCardLimits(b);
 
                     return `
-                        <div onclick="openEditBankModal('${escapeHtml(b.id)}')" class="pluggy-bank-card p-3.5 sm:p-4 cursor-pointer flex flex-col justify-between group active:scale-[0.98] transition-transform">
-                            <div class="flex items-center justify-between gap-1 pb-1">
+                        <div onclick="openEditBankModal('${escapeHtml(b.id)}')" class="pluggy-bank-card p-3.5 sm:p-4 cursor-pointer flex flex-col justify-between group active:scale-[0.98] transition-transform min-w-0">
+                            <div class="flex items-start justify-between gap-2 pb-1">
                                 <div class="flex items-center gap-2 min-w-0">
                                     <div class="pluggy-chip" title="Cartão Inteligente"></div>
-                                    <span class="text-xs font-black text-slate-100 truncate flex items-center gap-1.5 tracking-wide">💳 ${escapeHtml(b.name)}</span>
+                                    <span class="text-xs font-black text-slate-100 bank-name-wrap tracking-wide">💳 ${escapeHtml(formatSensitiveLabel(b.name))}</span>
                                 </div>
                                 <div class="flex items-center gap-1.5 flex-shrink-0">
                                     ${isOpenFinance ? `
@@ -2895,11 +2926,11 @@
                     : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/25 text-[10px] font-extrabold whitespace-nowrap" title="Conta Poupança/Reserva">🔒 Reserva</span>`;
 
                 return `
-                    <div ${clickHandler} class="pluggy-bank-card p-4 cursor-pointer flex flex-col justify-between group">
-                        <div class="flex items-center justify-between gap-1 pb-1">
+                    <div ${clickHandler} class="pluggy-bank-card p-3.5 sm:p-4 cursor-pointer flex flex-col justify-between group min-w-0">
+                        <div class="flex items-start justify-between gap-2 pb-1">
                             <div class="flex items-center gap-2 min-w-0">
                                 <span class="text-lg flex-shrink-0">${escapeHtml(b.emoji || '🏦')}</span>
-                                <span class="text-xs font-black text-slate-100 truncate tracking-wide">${escapeHtml(b.name)}</span>
+                                <span class="text-xs font-black text-slate-100 bank-name-wrap tracking-wide">${escapeHtml(formatSensitiveLabel(b.name))}</span>
                             </div>
                             <div class="flex items-center gap-1.5">
                                 ${isOpenFinance ? `
@@ -7470,9 +7501,20 @@ function openBankModal() {
         // CATEGORIAS
         // ==========================================
         function syncCategoriesFromTransactions() {
-            const set = new Set([...DEFAULT_CATEGORIES, ...categories]);
+            const normFn = (typeof window.FinanCore?.normalizeCategoryLabel === 'function')
+                ? window.FinanCore.normalizeCategoryLabel
+                : (s => String(s || '').trim());
+            const set = new Set(DEFAULT_CATEGORIES);
+            categories.forEach(c => {
+                const n = normFn(c);
+                if (n) set.add(n);
+            });
             transactions.forEach(t => {
-                if (t.cat && t.cat.trim()) set.add(t.cat.trim());
+                if (t.cat && t.cat.trim()) {
+                    const n = normFn(t.cat);
+                    t.cat = n;
+                    set.add(n);
+                }
             });
             categories = Array.from(set);
             renderCategorySelects();
@@ -8215,6 +8257,22 @@ function openBankModal() {
                 b.initialBalance = 0;
             });
 
+            // Reconcilia transações ligadas a IDs de bancos legados/órfãos (ex.: bank_itau/bank_mp/bank_nubank)
+            // para evitar que sumam do Saldo Atual quando o usuário conectou via Open Finance.
+            const knownBankIds = new Set(banks.map(b => String(b.id)));
+            const defaultFallbackBankId = (banks.find(b => !isCashWalletBank(b) && !isCreditCardBank(b)) || banks[0])?.id || 'bank_geral';
+            transactions.forEach(t => {
+                if (!t) return;
+                const bStr = String(t.bankId || '');
+                if (!bStr || knownBankIds.has(bStr)) return;
+                const lowerB = bStr.toLowerCase();
+                let mappedBank = null;
+                if (lowerB.includes('nubank')) mappedBank = banks.find(b => String(b.name || '').toLowerCase().includes('nubank') && !isCreditCardBank(b));
+                else if (lowerB.includes('itau') || lowerB.includes('itaú')) mappedBank = banks.find(b => (String(b.name || '').toLowerCase().includes('itau') || String(b.name || '').toLowerCase().includes('itaú')) && !isCreditCardBank(b));
+                else if (lowerB.includes('mp') || lowerB.includes('mercado')) mappedBank = banks.find(b => String(b.name || '').toLowerCase().includes('mercado') && !isCreditCardBank(b));
+                t.bankId = mappedBank ? String(mappedBank.id) : String(defaultFallbackBankId);
+            });
+
             syncMonthsFromTransactions();
             syncCategoriesFromTransactions();
             populateBankSelectors();
@@ -8231,6 +8289,7 @@ function openBankModal() {
             document.getElementById('app-screen').classList.remove('hidden');
             applyLastSummaryCache(profile.id);
             updateProfileUI();
+            applyPrivacyModeUI();
             updateTermsAcceptanceUI();
             _activeViewName = 'dashboard';
             _dirtyViews.dashboard = false;
@@ -8313,11 +8372,23 @@ function openBankModal() {
 
         function updateProfileUI() {
             if (!currentUser) return;
-            const initials = (currentUser.name || 'U').trim().charAt(0).toUpperCase();
+            const rawName = currentUser.name || 'Usuário';
+            const rawEmail = currentUser.email || '';
+            const initials = rawName.trim().charAt(0).toUpperCase();
 
-            document.getElementById('header-user-name').textContent = currentUser.name || 'Controle de Finanças';
-            document.getElementById('sidebar-user-name').textContent = currentUser.name || 'Usuário';
-            document.getElementById('sidebar-user-email').textContent = currentUser.email || '';
+            const headerNameEl = document.getElementById('header-user-name');
+            const sidebarNameEl = document.getElementById('sidebar-user-name');
+            const sidebarEmailEl = document.getElementById('sidebar-user-email');
+
+            if (headerNameEl) headerNameEl.textContent = privacyMode ? 'Modo Privado' : (currentUser.name || 'Controle');
+            if (sidebarNameEl) {
+                sidebarNameEl.textContent = formatSensitiveLabel(rawName);
+                sidebarNameEl.title = rawName;
+            }
+            if (sidebarEmailEl) {
+                sidebarEmailEl.textContent = formatSensitiveLabel(rawEmail);
+                sidebarEmailEl.title = rawEmail;
+            }
 
             document.getElementById('prof-name').value = currentUser.name || '';
             document.getElementById('prof-phone').value = currentUser.phone || '';
@@ -8655,8 +8726,38 @@ function openBankModal() {
             }
         }
 
+        function applyPrivacyModeUI() {
+            if (document.body) {
+                document.body.classList.toggle('privacy-active', Boolean(privacyMode));
+            }
+            const iconHeader = document.getElementById('privacy-icon');
+            const btnHeader = document.getElementById('btn-header-privacy');
+            const iconSidebar = document.getElementById('sidebar-privacy-icon');
+            const labelSidebar = document.getElementById('sidebar-privacy-label');
+            const btnSidebar = document.getElementById('btn-sidebar-privacy');
+
+            const iconName = privacyMode ? 'eye-off' : 'eye';
+            if (iconHeader) iconHeader.setAttribute('data-lucide', iconName);
+            if (iconSidebar) iconSidebar.setAttribute('data-lucide', iconName);
+            if (labelSidebar) labelSidebar.textContent = privacyMode ? 'Mostrar valores' : 'Ocultar valores';
+            if (btnHeader) {
+                btnHeader.setAttribute('aria-pressed', privacyMode ? 'true' : 'false');
+                btnHeader.title = privacyMode ? 'Mostrar valores' : 'Ocultar valores';
+                btnHeader.classList.toggle('text-[#FF2E4D]', Boolean(privacyMode));
+            }
+            if (btnSidebar) {
+                btnSidebar.setAttribute('aria-pressed', privacyMode ? 'true' : 'false');
+            }
+            if (typeof updateProfileUI === 'function' && currentUser) {
+                updateProfileUI();
+            }
+            refreshLucideIcons();
+        }
+
         function togglePrivacy() {
             privacyMode = !privacyMode;
+            try { localStorage.setItem('finan_privacy_mode', privacyMode ? 'true' : 'false'); } catch (_) {}
+            applyPrivacyModeUI();
             renderAll({ isMonthSwitch: true });
         }
 
@@ -8670,6 +8771,37 @@ function openBankModal() {
                         : 'px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-white';
                 }
             });
+            renderAll({ isMonthSwitch: true });
+        }
+
+        function setFilterStatus(status) {
+            currentFilterStatus = status;
+            ['all', 'pending', 'paid'].forEach(s => {
+                const btn = document.getElementById(`flt-st-${s}`);
+                if (btn) {
+                    btn.className = s === status
+                        ? 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                        : 'px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white';
+                }
+            });
+            renderAll({ isMonthSwitch: true });
+        }
+
+        function setFilterKind(kind) {
+            currentFilterKind = kind;
+            ['all', 'installment', 'bill', 'fixed_single'].forEach(k => {
+                const btn = document.getElementById(`flt-k-${k}`);
+                if (btn) {
+                    btn.className = k === kind
+                        ? 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                        : 'px-2.5 py-1 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white';
+                }
+            });
+            renderAll({ isMonthSwitch: true });
+        }
+
+        function setFilterBank(bankId) {
+            currentFilterBank = bankId || 'all';
             renderAll({ isMonthSwitch: true });
         }
 
@@ -8844,7 +8976,10 @@ function openBankModal() {
             return _txByMonthCache.get(cleanKey) || [];
         }
 
-        function computeMonthOperationalSummary(operationalMonthTxs) {
+        function computeMonthOperationalSummary(operationalMonthTxs, currentRealActiveBalance = 0) {
+            if (typeof window.FinanCore?.computeMonthOperationalForecast === 'function') {
+                return window.FinanCore.computeMonthOperationalForecast(operationalMonthTxs, currentRealActiveBalance);
+            }
             const list = Array.isArray(operationalMonthTxs) ? operationalMonthTxs : [];
             const incomes = [];
             const expenses = [];
@@ -8895,7 +9030,8 @@ function openBankModal() {
                 totalExpense: totalExpenseFixed,
                 paidExpense: paidExpenseFixed,
                 pendingExpense,
-                paidPct
+                paidPct,
+                projectedEndOfMonthBalance: Number((Number(currentRealActiveBalance || 0) + (pendingIncome - pendingExpense)).toFixed(2))
             };
         }
 
@@ -8910,6 +9046,8 @@ function openBankModal() {
             const effBanks = getEffectiveBanks();
             const bankById = new Map(effBanks.map(b => [String(b.id), b]));
 
+            const creditBanksCount = effBanks.filter(b => isCreditCardBank(b)).length;
+
             // 1. Filtra apenas os lançamentos planejados do mês usando o índice pré-agrupado por mês
             const visibleBase = monthPool.filter(t => {
                 if (!t) return false;
@@ -8923,6 +9061,11 @@ function openBankModal() {
                 // Transações bancárias brutas da Pluggy (Pix/débito) não entram na Home se não forem a fatura
                 // Contas planejadas conciliadas com extrato real NUNCA são descartadas
                 if (fit.startsWith('pluggy_') && !isBill && !t.reconciledWithStatement) return false;
+
+                // Pagamentos avulsos de fatura de cartão (quando já existe cartão gerenciado no mês) não devem duplicar com a Fatura Consolidada
+                if (!isBill && creditBanksCount > 0 && typeof isPrimaryBankBillPayment === 'function' && isPrimaryBankBillPayment(t) && !t.reconciledWithStatement) {
+                    return false;
+                }
 
                 // Compras individuais de cartão de crédito não entram na Home (ficam no extrato do cartão para não duplicar com a fatura)
                 const targetBank = bankById.get(String(t.bankId));
@@ -8990,7 +9133,6 @@ function openBankModal() {
 
             // Obtenção da lista oficial de lançamentos visíveis na Home (Paridade absoluta com o extrato)
             const operationalMonthTxs = getHomeVisibleTransactions(currentMonth.key);
-            const summary = computeMonthOperationalSummary(operationalMonthTxs);
 
             // Soma contábil exata:
             // Saldo Realizado Hoje nas Contas Ativas = carryIn (meses anteriores) + recebidos no mês - pagos no mês (incluindo ajustes de saldo)
@@ -9004,7 +9146,10 @@ function openBankModal() {
                 currentRealActiveBalance += m.currentBalance;
             });
 
-            const balance = Number((currentRealActiveBalance + (summary.pendingIncome - summary.pendingExpense)).toFixed(2));
+            const summary = computeMonthOperationalSummary(operationalMonthTxs, currentRealActiveBalance);
+            const balance = typeof summary.projectedEndOfMonthBalance === 'number'
+                ? summary.projectedEndOfMonthBalance
+                : Number((currentRealActiveBalance + (summary.pendingIncome - summary.pendingExpense)).toFixed(2));
 
             // 1. Saldo Atual (Data de Hoje nas contas ativas)
             const currentBalEl = document.getElementById('card-balance-current');
@@ -10880,17 +11025,22 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
 
         function renderTransactionItemRow(t) {
             const isInc = t.type === 'income';
-            const baseDesc = escapeHtml(getBaseDescription(t.desc));
+            const rawDescStr = getBaseDescription(t.desc);
+            const baseDesc = escapeHtml(formatSensitiveLabel(rawDescStr));
             const emoji = escapeHtml(getCategoryEmoji(t.cat));
             const card = savedCards.find(c => String(c.id) === String(t.cardId));
             const effBanksList = getEffectiveBanks();
             const bank = effBanksList.find(b => String(b.id) === String(t.bankId || 'bank_geral') || String(b._rawBankId) === String(t.bankId)) || effBanksList[0] || banks[0];
             const isSharedItem = t._isMine === false;
             const ownerBadge = (familySharingEnabled && activeFamilyView !== 'individual' && t._ownerName)
-                ? `<span class="text-[10px] bg-rose-950/40 dark:bg-rose-950/80 text-rose-300 px-2 py-0.5 rounded-full font-bold whitespace-nowrap">👤 ${escapeHtml(t._ownerName.split(' ')[0])}</span>`
+                ? `<span class="text-[10px] bg-rose-950/40 dark:bg-rose-950/80 text-rose-300 px-2 py-0.5 rounded-full font-bold whitespace-nowrap">👤 ${escapeHtml(formatSensitiveLabel(t._ownerName.split(' ')[0]))}</span>`
                 : '';
 
-            const isConsolidatedBill = Boolean(t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura '));
+            const vKind = (typeof window.FinanCore?.classifyTransactionVisualKind === 'function')
+                ? window.FinanCore.classifyTransactionVisualKind(t)
+                : { kind: Boolean(t.isConsolidatedBill || String(t.fitid || '').startsWith('pluggy_bill_') || String(t.desc || '').toLowerCase().startsWith('fatura ')) ? 'BILL' : 'SINGLE' };
+            const isConsolidatedBill = vKind.kind === 'BILL';
+
             let billTotalAmount = Number(t.total_amount ?? t.invoiceTotal ?? t.amount ?? 0);
             let billPaidAmount = 0;
             let billPendingAmount = billTotalAmount;
@@ -10905,6 +11055,14 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
                 billPendingAmount = Number(t.pending_amount ?? t.pendingAmount ?? Math.max(0, Number((billTotalAmount - billPaidAmount).toFixed(2))));
             }
 
+            const kindBadgeHtml = isConsolidatedBill
+                ? `<span class="text-[10px] bg-rose-500/15 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded-full font-extrabold whitespace-nowrap">💳 Fatura</span>`
+                : (vKind.kind === 'INSTALLMENT'
+                    ? `<span class="text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-extrabold whitespace-nowrap">📦 Parcela ${escapeHtml(t.inst)}</span>`
+                    : (vKind.kind === 'FIXED'
+                        ? `<span class="text-[10px] bg-sky-500/15 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-full font-bold whitespace-nowrap">🔁 Fixa</span>`
+                        : `<span class="text-[10px] bg-slate-500/15 text-slate-300 border border-slate-500/25 px-2 py-0.5 rounded-full font-semibold whitespace-nowrap">⚡ Única</span>`));
+
             const clickHandler = isSharedItem ? '' : (isConsolidatedBill ? `onclick="switchView('banks')"` : `onclick="openEditTransaction(${Number(t.id)})"`);
             const isSelected = typeof selectedTxIds !== 'undefined' && selectedTxIds.has(Number(t.id));
             const canSelect = !isSharedItem && !isConsolidatedBill;
@@ -10913,61 +11071,63 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
                     <input type="checkbox" data-tx-id="${Number(t.id)}" onchange="toggleTxSelection(${Number(t.id)}, this.checked)" class="batch-tx-checkbox w-4 h-4 rounded border-slate-700 bg-slate-900 text-[#FF2E4D] focus:ring-[#FF2E4D] cursor-pointer" ${isSelected ? 'checked' : ''} title="Selecionar para ações em massa">
                 </div>
             ` : '';
+            const isSettledRow = Boolean(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009));
+            const safeBankDisplay = bank ? escapeHtml(formatSensitiveLabel(bank.name)) : '';
+            const safeCardDisplay = card ? escapeHtml(formatSensitiveLabel(card.alias || card.name)) : '';
 
             return `
-                <div id="tx-row-${Number(t.id)}" class="pluggy-tx-row flex items-center justify-between gap-3 p-3 w-full rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 border ${isSelected ? 'border-[#FF2E4D]/60 bg-[#FF2E4D]/10' : 'border-slate-100 dark:border-slate-800'} transition-all duration-300 ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'opacity-85 bg-slate-50/40 dark:bg-slate-900/40' : ''}">
-                    <div class="flex items-center gap-2.5 min-w-0 flex-1 ${isSharedItem ? '' : 'cursor-pointer'}" ${clickHandler}>
+                <div id="tx-row-${Number(t.id)}" class="pluggy-tx-row flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 p-3 w-full rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/60 border ${isSelected ? 'border-[#FF2E4D]/60 bg-[#FF2E4D]/10' : 'border-slate-100 dark:border-slate-800'} transition-all duration-300 ${isSettledRow ? 'opacity-85 bg-slate-50/40 dark:bg-slate-900/40' : ''}">
+                    <div class="flex items-start sm:items-center gap-2.5 min-w-0 flex-1 ${isSharedItem ? '' : 'cursor-pointer'}" ${clickHandler}>
                         ${selectCheckboxHtml}
                         <div class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${isInc ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300' : (isConsolidatedBill ? 'bg-rose-950/40 text-rose-300 border border-rose-800/30' : 'bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300')} text-base">
                             ${isConsolidatedBill ? '💳' : (emoji || (isInc ? '+' : '-'))}
                         </div>
-                        <div class="min-w-0 flex-1 truncate">
-                            <div class="flex items-center gap-1.5 min-w-0">
-                                <span class="text-xs sm:text-sm font-bold ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'line-through decoration-slate-400/60 text-slate-600 dark:text-slate-300' : 'text-slate-900 dark:text-white'} truncate block">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                                <span class="text-xs sm:text-sm font-bold ${isSettledRow ? 'line-through decoration-slate-400/60 text-slate-600 dark:text-slate-300' : 'text-slate-900 dark:text-white'} break-words leading-snug">
                                     ${baseDesc}
-                                    ${isConsolidatedBill ? '<span class="text-[10px] bg-rose-950/40 text-rose-300 border border-rose-800/30 px-2 py-0.5 rounded-full font-bold ml-1">Fatura Consolidada</span>' : ''}
-                                    ${t.inst && t.inst.includes('/') && !isConsolidatedBill ? `<span class="text-rose-400 font-bold ml-1">(${escapeHtml(t.inst)})</span>` : ''}
-                                    ${t.reconciledWithStatement ? '<span class="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold ml-1 inline-flex items-center gap-1">🔗 Conciliado</span>' : ''}
                                 </span>
+                                ${kindBadgeHtml}
+                                ${t.reconciledWithStatement ? '<span class="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold inline-flex items-center gap-1 whitespace-nowrap">🔗 Conciliado</span>' : ''}
                                 ${ownerBadge}
                             </div>
-                            <span class="truncate block text-xs text-slate-400 mt-0.5">
-                                Dia ${String(Number(t.day) || 1).padStart(2, '0')}${bank ? ` • ${escapeHtml(bank.name)}` : ''}${card ? ` (${escapeHtml(card.alias || card.name)})` : ''} • ${formatCategoryWithEmoji(t.cat)}${t.inst && !isConsolidatedBill ? ` • ${escapeHtml(t.inst)}` : ''}
+                            <span class="block text-[11px] sm:text-xs text-slate-400 mt-0.5 leading-snug break-words">
+                                Dia ${String(Number(t.day) || 1).padStart(2, '0')}${safeBankDisplay ? ` • ${safeBankDisplay}` : ''}${safeCardDisplay ? ` (${safeCardDisplay})` : ''} • ${formatCategoryWithEmoji(t.cat)}
                                 ${isConsolidatedBill ? ` • Total: ${formatBRL(billTotalAmount)}${billPendingAmount > 0 ? ` (Falta: ${formatBRL(billPendingAmount)})` : ''}` : ''}
                                 ${t.paid && t.paidAt ? ` • Pago em ${escapeHtml(formatDateBRFromISO(t.paidAt))}` : ''}
                             </span>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <div class="text-right flex-shrink-0 min-w-[70px]">
-                            <span class="text-xs sm:text-sm font-semibold ${isInc ? 'text-emerald-500' : 'text-rose-500'} whitespace-nowrap block text-right notranslate" translate="no">
+                    <div class="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0 pl-6 sm:pl-0 pt-1 sm:pt-0 border-t border-white/5 sm:border-t-0">
+                        <div class="text-left sm:text-right flex-shrink-0 min-w-[70px]">
+                            <span class="text-xs sm:text-sm font-semibold tabular-nums ${isInc ? 'text-emerald-500' : 'text-rose-500'} whitespace-nowrap block notranslate" translate="no">
                                 ${isConsolidatedBill ? formatBRL(billTotalAmount) : formatBRL(t.amount)}
                             </span>
                             ${isConsolidatedBill && billPaidAmount > 0 && billPendingAmount > 0.009 ? `
-                                <span class="text-[10px] font-bold text-amber-500 whitespace-nowrap block text-right notranslate" translate="no">
+                                <span class="text-[10px] font-bold text-amber-500 tabular-nums whitespace-nowrap block notranslate" translate="no">
                                     Falta: ${formatBRL(billPendingAmount)}
                                 </span>
                             ` : ''}
                         </div>
                         ${isSharedItem ? `
-                            <span class="px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 notranslate ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'}" translate="no">
-                                ${(t.paid || (isConsolidatedBill && billPendingAmount <= 0.009)) ? 'Quitada' : 'Pendente'}
+                            <span class="px-3 py-1.5 min-h-[36px] inline-flex items-center text-xs font-medium rounded-lg flex-shrink-0 notranslate ${isSettledRow ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'}" translate="no">
+                                ${isSettledRow ? 'Quitada' : 'Pendente'}
                             </span>
                         ` : (isConsolidatedBill ? `
                             <button onclick="switchView('banks')" title="Ver Fatura Consolidada detalhada em Bancos/Cartões"
-                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition cursor-pointer notranslate ${billPendingAmount <= 0.009 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-[#FF2E4D] hover:bg-[#E61937] text-white shadow-md shadow-rose-950/40'}" translate="no">
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-lg flex-shrink-0 transition cursor-pointer notranslate ${billPendingAmount <= 0.009 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-[#FF2E4D] hover:bg-[#E61937] text-white shadow-md shadow-rose-950/40'}" translate="no">
                                 <i data-lucide="credit-card" class="w-3.5 h-3.5"></i>
                                 <span>${billPendingAmount <= 0.009 ? 'Quitada' : 'Fatura'}</span>
                             </button>
                         ` : (t.paid ? `
                             <button onclick="togglePaidStatus(${Number(t.id)})" title="Conta já baixada. Toque caso deseje reabrir (tornar pendente)"
-                                class="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 cursor-pointer notranslate" translate="no">
+                                class="inline-flex items-center justify-center gap-1 px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-lg flex-shrink-0 transition bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 cursor-pointer notranslate" translate="no">
                                 <i data-lucide="check-check" class="w-3.5 h-3.5"></i>
                                 <span>Quitada</span>
                             </button>
                         ` : `
                             <button onclick="togglePaidStatus(${Number(t.id)})" title="Clique para pagar/baixar esta conta"
-                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg flex-shrink-0 transition shadow-sm active:scale-95 cursor-pointer notranslate ${isInc ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'}" translate="no">
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-lg flex-shrink-0 transition shadow-sm active:scale-95 cursor-pointer notranslate ${isInc ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white'}" translate="no">
                                 <i data-lucide="${isInc ? 'arrow-down-left' : 'check'}" class="w-3.5 h-3.5 stroke-[2.5]"></i>
                                 <span>${isInc ? 'Receber' : 'Pagar'}</span>
                             </button>
@@ -11006,14 +11166,24 @@ ${topExpensesText}` : `Auditoria do mês ${targetMonthLabel}`;
 
             const currentMonth = MONTHS[currentMonthIndex] || MONTHS[0];
             const query = (document.getElementById('search-input')?.value || '').trim().toLowerCase();
+            const effBanksList = getEffectiveBanks();
 
             // A lista recebida já é a lista oficial limpa da Home (getHomeVisibleTransactions).
-            // Aplica estritamente os filtros interativos da interface (busca e tipo despesa/receita).
-            const filtered = (Array.isArray(monthTxs) ? monthTxs : []).filter(t => {
-                if (currentFilterType !== 'all' && t.type !== currentFilterType) return false;
-                if (query && !String(t.desc || '').toLowerCase().includes(query) && !String(t.cat || '').toLowerCase().includes(query)) return false;
-                return true;
-            });
+            // Aplica os filtros interativos: tipo (receita/despesa), status (pendente/quitado), modalidade (parcela/fatura/fixa), conta e busca.
+            const filtered = (typeof window.FinanCore?.filterDashboardTransactions === 'function')
+                ? window.FinanCore.filterDashboardTransactions(monthTxs, {
+                    filterType: currentFilterType,
+                    filterStatus: currentFilterStatus,
+                    filterKind: currentFilterKind,
+                    filterBankId: currentFilterBank,
+                    searchQuery: query,
+                    banks: effBanksList
+                })
+                : (Array.isArray(monthTxs) ? monthTxs : []).filter(t => {
+                    if (currentFilterType !== 'all' && t.type !== currentFilterType) return false;
+                    if (query && !String(t.desc || '').toLowerCase().includes(query) && !String(t.cat || '').toLowerCase().includes(query)) return false;
+                    return true;
+                });
 
             if (filtered.length === 0) {
                 container.innerHTML = `<p class="text-slate-400 text-xs py-8 text-center">Nenhum lançamento planejado em ${escapeHtml(currentMonth.label)}.</p>`;

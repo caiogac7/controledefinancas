@@ -524,4 +524,33 @@ body.hide-help-tips .help-tip-btn {
         min-width: 18px;
         font-size: 11px;
     }
+    .tx-filter-bar > div,
+    .tx-filter-bar > select {
+        max-width: 100%;
+    }
+    .pluggy-card, .pluggy-bank-card {
+        max-width: 100%;
+    }
+}
+
+/* ==========================================================================
+   MODO PRIVACIDADE & FORMATAÇÃO NUMÉRICA TABULAR
+   ========================================================================== */
+.tabular-nums {
+    font-variant-numeric: tabular-nums;
+}
+
+body.privacy-active .privacy-sensitive {
+    filter: blur(5px);
+    user-select: none;
+    transition: filter 0.2s ease;
+}
+
+.bank-name-wrap {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+    line-height: 1.25;
 }
