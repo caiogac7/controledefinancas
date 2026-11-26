@@ -2844,15 +2844,34 @@
                     totalPendentesCardsMes += faturaPendente;
 
                     const limits = getCardLimits(b);
+                    const hasInvoiceInMonth = faturaTotal > 0.009;
+                    const hasOpenBalanceNextCycle = !hasInvoiceInMonth && faturaPendente <= 0.009 && limits.used > 0.01;
+                    const cardStatusClass = faturaPendente > 0.009
+                        ? 'font-black text-rose-400'
+                        : (hasInvoiceInMonth
+                            ? 'text-emerald-400 font-extrabold'
+                            : (hasOpenBalanceNextCycle ? 'text-amber-300 font-extrabold' : 'text-slate-400 font-bold'));
+                    const cardStatusHtml = faturaPendente > 0.009
+                        ? `<span>⏳ A pagar: ${formatBRL(faturaPendente)}</span>`
+                        : (hasInvoiceInMonth
+                            ? '<span>✓ Fatura quitada</span>'
+                            : (hasOpenBalanceNextCycle
+                                ? `<span>Próx. ciclo aberto: ${formatBRL(limits.used)}</span>`
+                                : '<span>Sem gastos no mês</span>'));
+                    const cardFooterLeftText = faturaPaga > 0.009
+                        ? `Pago: ${formatBRL(faturaPaga)}`
+                        : (faturaPendente > 0.009
+                            ? 'Aguardando pagamento'
+                            : (hasOpenBalanceNextCycle ? 'Fatura em processamento' : 'Sem pendências'));
 
                     return `
                         <div onclick="openEditBankModal('${escapeHtml(b.id)}')" class="pluggy-bank-card p-3.5 sm:p-4 cursor-pointer flex flex-col justify-between group active:scale-[0.98] transition-transform min-w-0">
-                            <div class="flex items-start justify-between gap-2 pb-1">
+                            <div class="flex items-start justify-between gap-1.5 pb-1">
                                 <div class="flex items-center gap-2 min-w-0">
                                     <div class="pluggy-chip" title="Cartão Inteligente"></div>
-                                    <span class="text-xs font-black text-slate-100 bank-name-wrap tracking-wide">💳 ${escapeHtml(formatSensitiveLabel(b.name))}</span>
+                                    <span class="text-[12px] sm:text-[13px] font-black text-slate-100 bank-name-wrap tracking-normal">${escapeHtml(formatSensitiveLabel(b.name))}</span>
                                 </div>
-                                <div class="flex items-center gap-1.5 flex-shrink-0">
+                                <div class="flex items-center gap-1.5 flex-shrink-0 pt-0.5">
                                     ${isOpenFinance ? `
                                         <span class="pluggy-live-pulse" title="Sincronização Ativa Pluggy Open Finance">
                                             <span class="ping"></span>
@@ -2865,24 +2884,24 @@
 
                             <div class="my-2">
                                 <span class="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Fatura de ${escapeHtml(MONTHS[currentMonthIndex]?.label || '')}</span>
-                                <p class="text-lg md:text-xl font-black text-white tracking-tight">
+                                <p class="text-lg md:text-xl font-black text-white tracking-tight tabular-nums whitespace-nowrap">
                                     ${formatBRL(faturaTotal)}
                                 </p>
-                                <p class="text-[11px] ${faturaPendente > 0 ? 'font-black text-rose-400' : 'text-emerald-400 font-extrabold'} flex items-center gap-1 mt-0.5">
-                                    ${faturaPendente > 0 ? `<span>⏳ A pagar: ${formatBRL(faturaPendente)}</span>` : '<span>✓ Fatura quitada</span>'}
+                                <p class="text-[11px] ${cardStatusClass} flex items-center gap-1 mt-0.5">
+                                    ${cardStatusHtml}
                                 </p>
                             </div>
 
                             ${limits.hasLimits ? `
                                 <div class="my-1.5 py-2 px-2.5 rounded-xl bg-slate-950/70 border border-white/5 space-y-1.5">
                                     ${limits.hasTotalLimit ? `
-                                        <div class="flex items-center justify-between text-[10px] font-bold">
-                                            <span class="text-slate-400">Disp: <strong class="text-emerald-400 font-extrabold">${formatBRL(limits.available)}</strong></span>
-                                            <span class="text-slate-400">Usado: <strong class="text-rose-400 font-extrabold">${formatBRL(limits.used)}</strong></span>
+                                        <div class="flex items-center justify-between gap-2 text-[10px] font-bold">
+                                            <span class="text-slate-400 whitespace-nowrap">Disp: <strong class="text-emerald-400 font-extrabold tabular-nums">${formatBRL(limits.available)}</strong></span>
+                                            <span class="text-slate-400 whitespace-nowrap">Usado: <strong class="text-rose-400 font-extrabold tabular-nums">${formatBRL(limits.used)}</strong></span>
                                         </div>
                                         <div class="flex items-center justify-between text-[9px] text-slate-400">
-                                            <span>Limite: <strong>${formatBRL(limits.total)}</strong></span>
-                                            <span class="font-extrabold text-rose-400">${limits.pctUsed}%</span>
+                                            <span class="tabular-nums">Limite: <strong>${formatBRL(limits.total)}</strong></span>
+                                            <span class="font-extrabold text-rose-400 tabular-nums">${limits.pctUsed}%</span>
                                         </div>
                                         <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden" title="Comprometimento: ${limits.pctUsed}%">
                                             <div class="bg-gradient-to-r from-rose-500 to-red-600 h-full rounded-full transition-all" style="width: ${limits.pctUsed}%"></div>
@@ -2890,7 +2909,7 @@
                                     ` : `
                                         <div class="flex items-center justify-between text-[10px] font-bold">
                                             <span class="text-slate-400">Limite Usado Atual:</span>
-                                            <strong class="text-rose-400 font-extrabold">${formatBRL(limits.used)}</strong>
+                                            <strong class="text-rose-400 font-extrabold tabular-nums">${formatBRL(limits.used)}</strong>
                                         </div>
                                         <div class="flex items-center justify-between text-[9px] text-slate-400 pt-0.5 border-t border-white/5">
                                             <span>Limite total não informado</span>
@@ -2902,8 +2921,8 @@
                                 </div>
                             ` : ''}
 
-                            <div class="flex items-center justify-between gap-1 pt-1.5 border-t border-white/10 mt-1">
-                                <span class="text-[10px] text-slate-400 truncate">${faturaPaga > 0 ? `Pago: ${formatBRL(faturaPaga)}` : 'Aguardando pagamento'}</span>
+                            <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pt-1.5 border-t border-white/10 mt-1">
+                                <span class="text-[10px] text-slate-400 leading-snug">${cardFooterLeftText}</span>
                                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/25 text-[10px] font-black uppercase tracking-wider whitespace-nowrap">💳 Fatura</span>
                             </div>
                         </div>
@@ -2924,15 +2943,18 @@
                 const statusTag = included
                     ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 text-[10px] font-extrabold whitespace-nowrap" title="Este banco soma no Saldo do Mês">✓ Soma no mês</span>`
                     : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/25 text-[10px] font-extrabold whitespace-nowrap" title="Conta Poupança/Reserva">🔒 Reserva</span>`;
+                const bankFooterSummary = metrics.carryIn !== 0
+                    ? `Ant.: ${formatBRL(metrics.carryIn)}${metrics.pendingExpenseMonth > 0 ? ` • Pend.: ${formatBRL(metrics.pendingExpenseMonth)}` : ''}`
+                    : `Pendente: ${formatBRL(metrics.pendingExpenseMonth)}`;
 
                 return `
                     <div ${clickHandler} class="pluggy-bank-card p-3.5 sm:p-4 cursor-pointer flex flex-col justify-between group min-w-0">
-                        <div class="flex items-start justify-between gap-2 pb-1">
-                            <div class="flex items-center gap-2 min-w-0">
-                                <span class="text-lg flex-shrink-0">${escapeHtml(b.emoji || '🏦')}</span>
-                                <span class="text-xs font-black text-slate-100 bank-name-wrap tracking-wide">${escapeHtml(formatSensitiveLabel(b.name))}</span>
+                        <div class="flex items-start justify-between gap-1.5 pb-1">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="text-base sm:text-lg flex-shrink-0">${escapeHtml(b.emoji || '🏦')}</span>
+                                <span class="text-[12px] sm:text-[13px] font-black text-slate-100 bank-name-wrap tracking-normal">${escapeHtml(formatSensitiveLabel(b.name))}</span>
                             </div>
-                            <div class="flex items-center gap-1.5">
+                            <div class="flex items-center gap-1 flex-shrink-0 pt-0.5">
                                 ${isOpenFinance ? `
                                     <span class="pluggy-live-pulse" title="Sincronização Ativa Pluggy Open Finance">
                                         <span class="ping"></span>
@@ -2946,12 +2968,12 @@
 
                         <div class="my-2">
                             <span class="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Saldo em Conta</span>
-                            <p class="text-lg md:text-xl font-black ${currentBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'} tracking-tight">
+                            <p class="text-lg md:text-xl font-black ${currentBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'} tracking-tight tabular-nums whitespace-nowrap">
                                 ${formatBRL(currentBalance)}
                             </p>
                             ${hasPending
-                                ? `<p class="text-[10px] font-extrabold text-slate-300 mt-0.5">Previsto fim do mês: <strong class="text-white">${formatBRL(projectedBalance)}</strong></p>`
-                                : `<p class="text-[10px] text-slate-400 mt-0.5">Recebido: +${formatBRL(metrics.paidIncomeMonth)} • Pago: -${formatBRL(metrics.paidExpenseMonth)}</p>`
+                                ? `<p class="text-[10px] font-extrabold text-slate-300 mt-0.5 tabular-nums">Previsto fim do mês: <strong class="text-white">${formatBRL(projectedBalance)}</strong></p>`
+                                : `<p class="text-[10px] text-slate-400 mt-0.5 leading-snug tabular-nums">Recebido: +${formatBRL(metrics.paidIncomeMonth)} • Pago: -${formatBRL(metrics.paidExpenseMonth)}</p>`
                             }
                         </div>
 
@@ -2963,13 +2985,13 @@
                                     <span class="text-[10px] font-extrabold text-amber-400 flex items-center gap-1.5">
                                         <i data-lucide="piggy-bank" class="w-3.5 h-3.5 text-amber-400"></i> Reservado
                                     </span>
-                                    <strong class="text-xs font-black text-amber-300 tracking-tight">${formatBRL(bVault)}</strong>
+                                    <strong class="text-xs font-black text-amber-300 tracking-tight tabular-nums">${formatBRL(bVault)}</strong>
                                 </div>
                             `;
                         })()}
 
-                        <div class="flex items-center justify-between gap-1 pt-1.5 border-t border-white/10 mt-1">
-                            <span class="text-[10px] text-slate-400 truncate">${metrics.carryIn !== 0 ? `Ant.: ${formatBRL(metrics.carryIn)}` : `Pendente: ${formatBRL(metrics.pendingExpenseMonth)}`}</span>
+                        <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pt-1.5 border-t border-white/10 mt-1">
+                            <span class="text-[10px] text-slate-400 leading-snug tabular-nums">${bankFooterSummary}</span>
                             ${statusTag}
                         </div>
                     </div>
@@ -8386,7 +8408,8 @@ function openBankModal() {
                 sidebarNameEl.title = rawName;
             }
             if (sidebarEmailEl) {
-                sidebarEmailEl.textContent = formatSensitiveLabel(rawEmail);
+                const maskedEmail = formatSensitiveLabel(rawEmail);
+                sidebarEmailEl.innerHTML = escapeHtml(maskedEmail).replace('@', '<wbr>@');
                 sidebarEmailEl.title = rawEmail;
             }
 

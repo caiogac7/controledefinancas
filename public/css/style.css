@@ -551,6 +551,13 @@ body.privacy-active .privacy-sensitive {
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
     line-height: 1.25;
+}
+
+.email-clean-wrap {
+    word-break: normal;
+    overflow-wrap: break-word;
+    hyphens: none;
 }
